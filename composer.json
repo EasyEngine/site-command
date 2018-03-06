@@ -21,7 +21,8 @@
         "commands": [
             "site",
             "site create",
-            "site list"
+            "site list",
+            "site delete"
         ]
     }
 }
