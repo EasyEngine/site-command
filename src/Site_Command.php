@@ -451,7 +451,7 @@ class Site_Command extends EE_Command {
 		if ( ! preg_match( "/\s+$this->site_name\$/m", $etc_hosts ) ) {
 			$host_line       .= "\n" . LOCALHOST_IP . "\tmail.$this->site_name";
 			$etc_hosts_entry = EE::launch(
-				"sudo bash -c 'echo \"$host_line\" >> /etc/hosts'", false
+				"sudo /bin/bash -c 'echo \"$host_line\" >> /etc/hosts'", false
 			);
 			if ( ! $etc_hosts_entry ) {
 				EE::success( 'Host entry successfully added.' );
@@ -600,29 +600,29 @@ class Site_Command extends EE_Command {
 		EE::debug( __FUNCTION__ );
 		$this->db = new SQLite3( DB );
 		$query    = "CREATE TABLE sites (
-						id INTEGER NOT NULL, 
-						sitename VARCHAR, 
-						site_type VARCHAR, 
-						proxy_type VARCHAR, 
-						cache_type VARCHAR, 
-						site_path VARCHAR, 
-						created_on DATETIME, 
-						is_enabled BOOLEAN DEFAULT 1, 
-						is_ssl BOOLEAN DEFAULT 0, 
-						storage_fs VARCHAR, 
-						storage_db VARCHAR, 
-						db_name VARCHAR, 
-						db_user VARCHAR, 
-						db_password VARCHAR, 
-						db_host VARCHAR, 
-						is_hhvm BOOLEAN DEFAULT 0, 
-						is_pagespeed BOOLEAN DEFAULT 0, 
-						php_version VARCHAR, 
-						PRIMARY KEY (id), 
-						UNIQUE (sitename), 
-						CHECK (is_enabled IN (0, 1)), 
-						CHECK (is_ssl IN (0, 1)), 
-						CHECK (is_hhvm IN (0, 1)), 
+						id INTEGER NOT NULL,
+						sitename VARCHAR,
+						site_type VARCHAR,
+						proxy_type VARCHAR,
+						cache_type VARCHAR,
+						site_path VARCHAR,
+						created_on DATETIME,
+						is_enabled BOOLEAN DEFAULT 1,
+						is_ssl BOOLEAN DEFAULT 0,
+						storage_fs VARCHAR,
+						storage_db VARCHAR,
+						db_name VARCHAR,
+						db_user VARCHAR,
+						db_password VARCHAR,
+						db_host VARCHAR,
+						is_hhvm BOOLEAN DEFAULT 0,
+						is_pagespeed BOOLEAN DEFAULT 0,
+						php_version VARCHAR,
+						PRIMARY KEY (id),
+						UNIQUE (sitename),
+						CHECK (is_enabled IN (0, 1)),
+						CHECK (is_ssl IN (0, 1)),
+						CHECK (is_hhvm IN (0, 1)),
 						CHECK (is_pagespeed IN (0, 1))
 					);";
 		$this->db->exec( $query );
