@@ -132,7 +132,7 @@ class Site_Command extends EE_Command {
 
 			$this->proxy_type = $this->select_db( array( 'proxy_type' ), array( 'sitename' => $this->site_name ) )[0]['proxy_type'];
 
-			$this->delete_site();
+			$this->delete_site( 5 );
 		} else {
 			EE::error( "Site $this->site_name does not exist." );
 		}
@@ -146,11 +146,20 @@ class Site_Command extends EE_Command {
 		$runner = EE::get_runner();
 
 		if ( ! is_dir( EE_CONF_ROOT ) ) {
-			mkdir( EE_CONF_ROOT );
-		}
+			try {
+				if ( ! @mkdir( EE_CONF_ROOT ) ) {
+					throw new Exception( 'Could not create ee4 configuration root directory. Please make sure the user has appropriate rights.' );
+				}
 
-		if ( ! is_dir( $runner->config['sites_path'] ) ) {
-			mkdir( $runner->config['sites_path'] );
+				if ( ! is_dir( $runner->config['sites_path'] ) ) {
+					if ( ! @mkdir( $runner->config['sites_path'] ) ) {
+						throw new Exception( 'Could not create Site root directory. Please make sure the user has appropriate rights.' );
+					}
+				}
+			}
+			catch ( Exception $e ) {
+				EE::error( $e->getMessage() );
+			}
 		}
 		define( 'WEBROOT', trailingslashit( $runner->config['sites_path'] ) );
 		define( 'DB', EE_CONF_ROOT . 'ee4.db' );
@@ -204,22 +213,35 @@ class Site_Command extends EE_Command {
 		$ee_conf_docker_yml = EE_SITE_CONF_ROOT . $this->site_type . ( 'traefik' === $this->proxy_type ? '/docker-compose-traefik.yml' : '/docker-compose.yml' );
 
 		if ( ! $this->create_site_root() ) {
-			EE::error( "Site $this->site_name already exists" );
+			// Should I throw this error or remove the directory if I have the rights.
+			EE::error( "Webroot directory for site $this->site_name already exists." );
 		}
 
 		EE::log( "Creating WordPress site $this->site_name..." );
 		EE::log( 'Copying configuration files...' );
-		$this->copy_recursive( $ee_conf, $site_conf_dir );
-		copy( $ee_conf_docker_yml, $site_docker_yml );
-		rename( "$site_conf_dir/.env.example", $this->site_conf_env );
-		$this->env = file_get_contents( $this->site_conf_env );
-		EE::success( 'Configuration files copied.' );
 
-		// Updating config file.
-		EE::log( 'Updating configuration files...' );
-		$this->env = str_replace( '{V_HOST}', $this->site_name, $this->env );
-		EE::success( 'Configuration files updated.' );
-		file_put_contents( $this->site_conf_env, $this->env );
+		try {
+			if ( ! ( $this->copy_recursive( $ee_conf, $site_conf_dir )
+				&& copy( $ee_conf_docker_yml, $site_docker_yml )
+				&& rename( "$site_conf_dir/.env.example", $this->site_conf_env ) ) ) {
+				throw new Exception( 'Could not copy configuration files.' );
+			}
+
+			$this->env = file_get_contents( $this->site_conf_env );
+
+			EE::success( 'Configuration files copied.' );
+
+			// Updating config file.
+			EE::log( 'Updating configuration files...' );
+			$this->env = str_replace( '{V_HOST}', $this->site_name, $this->env );
+			EE::success( 'Configuration files updated.' );
+			if ( ! file_put_contents( $this->site_conf_env, $this->env ) ) {
+				throw new Exception( 'Could not modify configuration files.' );
+			}
+		}
+		catch ( Exception $e ) {
+			$this->catch_clean( 1, $e );
+		}
 	}
 
 
@@ -233,14 +255,23 @@ class Site_Command extends EE_Command {
 			return false;
 		}
 
-		mkdir( $this->site_root );
+		try {
+			if ( ! @mkdir( $this->site_root, 0777, true ) ) {
+				return false;
+			}
+			$whoami = EE::launch( "whoami", false, true );
 
-		$whoami            = EE::launch( "whoami", false, true );
-		$terminal_username = rtrim( $whoami->stdout );
-		$chown             = chown( $this->site_root, $terminal_username );
+			$terminal_username = rtrim( $whoami->stdout );
+
+			if ( ! chown( $this->site_root, $terminal_username ) ) {
+				throw new Exception( 'Could not change ownership of the site root. Please make sure you have appropriate rights.' );
+			}
+		}
+		catch ( Exception $e ) {
+			$this->catch_clean( 1, $e );
+		}
 
 		return true;
-
 	}
 
 
@@ -273,50 +304,70 @@ class Site_Command extends EE_Command {
 
 	/**
 	 * Function to delete the given site.
+	 *
+	 * @param int $level Level of deletion.
+	 *                   Level - 1: Clean-up only the site-root.
+	 *                   Level - 2: Try to remove network. The network may or may not have been created.
+	 *                   Level - 3: Disconnect & remove network and try to remove containers. The containers may not have been created.
+	 *                   Level - 4: Remove containers.
+	 *                   Level - 5: Remove db entry.
 	 */
-	private function delete_site() {
+	private function delete_site( $level = 1 ) {
 		$this->site_root   = WEBROOT . $this->site_name;
 		$chdir_return_code = chdir( $this->site_root );
-		if ( $chdir_return_code ) {
+		if ( $chdir_return_code && ( $level > 1 ) ) {
 
-			$docker_remove = EE::launch( 'docker-compose down', false, true );
-			EE::debug( print_r( $docker_remove, true ) );
-			if ( ! $docker_remove->return_code ) {
-				EE::log( "[$this->site_name] Docker Containers removed." );
-			} else {
-				EE::error( 'Error in removing docker containers.' );
+			if ( $level >= 3 ) {
+				$docker_remove = EE::launch( 'docker-compose down', false, true );
+				EE::debug( print_r( $docker_remove, true ) );
+				if ( ! $docker_remove->return_code ) {
+					EE::log( "[$this->site_name] Docker Containers removed." );
+				} else {
+					if ( $level > 3 ) {
+						EE::warning( 'Error in removing docker containers.' );
+					}
+				}
+
+				$network_disconnect = EE::launch( "docker network disconnect $this->site_name $this->proxy_type", false, true );
+				EE::debug( print_r( $network_disconnect, true ) );
+				if ( ! $network_disconnect->return_code ) {
+					EE::log( "[$this->site_name] Disconnected from Docker network $this->proxy_type" );
+				} else {
+					EE::warning( "Error in disconnecting from Docker network $this->proxy_type" );
+				}
 			}
 
-			$network_disconnect = EE::launch( "docker network disconnect $this->site_name $this->proxy_type", false, true );
-			EE::debug( print_r( $network_disconnect, true ) );
-			if ( ! $network_disconnect->return_code ) {
-				EE::log( "[$this->site_name] Disconnected from Docker network $this->proxy_type" );
-			} else {
-				EE::error( "Error in disconnecting from Docker network $this->proxy_type" );
+			if ( $level >= 2 ) {
+				$network_remove = EE::launch( "docker network rm $this->site_name", false, true );
+				EE::debug( print_r( $network_remove, true ) );
+				if ( ! $network_remove->return_code ) {
+					EE::log( "[$this->site_name] Docker network $this->proxy_type removed." );
+				} else {
+					if ( $level > 2 ) {
+						EE::warning( "Error in removing Docker network $this->proxy_type" );
+					}
+				}
 			}
-
-			$network_remove = EE::launch( "docker network rm $this->site_name", false, true );
-			EE::debug( print_r( $network_remove, true ) );
-			if ( ! $network_remove->return_code ) {
-				EE::log( "[$this->site_name] Docker network $this->proxy_type removed." );
-			} else {
-				EE::error( "Error in removing Docker network $this->proxy_type" );
-			}
-
-			$rmdir = EE::launch( "sudo rm -rf $this->site_root", false, true );
-			EE::debug( print_r( $rmdir, true ) );
-			if ( ! $rmdir->return_code ) {
-				EE::log( "[$this->site_name] site root removed." );
-			} else {
-				EE::error( "Error in removing $this->site_name site root." );
-			}
-		} else {
-			EE::error( 'Error in changing directory.' );
 		}
-		if ( $this->delete_db( array( 'sitename' => $this->site_name ) ) ) {
-			EE::log( 'Removing database entry' );
-		} else {
-			EE::error( 'Could not remove the database entry' );
+
+		if ( is_dir( $this->site_root ) ) {
+			if ( ! @rmdir( $this->site_root ) ) {
+				$rmdir = EE::launch( "sudo rm -rf $this->site_root", false, true );
+				if ( ! $rmdir->return_code ) {
+					EE::log( "[$this->site_name] site root removed." );
+				} else {
+					EE::warning( "There was some error in removing $this->site_name\'s root directory." );
+				}
+			} else {
+				EE::log( "[$this->site_name] site root removed." );
+			}
+		}
+		if ( $level > 4 ) {
+			if ( $this->delete_db( array( 'sitename' => $this->site_name ) ) ) {
+				EE::log( 'Removing database entry' );
+			} else {
+				EE::error( 'Could not remove the database entry' );
+			}
 		}
 	}
 
@@ -333,17 +384,22 @@ class Site_Command extends EE_Command {
 		curl_setopt( $ch, CURLOPT_TIMEOUT, 10 );
 
 		$i = 0;
-		while ( 200 !== $httpcode && 302 !== $httpcode ) {
-			curl_exec( $ch );
-			$httpcode = curl_getinfo( $ch, CURLINFO_HTTP_CODE );
-			echo '.';
-			sleep( 2 );
-			if ( $i ++ > 50 ) {
-				break;
+		try {
+			while ( 200 !== $httpcode && 302 !== $httpcode ) {
+				curl_exec( $ch );
+				$httpcode = curl_getinfo( $ch, CURLINFO_HTTP_CODE );
+				echo '.';
+				sleep( 2 );
+				if ( $i ++ > 50 ) {
+					break;
+				}
+			}
+			if ( 200 !== $httpcode && 302 !== $httpcode ) {
+				throw new Exception( 'Problem connecting to site!' );
 			}
 		}
-		if ( 200 !== $httpcode && 302 !== $httpcode ) {
-			EE::error( 'Problem connecting to site!' );
+		catch ( Exception $e ) {
+			$this->catch_clean( 4, $e );
 		}
 
 	}
@@ -357,18 +413,23 @@ class Site_Command extends EE_Command {
 
 		EE::debug( print_r( $create_network, true ) );
 
-		if ( ! $create_network->return_code ) {
-			EE::success( 'Network started.' );
-		} else {
-			EE::error( 'There was some error in starting the network.' );
-		}
+		try {
+			if ( ! $create_network->return_code ) {
+				EE::success( 'Network started.' );
+			} else {
+				throw new Exception( 'There was some error in starting the network.' );
+			}
 
-		$connect_network = EE::launch( "docker network connect $this->site_name $this->proxy_type", false, true );
-		EE::debug( print_r( $connect_network, true ) );
-		if ( ! $connect_network->return_code ) {
-			EE::success( "Site connected to $this->proxy_type." );
-		} else {
-			EE::error( "There was some error connecting to $this->proxy_type." );
+			$connect_network = EE::launch( "docker network connect $this->site_name $this->proxy_type", false, true );
+			EE::debug( print_r( $connect_network, true ) );
+			if ( ! $connect_network->return_code ) {
+				EE::success( "Site connected to $this->proxy_type." );
+			} else {
+				throw new Exception( "There was some error connecting to $this->proxy_type." );
+			}
+		}
+		catch ( Exception $e ) {
+			$this->catch_clean( 2, $e );
 		}
 	}
 
@@ -379,15 +440,20 @@ class Site_Command extends EE_Command {
 		EE::debug( __FUNCTION__ );
 		$chdir_return_code = chdir( $this->site_root );
 
-		if ( $chdir_return_code ) {
-			$docker_compose_up = EE::launch( "docker-compose up -d", false, true );
-			EE::debug( print_r( $docker_compose_up, true ) );
+		try {
+			if ( $chdir_return_code ) {
+				$docker_compose_up = EE::launch( "docker-compose up -d", false, true );
+				EE::debug( print_r( $docker_compose_up, true ) );
 
-			if ( $docker_compose_up->return_code ) {
-				EE::error( 'There was some error in docker-compose up.' );
+				if ( $docker_compose_up->return_code ) {
+					throw new Exception( 'There was some error in docker-compose up.' );
+				}
+			} else {
+				throw new Exception( 'Error in changing directory.' );
 			}
-		} else {
-			EE::error( 'Error in changing directory.' );
+		}
+		catch ( Exception $e ) {
+			$this->catch_clean( 3, $e );
 		}
 	}
 
@@ -413,7 +479,7 @@ class Site_Command extends EE_Command {
 		EE::debug( __FUNCTION__ );
 
 		$HOME = HOME;
-		if ( "traefik" === $this->proxy_type ) {
+		if ( 'traefik' === $this->proxy_type ) {
 			$proxy_return_code = EE::launch(
 				"docker run -d -p 8080:8080 -p 80:80 -p 443:443 -v /var/run/docker.sock:/var/run/docker.sock -v /dev/null:/etc/traefik/traefik.toml --name traefik traefik --api --docker --docker.domain=docker.localhost --logLevel=DEBUG"
 				, false, true
@@ -434,11 +500,10 @@ class Site_Command extends EE_Command {
 		*/
 
 		if ( ! ( $proxy_return_code->return_code /*|| $letsencrypt_return_code->return_code */ ) ) {
-			EE::success( 'Container launched successfully.' );
+			EE::success( "$this->proxy_type container launched successfully." );
 		} else {
-			EE::error( 'Container could not be launched.' );
+			EE::error( "$this->proxy_type container could not be launched." );
 		}
-
 	}
 
 	/**
@@ -486,11 +551,15 @@ class Site_Command extends EE_Command {
 			'site_type'  => $this->site_type,
 			'proxy_type' => $this->proxy_type,
 		);
-
-		if ( $this->insert_db( $data ) ) {
-			EE::log( 'Site entry created.' );
-		} else {
-			EE::error( 'Error creating site entry in database.' );
+		try {
+			if ( $this->insert_db( $data ) ) {
+				EE::log( 'Site entry created.' );
+			} else {
+				throw new Exception( 'Error creating site entry in database.' );
+			}
+		}
+		catch ( Exception $e ) {
+			$this->catch_clean( 4, $e );
 		}
 
 	}
@@ -540,11 +609,15 @@ class Site_Command extends EE_Command {
 	 *
 	 * @param string $source Source directory.
 	 * @param string $dest   Destination directory.
+	 *
+	 * @return bool Success.
 	 */
 	private function copy_recursive( $source, $dest ) {
 		EE::debug( __FUNCTION__ );
 		if ( ! is_dir( $dest ) ) {
-			mkdir( $dest, 0755 );
+			if ( ! @mkdir( $dest, 0755 ) ) {
+				return false;
+			}
 		}
 
 		foreach (
@@ -559,6 +632,8 @@ class Site_Command extends EE_Command {
 				copy( $item, $dest . DIRECTORY_SEPARATOR . $iterator->getSubPathName() );
 			}
 		}
+
+		return true;
 	}
 
 	/**
@@ -574,6 +649,19 @@ class Site_Command extends EE_Command {
 		}
 
 		return implode( $pass );
+	}
+
+	/**
+	 * Catch and clean exceptions.
+	 *
+	 * @param int       $level Level of clean-up.
+	 * @param Exception $e
+	 */
+	private function catch_clean( $level, $e ) {
+		EE::warning( $e->getMessage() );
+		EE::warning( 'Initiating clean-up...' );
+		$this->delete_site( $level );
+		exit;
 	}
 
 	/**
@@ -712,7 +800,7 @@ class Site_Command extends EE_Command {
 
 		return $select_data;
 	}
-
+	
 	/**
 	 * Check if a site entry exists in the database.
 	 */
