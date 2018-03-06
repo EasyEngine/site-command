@@ -20,7 +20,8 @@
         "bundled": true,
         "commands": [
             "site",
-            "site create"
+            "site create",
+            "site list"
         ]
     }
 }
