@@ -1,0 +1,26 @@
+{
+    "name": "ee/site-command",
+    "description": "",
+    "type": "wp-cli-package",
+    "homepage": "https://github.com/ee/site",
+    "license": "MIT",
+    "authors": [],
+    "minimum-stability": "dev",
+    "prefer-stable": true,
+    "autoload": {
+        "psr-4": {
+            "": "src/"
+        },
+        "files": [ "site-command.php" ]
+    },
+    "extra": {
+        "branch-alias": {
+            "dev-master": "1.x-dev"
+        },
+        "bundled": true,
+        "commands": [
+            "site",
+            "site create"
+        ]
+    }
+}
