@@ -19,6 +19,7 @@ define( 'HOME', trailingslashit( get_home_dir() ) );
 define( 'EE_CONF_ROOT', trailingslashit( HOME . '.ee4' ) );
 define( 'EE_SITE_CONF_ROOT', trailingslashit( EE_ROOT ) . 'ee4-config/' );
 define( 'LOCALHOST_IP', '127.0.0.1' );
+define( 'TABLE', 'sites' );
 
 class Site_Command extends EE_Command {
 	private $site_name;
@@ -31,6 +32,7 @@ class Site_Command extends EE_Command {
 	private $env;
 	private $site_conf_env;
 	private $proxy_type;
+	private $db;
 
 	/**
 	 * Runs the standard WordPress Site installation.
@@ -85,12 +87,28 @@ class Site_Command extends EE_Command {
 
 		$this->init_ee4();
 		$this->init_checks();
+		$this->init_db();
 
 		EE::log( "Installing WordPress site $this->site_name" );
 		EE::log( 'Configuring project...' );
 
 		$this->configure_site();
 		$this->create_site();
+	}
+
+	/**
+	 * Site list sub-command.
+	 */
+	public function list() {
+		EE::debug( __FUNCTION__ );
+
+		$this->init_ee4();
+
+		if ( empty( $this->db ) ) {
+			$this->init_db();
+		}
+
+		$this->list_sites();
 	}
 
 	/**
@@ -208,6 +226,22 @@ class Site_Command extends EE_Command {
 		$this->create_etc_hosts_entry();
 		$this->site_status_check();
 		$this->install_wp();
+		$this->create_site_db_entry();
+	}
+
+	/**
+	 * Function to list all the sites.
+	 */
+	private function list_sites() {
+		$sites = $this->select_db( array( 'sitename' ) );
+		if ( $sites ) {
+			EE::log( "List of Sites:\n" );
+			foreach ( $sites as $site ) {
+				EE::log( "  - " . $site['sitename'] );
+			}
+		} else {
+			EE::warning( 'No sites found. Go create some!' );
+		}
 	}
 
 	/*
@@ -365,6 +399,27 @@ class Site_Command extends EE_Command {
 	}
 
 	/**
+	 * Function to save the site configuration entry into database.
+	 */
+	private function create_site_db_entry() {
+		EE::debug( __FUNCTION__ );
+
+		$data = array(
+			'sitename'   => $this->site_name,
+			'site_type'  => $this->site_type,
+			'proxy_type' => $this->proxy_type,
+		);
+
+		if ( $this->insert_db( $data ) ) {
+			EE::log( 'Site entry created.' );
+		} else {
+			EE::error( 'Error creating site entry in database.' );
+		}
+
+	}
+
+
+	/**
 	 * Function to return the type of site.
 	 *
 	 * @param array $assoc_args User input arguments.
@@ -442,5 +497,142 @@ class Site_Command extends EE_Command {
 		}
 
 		return implode( $pass );
+	}
+
+	/**
+	 * Function to initialize db and db connection.
+	 */
+
+	private function init_db() {
+		EE::debug( __FUNCTION__ );
+		if ( ! ( file_exists( DB ) ) ) {
+			$this->db = $this->create_db();
+		} else {
+			$this->db = new SQLite3( DB );
+			if ( ! $this->db ) {
+				EE::error( $this->db->lastErrorMsg() );
+			}
+		}
+		EE::debug( print_r( $this->db, true ) );
+	}
+
+	/**
+	 * Sqlite database creation.
+	 */
+	private function create_db() {
+		EE::debug( __FUNCTION__ );
+		$this->db = new SQLite3( DB );
+		$query    = "CREATE TABLE sites (
+						id INTEGER NOT NULL, 
+						sitename VARCHAR, 
+						site_type VARCHAR, 
+						proxy_type VARCHAR, 
+						cache_type VARCHAR, 
+						site_path VARCHAR, 
+						created_on DATETIME, 
+						is_enabled BOOLEAN DEFAULT 1, 
+						is_ssl BOOLEAN DEFAULT 0, 
+						storage_fs VARCHAR, 
+						storage_db VARCHAR, 
+						db_name VARCHAR, 
+						db_user VARCHAR, 
+						db_password VARCHAR, 
+						db_host VARCHAR, 
+						is_hhvm BOOLEAN DEFAULT 0, 
+						is_pagespeed BOOLEAN DEFAULT 0, 
+						php_version VARCHAR, 
+						PRIMARY KEY (id), 
+						UNIQUE (sitename), 
+						CHECK (is_enabled IN (0, 1)), 
+						CHECK (is_ssl IN (0, 1)), 
+						CHECK (is_hhvm IN (0, 1)), 
+						CHECK (is_pagespeed IN (0, 1))
+					);";
+		$this->db->exec( $query );
+		EE::debug( print_r( $this->db, true ) );
+	}
+
+	/**
+	 * Insert row in table.
+	 *
+	 * @param array $data
+	 *
+	 * @return bool
+	 */
+	private function insert_db( $data ) {
+		EE::debug( __FUNCTION__ );
+		EE::debug( print_r( $this->db, true ) );
+
+		if ( empty ( $this->db ) ) {
+			$this->init_db();
+		}
+
+		$table_name = TABLE;
+
+		$fields  = '`' . implode( '`, `', array_keys( $data ) ) . '`';
+		$formats = '"' . implode( '", "', $data ) . '"';
+
+		$insert_query = "INSERT INTO `$table_name` ($fields) VALUES ($formats);";
+
+		$insert_query_exec = $this->db->exec( $insert_query );
+
+		if ( ! $insert_query_exec ) {
+			EE::debug( $this->db->lastErrorMsg() );
+			$this->db->close();
+		} else {
+			$this->db->close();
+
+			return true;
+		}
+
+		return false;
+	}
+
+	/**
+	 * @param array $columns
+	 * @param array $where
+	 * Select data from the database.
+	 *
+	 * @return array|bool
+	 */
+	private function select_db( $columns = array(), $where = array() ) {
+
+		if ( empty ( $this->db ) ) {
+			$this->init_db();
+		}
+
+		$table_name = TABLE;
+
+		$conditions = array();
+		if ( empty( $columns ) ) {
+			$columns = '*';
+		} else {
+			$columns = implode( ', ', $columns );
+		}
+
+		foreach ( $where as $key => $value ) {
+			$conditions[] = "`$key`='" . $value . "'";
+		}
+
+		$conditions = implode( ' AND ', $conditions );
+
+		$select_data_query = "SELECT {$columns} FROM `$table_name`";
+
+		if ( ! empty( $conditions ) ) {
+			$select_data_query .= " WHERE $conditions";
+		}
+
+		$select_data_exec = $this->db->query( $select_data_query );
+		$select_data      = array();
+		if ( $select_data_exec ) {
+			while ( $row = $select_data_exec->fetchArray( SQLITE3_ASSOC ) ) {
+				$select_data[] = $row;
+			}
+		}
+		if ( empty( $select_data ) ) {
+			return false;
+		}
+
+		return $select_data;
 	}
 }
