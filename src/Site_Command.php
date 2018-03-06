@@ -112,6 +112,33 @@ class Site_Command extends EE_Command {
 	}
 
 	/**
+	 * Site delete sub-command.
+	 *
+	 * ## OPTIONS
+	 *
+	 * <site-name>
+	 * : Name of website to be deleted.
+	 */
+	public function delete( $args ) {
+		EE::debug( __FUNCTION__ );
+		$this->init_ee4();
+
+		if ( empty ( $this->db ) ) {
+			$this->init_db();
+		}
+
+		$this->site_name = $this->remove_trailing_slash( $args[0] );
+		if ( $this->site_in_db() ) {
+
+			$this->proxy_type = $this->select_db( array( 'proxy_type' ), array( 'sitename' => $this->site_name ) )[0]['proxy_type'];
+
+			$this->delete_site();
+		} else {
+			EE::error( "Site $this->site_name does not exist." );
+		}
+	}
+
+	/**
 	 * Function to check and create the root directory for ee4.
 	 */
 	private function init_ee4() {
@@ -244,7 +271,57 @@ class Site_Command extends EE_Command {
 		}
 	}
 
-	/*
+	/**
+	 * Function to delete the given site.
+	 */
+	private function delete_site() {
+		$this->site_root   = WEBROOT . $this->site_name;
+		$chdir_return_code = chdir( $this->site_root );
+		if ( $chdir_return_code ) {
+
+			$docker_remove = EE::launch( 'docker-compose down', false, true );
+			EE::debug( print_r( $docker_remove, true ) );
+			if ( ! $docker_remove->return_code ) {
+				EE::log( "[$this->site_name] Docker Containers removed." );
+			} else {
+				EE::error( 'Error in removing docker containers.' );
+			}
+
+			$network_disconnect = EE::launch( "docker network disconnect $this->site_name $this->proxy_type", false, true );
+			EE::debug( print_r( $network_disconnect, true ) );
+			if ( ! $network_disconnect->return_code ) {
+				EE::log( "[$this->site_name] Disconnected from Docker network $this->proxy_type" );
+			} else {
+				EE::error( "Error in disconnecting from Docker network $this->proxy_type" );
+			}
+
+			$network_remove = EE::launch( "docker network rm $this->site_name", false, true );
+			EE::debug( print_r( $network_remove, true ) );
+			if ( ! $network_remove->return_code ) {
+				EE::log( "[$this->site_name] Docker network $this->proxy_type removed." );
+			} else {
+				EE::error( "Error in removing Docker network $this->proxy_type" );
+			}
+
+			$rmdir = EE::launch( "sudo rm -rf $this->site_root", false, true );
+			EE::debug( print_r( $rmdir, true ) );
+			if ( ! $rmdir->return_code ) {
+				EE::log( "[$this->site_name] site root removed." );
+			} else {
+				EE::error( "Error in removing $this->site_name site root." );
+			}
+		} else {
+			EE::error( 'Error in changing directory.' );
+		}
+		if ( $this->delete_db( array( 'sitename' => $this->site_name ) ) ) {
+			EE::log( 'Removing database entry' );
+		} else {
+			EE::error( 'Could not remove the database entry' );
+		}
+	}
+
+
+	/**
 	 * Checking site is running or not [TESTING]
 	 */
 	private function site_status_check() {
@@ -634,5 +711,59 @@ class Site_Command extends EE_Command {
 		}
 
 		return $select_data;
+	}
+
+	/**
+	 * Check if a site entry exists in the database.
+	 */
+	private function site_in_db() {
+		EE::debug( __FUNCTION__ );
+		EE::debug( print_r( $this->db, true ) );
+
+		if ( empty ( $this->db ) ) {
+			$this->init_db();
+		}
+
+		$site = $this->select_db( array( 'id' ), array( 'sitename' => $this->site_name ) );
+
+		if ( $site ) {
+			return true;
+		} else {
+			return false;
+		}
+	}
+
+
+	/**
+	 * Delete data from table.
+	 *
+	 * @param        $where
+	 *
+	 * @return bool
+	 */
+	private function delete_db( $where ) {
+
+		$table_name = TABLE;
+
+		$conditions = array();
+		foreach ( $where as $key => $value ) {
+			$conditions[] = "`$key`='" . $value . "'";
+		}
+
+		$conditions   = implode( ' AND ', $conditions );
+		$delete_query = "DELETE FROM `$table_name` WHERE $conditions";
+
+		$delete_query_exec = $this->db->exec( $delete_query );
+
+		if ( ! $delete_query_exec ) {
+			EE::debug( $this->db->lastErrorMsg() );
+			$this->db->close();
+		} else {
+			$this->db->close();
+
+			return true;
+		}
+
+		return false;
 	}
 }
