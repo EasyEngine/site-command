@@ -24,5 +24,8 @@
             "site list",
             "site delete"
         ]
+    },
+    "require": {
+        "monolog/monolog": "^1.23"
     }
 }

@@ -3,8 +3,11 @@
 declare( ticks=1 );
 
 use function \EE\Utils\get_flag_value;
-use function \EE\Utils\trailingslashit;
-use function \EE\Utils\get_home_dir;
+use function \EE\Utils\copy_recursive;
+use function \EE\Utils\remove_trailing_slash;
+use function \EE\Utils\random_password;
+use function \EE\Utils\delete_dir;
+
 
 /**
  * Creates a simple WordPress Website.
@@ -16,13 +19,6 @@ use function \EE\Utils\get_home_dir;
  *
  * @package ee-cli
  */
-
-define( 'HOME', trailingslashit( get_home_dir() ) );
-define( 'EE_CONF_ROOT', trailingslashit( HOME . '.ee4' ) );
-define( 'EE_SITE_CONF_ROOT', trailingslashit( EE_ROOT ) . 'ee4-config/' );
-define( 'LOCALHOST_IP', '127.0.0.1' );
-define( 'TABLE', 'sites' );
-
 class Site_Command extends EE_Command {
 	private $site_name;
 	private $site_root;
@@ -36,6 +32,7 @@ class Site_Command extends EE_Command {
 	private $proxy_type;
 	private $db;
 	private $level;
+	private $logger;
 
 	public function __construct() {
 		$this->level = 0;
@@ -43,6 +40,8 @@ class Site_Command extends EE_Command {
 		pcntl_signal( SIGHUP, [ $this, "rollback" ] );
 		pcntl_signal( SIGUSR1, [ $this, "rollback" ] );
 		pcntl_signal( SIGINT, [ $this, "rollback" ] );
+		$this->db     = EE::db();
+		$this->logger = EE::get_file_logger()->withName( 'site_command' );
 	}
 
 	/**
@@ -87,39 +86,44 @@ class Site_Command extends EE_Command {
 	 * : E-Mail of the administrator.
 	 */
 	public function create( $args, $assoc_args ) {
+		$this->logger->info( '========================site create start========================' );
 
-		$this->site_name  = strtolower( $this->remove_trailing_slash( $args[0] ) );
+		$this->logger->debug( 'args:', $args );
+		$this->logger->debug( 'assoc_args:', empty( $assoc_args ) ? array( 'NULL' ) : $assoc_args );
+
+		$this->site_name  = strtolower( remove_trailing_slash( $args[0] ) );
 		$this->site_type  = ! empty( $this->get_site_type( $assoc_args ) ) ? $this->get_site_type( $assoc_args ) : 'wp';
 		$this->proxy_type = ! empty( $assoc_args['traefik-proxy'] ) ? 'traefik-proxy' : 'nginx-proxy';
 		$this->site_title = ! empty( $assoc_args['title'] ) ? $assoc_args['title'] : $this->site_name;
 		$this->site_user  = ! empty( $assoc_args['user'] ) ? $assoc_args['user'] : 'admin';
-		$this->site_pass  = ! empty( $assoc_args['pass'] ) ? $assoc_args['pass'] : $this->random_password();
+		$this->site_pass  = ! empty( $assoc_args['pass'] ) ? $assoc_args['pass'] : random_password();
 		$this->site_email = ! empty( $assoc_args['email'] ) ? $assoc_args['email'] : strtolower( 'mail@' . $this->site_name );
 
-		$this->init_ee4();
 		$this->init_checks();
-		$this->init_db();
 
-		EE::log( "Installing WordPress site $this->site_name" );
 		EE::log( 'Configuring project...' );
 
 		$this->configure_site();
 		$this->create_site();
+		$this->logger->info( '========================site create end========================' );
 	}
 
 	/**
 	 * Lists the created websites.
 	 */
 	public function list() {
-		EE::debug( __FUNCTION__ );
-
-		$this->init_ee4();
-
-		if ( empty( $this->db ) ) {
-			$this->init_db();
+		$this->logger->info( '========================site list start========================' );
+		$sites = $this->db::select( array( 'sitename' ) );
+		if ( $sites ) {
+			EE::log( "List of Sites:\n" );
+			foreach ( $sites as $site ) {
+				EE::log( " - " . $site['sitename'] );
+			}
+			EE::log( '' );
+		} else {
+			EE::warning( 'No sites found. Go create some!' );
 		}
-
-		$this->list_sites();
+		$this->logger->info( '========================site list end========================' );
 	}
 
 	/**
@@ -131,49 +135,18 @@ class Site_Command extends EE_Command {
 	 * : Name of website to be deleted.
 	 */
 	public function delete( $args ) {
-		EE::debug( __FUNCTION__ );
-		$this->init_ee4();
+		$this->logger->info( '========================site delete start========================' );
 
-		if ( empty ( $this->db ) ) {
-			$this->init_db();
-		}
+		$this->site_name = remove_trailing_slash( $args[0] );
+		if ( $this->db::site_in_db( $this->site_name ) ) {
 
-		$this->site_name = $this->remove_trailing_slash( $args[0] );
-		if ( $this->site_in_db() ) {
-
-			$this->proxy_type = $this->select_db( array( 'proxy_type' ), array( 'sitename' => $this->site_name ) )[0]['proxy_type'];
+			$this->proxy_type = $this->db::select( array( 'proxy_type' ), array( 'sitename' => $this->site_name ) )[0]['proxy_type'];
 			$this->level      = 5;
 			$this->delete_site();
 		} else {
 			EE::error( "Site $this->site_name does not exist." );
 		}
-	}
-
-	/**
-	 * Function to check and create the root directory for ee4.
-	 */
-	private function init_ee4() {
-
-		$runner = EE::get_runner();
-
-		if ( ! is_dir( EE_CONF_ROOT ) ) {
-			try {
-				if ( ! @mkdir( EE_CONF_ROOT ) ) {
-					throw new Exception( 'Could not create ee4 configuration root directory. Please make sure the user has appropriate rights.' );
-				}
-
-				if ( ! is_dir( $runner->config['sites_path'] ) ) {
-					if ( ! @mkdir( $runner->config['sites_path'] ) ) {
-						throw new Exception( 'Could not create Site root directory. Please make sure the user has appropriate rights.' );
-					}
-				}
-			}
-			catch ( Exception $e ) {
-				EE::error( $e->getMessage() );
-			}
-		}
-		define( 'WEBROOT', trailingslashit( $runner->config['sites_path'] ) );
-		define( 'DB', EE_CONF_ROOT . 'ee4.db' );
+		$this->logger->info( '========================site delete end========================' );
 	}
 
 	/**
@@ -183,10 +156,8 @@ class Site_Command extends EE_Command {
 	 * Invokes function create_proxy_server() to create and start the given proxy if it does not exist.
 	 */
 	private function init_checks() {
-		EE::debug( __FUNCTION__ );
-		$is_proxy_running = EE::launch( "docker inspect -f '{{.State.Running}}' $this->proxy_type", false, true );
 
-		EE::debug( (string) $is_proxy_running );
+		$is_proxy_running = EE::launch( "docker inspect -f '{{.State.Running}}' $this->proxy_type", false, true );
 
 		if ( ! $is_proxy_running->return_code ) {
 			if ( preg_match( '/false/', $is_proxy_running->stdout ) ) {
@@ -213,8 +184,6 @@ class Site_Command extends EE_Command {
 	 */
 	private function configure_site() {
 
-		EE::debug( __FUNCTION__ );
-
 		$this->site_root     = WEBROOT . $this->site_name;
 		$site_conf_dir       = $this->site_root . '/config';
 		$site_docker_yml     = $this->site_root . '/docker-compose.yml';
@@ -230,7 +199,7 @@ class Site_Command extends EE_Command {
 		EE::log( 'Copying configuration files...' );
 
 		try {
-			if ( ! ( $this->copy_recursive( $ee_conf, $site_conf_dir )
+			if ( ! ( copy_recursive( $ee_conf, $site_conf_dir )
 				&& copy( $ee_conf_docker_yml, $site_docker_yml )
 				&& rename( "$site_conf_dir/.env.example", $this->site_conf_env ) ) ) {
 				throw new Exception( 'Could not copy configuration files.' );
@@ -258,7 +227,7 @@ class Site_Command extends EE_Command {
 	 * Function to create site root directory.
 	 */
 	private function create_site_root() {
-		EE::debug( __FUNCTION__ );
+
 
 		if ( is_dir( $this->site_root ) ) {
 			return false;
@@ -289,27 +258,13 @@ class Site_Command extends EE_Command {
 	 * Function to create the site.
 	 */
 	private function create_site() {
+
 		$this->setup_site_network();
 		$this->docker_compose_up();
 		$this->create_etc_hosts_entry();
 		$this->site_status_check();
 		$this->install_wp();
 		$this->create_site_db_entry();
-	}
-
-	/**
-	 * Function to list all the sites.
-	 */
-	private function list_sites() {
-		$sites = $this->select_db( array( 'sitename' ) );
-		if ( $sites ) {
-			EE::log( "List of Sites:\n" );
-			foreach ( $sites as $site ) {
-				EE::log( "  - " . $site['sitename'] );
-			}
-		} else {
-			EE::warning( 'No sites found. Go create some!' );
-		}
 	}
 
 	/**
@@ -363,15 +318,17 @@ class Site_Command extends EE_Command {
 		}
 
 		if ( is_dir( $this->site_root ) ) {
-			if ( ! $this->delete_dir( $this->site_root ) ) {
-				EE::launch( "sudo rm -rf $this->site_root" );
-				EE::log( "[$this->site_name] site root removed." );
-			} else {
-				EE::error( 'Could not remove site root. Please check if you have sufficient rights.' );
+			if ( ! delete_dir( $this->site_root ) ) {
+				$rmdir = EE::launch( "sudo rm -rf $this->site_root" );
+				if ( $rmdir ) {
+					EE::log( $rmdir );
+					EE::error( 'Could not remove site root. Please check if you have sufficient rights.' );
+				}
 			}
+			EE::log( "[$this->site_name] site root removed." );
 		}
 		if ( $this->level > 4 ) {
-			if ( $this->delete_db( array( 'sitename' => $this->site_name ) ) ) {
+			if ( $this->db::delete( array( 'sitename' => $this->site_name ) ) ) {
 				EE::log( 'Removing database entry' );
 			} else {
 				EE::error( 'Could not remove the database entry' );
@@ -418,7 +375,7 @@ class Site_Command extends EE_Command {
 	 * Function to setup site networking and connect given proxy.
 	 */
 	private function setup_site_network() {
-		EE::debug( __FUNCTION__ );
+
 		$this->level    = 2;
 		$create_network = EE::launch( "docker network create $this->site_name", false, true );
 
@@ -448,7 +405,7 @@ class Site_Command extends EE_Command {
 	 * Function to start the containers.
 	 */
 	private function docker_compose_up() {
-		EE::debug( __FUNCTION__ );
+
 		$chdir_return_code = chdir( $this->site_root );
 		$this->level       = 3;
 		try {
@@ -472,7 +429,7 @@ class Site_Command extends EE_Command {
 	 * Function to start the container if it exists but is not running.
 	 */
 	private function start_proxy_server() {
-		EE::debug( __FUNCTION__ );
+
 		$start_docker_return_code = EE::launch( "docker start $this->proxy_type", false, true );
 		EE::debug( print_r( $start_docker_return_code, true ) );
 		if ( ! $start_docker_return_code->return_code ) {
@@ -487,7 +444,7 @@ class Site_Command extends EE_Command {
 	 * Function to create and start the container if it does not exist.
 	 */
 	private function create_proxy_server() {
-		EE::debug( __FUNCTION__ );
+
 
 		$HOME = HOME;
 		if ( 'traefik' === $this->proxy_type ) {
@@ -521,7 +478,7 @@ class Site_Command extends EE_Command {
 	 * Function to create entry in /etc/hosts.
 	 */
 	private function create_etc_hosts_entry() {
-		EE::debug( __FUNCTION__ );
+
 		$host_line = LOCALHOST_IP . "\t$this->site_name";
 		$etc_hosts = file_get_contents( '/etc/hosts' );
 		if ( ! preg_match( "/\s+$this->site_name\$/m", $etc_hosts ) ) {
@@ -546,7 +503,7 @@ class Site_Command extends EE_Command {
 		EE::log( "\nInstalling WordPress site..." );
 		chdir( $this->site_root );
 		exec( "docker-compose exec --user='www-data' php wp core install --url='" . $this->site_name . "' --title='" . $this->site_title . "' --admin_user='" . $this->site_user . "'" . ( ! $this->site_pass ? "" : " --admin_password='" . $this->site_pass . "'" ) . " --admin_email='" . $this->site_email . "'", $op );
-		EE::success( "http://" . $this->site_name . " is created!" );
+		EE::success( "http://" . $this->site_name . " has been created successfully!" );
 		EE::log( "Site Title :\t" . $this->site_title . "\nUsername :\t" . $this->site_user . "\nPassword :\t" . $this->site_pass );
 		EE::log( "E-Mail :\t" . $this->site_email );
 	}
@@ -555,7 +512,7 @@ class Site_Command extends EE_Command {
 	 * Function to save the site configuration entry into database.
 	 */
 	private function create_site_db_entry() {
-		EE::debug( __FUNCTION__ );
+
 
 		$data = array(
 			'sitename'   => $this->site_name,
@@ -563,7 +520,7 @@ class Site_Command extends EE_Command {
 			'proxy_type' => $this->proxy_type,
 		);
 		try {
-			if ( $this->insert_db( $data ) ) {
+			if ( $this->db::insert( $data ) ) {
 				EE::log( 'Site entry created.' );
 			} else {
 				throw new Exception( 'Error creating site entry in database.' );
@@ -584,7 +541,7 @@ class Site_Command extends EE_Command {
 	 * @return string Type of site parsed from argument given from user.
 	 */
 	private function get_site_type( $assoc_args ) {
-		EE::debug( __FUNCTION__ );
+
 		$type_of_sites = array(
 			'wp',
 			'php',
@@ -599,103 +556,17 @@ class Site_Command extends EE_Command {
 		}
 	}
 
-
-	##############################################UTILS##############################################
-
-	/**
-	 * Remove trailing slash from a string.
-	 *
-	 * @param string $str Input string.
-	 *
-	 * @return string String without trailing slash.
-	 */
-	private function remove_trailing_slash( $str ) {
-		EE::debug( __FUNCTION__ );
-
-		return rtrim( $str, '/' );
-	}
-
-	/**
-	 * Function to recursively copy directory.
-	 *
-	 * @param string $source Source directory.
-	 * @param string $dest   Destination directory.
-	 *
-	 * @return bool Success.
-	 */
-	private function copy_recursive( $source, $dest ) {
-		EE::debug( __FUNCTION__ );
-		if ( ! is_dir( $dest ) ) {
-			if ( ! @mkdir( $dest, 0755 ) ) {
-				return false;
-			}
-		}
-
-		foreach (
-			$iterator = new \RecursiveIteratorIterator(
-				new \RecursiveDirectoryIterator( $source, \RecursiveDirectoryIterator::SKIP_DOTS ),
-				\RecursiveIteratorIterator::SELF_FIRST
-			) as $item
-		) {
-			if ( $item->isDir() ) {
-				mkdir( $dest . DIRECTORY_SEPARATOR . $iterator->getSubPathName() );
-			} else {
-				copy( $item, $dest . DIRECTORY_SEPARATOR . $iterator->getSubPathName() );
-			}
-		}
-
-		return true;
-	}
-
-	/**
-	 * Delete directory.
-	 *
-	 * @param string $dir path to directory.
-	 */
-	private function delete_dir( $dir ) {
-		$it    = new RecursiveDirectoryIterator( $dir, RecursiveDirectoryIterator::SKIP_DOTS );
-		$files = new RecursiveIteratorIterator(
-			$it,
-			RecursiveIteratorIterator::CHILD_FIRST
-		);
-		foreach ( $files as $file ) {
-			if ( $file->isDir() ) {
-				@rmdir( $file->getRealPath() );
-			} else {
-				@unlink( $file->getRealPath() );
-			}
-		}
-		if ( @rmdir( $dir ) ) {
-			return true;
-		}
-
-		return false;
-	}
-
-	/**
-	 * Function to generate random password.
-	 */
-	private function random_password() {
-		$alphabet    = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890';
-		$pass        = array();
-		$alphaLength = strlen( $alphabet ) - 1;
-		for ( $i = 0; $i < 12; $i ++ ) {
-			$n      = rand( 0, $alphaLength );
-			$pass[] = $alphabet[$n];
-		}
-
-		return implode( $pass );
-	}
-
 	/**
 	 * Catch and clean exceptions.
 	 *
 	 * @param Exception $e
 	 */
 	private function catch_clean( $e ) {
+		$this->logger->info( '========================site cleanup start========================' );
 		EE::warning( $e->getMessage() );
 		EE::warning( 'Initiating clean-up...' );
 		$this->delete_site();
+		$this->logger->info( '========================site cleanup end========================' );
 		exit;
 	}
 
@@ -709,196 +580,5 @@ class Site_Command extends EE_Command {
 		}
 		EE::success( 'Rollback complete. Exiting now.' );
 		exit;
-	}
-
-	/**
-	 * Function to initialize db and db connection.
-	 */
-
-	private function init_db() {
-		EE::debug( __FUNCTION__ );
-		if ( ! ( file_exists( DB ) ) ) {
-			$this->db = $this->create_db();
-		} else {
-			$this->db = new SQLite3( DB );
-			if ( ! $this->db ) {
-				EE::error( $this->db->lastErrorMsg() );
-			}
-		}
-		EE::debug( print_r( $this->db, true ) );
-	}
-
-	/**
-	 * Sqlite database creation.
-	 */
-	private function create_db() {
-		EE::debug( __FUNCTION__ );
-		$this->db = new SQLite3( DB );
-		$query    = "CREATE TABLE sites (
-						id INTEGER NOT NULL, 
-						sitename VARCHAR, 
-						site_type VARCHAR, 
-						proxy_type VARCHAR, 
-						cache_type VARCHAR, 
-						site_path VARCHAR, 
-						created_on DATETIME, 
-						is_enabled BOOLEAN DEFAULT 1, 
-						is_ssl BOOLEAN DEFAULT 0, 
-						storage_fs VARCHAR, 
-						storage_db VARCHAR, 
-						db_name VARCHAR, 
-						db_user VARCHAR, 
-						db_password VARCHAR, 
-						db_host VARCHAR, 
-						is_hhvm BOOLEAN DEFAULT 0, 
-						is_pagespeed BOOLEAN DEFAULT 0, 
-						php_version VARCHAR, 
-						PRIMARY KEY (id), 
-						UNIQUE (sitename), 
-						CHECK (is_enabled IN (0, 1)), 
-						CHECK (is_ssl IN (0, 1)), 
-						CHECK (is_hhvm IN (0, 1)), 
-						CHECK (is_pagespeed IN (0, 1))
-					);";
-		$this->db->exec( $query );
-		EE::debug( print_r( $this->db, true ) );
-	}
-
-	/**
-	 * Insert row in table.
-	 *
-	 * @param array $data
-	 *
-	 * @return bool
-	 */
-	private function insert_db( $data ) {
-		EE::debug( __FUNCTION__ );
-		EE::debug( print_r( $this->db, true ) );
-
-		if ( empty ( $this->db ) ) {
-			$this->init_db();
-		}
-
-		$table_name = TABLE;
-
-		$fields  = '`' . implode( '`, `', array_keys( $data ) ) . '`';
-		$formats = '"' . implode( '", "', $data ) . '"';
-
-		$insert_query = "INSERT INTO `$table_name` ($fields) VALUES ($formats);";
-
-		$insert_query_exec = $this->db->exec( $insert_query );
-
-		if ( ! $insert_query_exec ) {
-			EE::debug( $this->db->lastErrorMsg() );
-			$this->db->close();
-		} else {
-			$this->db->close();
-
-			return true;
-		}
-
-		return false;
-	}
-
-	/**
-	 * @param array $columns
-	 * @param array $where
-	 * Select data from the database.
-	 *
-	 * @return array|bool
-	 */
-	private function select_db( $columns = array(), $where = array() ) {
-
-		if ( empty ( $this->db ) ) {
-			$this->init_db();
-		}
-
-		$table_name = TABLE;
-
-		$conditions = array();
-		if ( empty( $columns ) ) {
-			$columns = '*';
-		} else {
-			$columns = implode( ', ', $columns );
-		}
-
-		foreach ( $where as $key => $value ) {
-			$conditions[] = "`$key`='" . $value . "'";
-		}
-
-		$conditions = implode( ' AND ', $conditions );
-
-		$select_data_query = "SELECT {$columns} FROM `$table_name`";
-
-		if ( ! empty( $conditions ) ) {
-			$select_data_query .= " WHERE $conditions";
-		}
-
-		$select_data_exec = $this->db->query( $select_data_query );
-		$select_data      = array();
-		if ( $select_data_exec ) {
-			while ( $row = $select_data_exec->fetchArray( SQLITE3_ASSOC ) ) {
-				$select_data[] = $row;
-			}
-		}
-		if ( empty( $select_data ) ) {
-			return false;
-		}
-
-		return $select_data;
-	}
-
-	/**
-	 * Check if a site entry exists in the database.
-	 */
-	private function site_in_db() {
-		EE::debug( __FUNCTION__ );
-		EE::debug( print_r( $this->db, true ) );
-
-		if ( empty ( $this->db ) ) {
-			$this->init_db();
-		}
-
-		$site = $this->select_db( array( 'id' ), array( 'sitename' => $this->site_name ) );
-
-		if ( $site ) {
-			return true;
-		} else {
-			return false;
-		}
-	}
-
-
-	/**
-	 * Delete data from table.
-	 *
-	 * @param        $where
-	 *
-	 * @return bool
-	 */
-	private function delete_db( $where ) {
-
-		$table_name = TABLE;
-
-		$conditions = array();
-		foreach ( $where as $key => $value ) {
-			$conditions[] = "`$key`='" . $value . "'";
-		}
-
-		$conditions   = implode( ' AND ', $conditions );
-		$delete_query = "DELETE FROM `$table_name` WHERE $conditions";
-
-		$delete_query_exec = $this->db->exec( $delete_query );
-
-		if ( ! $delete_query_exec ) {
-			EE::debug( $this->db->lastErrorMsg() );
-			$this->db->close();
-		} else {
-			$this->db->close();
-
-			return true;
-		}
-
-		return false;
 	}
 }
