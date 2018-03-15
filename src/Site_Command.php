@@ -40,6 +40,8 @@ class Site_Command extends EE_Command {
 		pcntl_signal( SIGHUP, [ $this, "rollback" ] );
 		pcntl_signal( SIGUSR1, [ $this, "rollback" ] );
 		pcntl_signal( SIGINT, [ $this, "rollback" ] );
+		$shutdown_handler = new Shutdown_Handler();
+		register_shutdown_function( [ $shutdown_handler, "cleanup" ], [ &$this ] );
 		$this->db     = EE::db();
 		$this->logger = EE::get_file_logger()->withName( 'site_command' );
 	}
@@ -513,7 +515,6 @@ class Site_Command extends EE_Command {
 	 */
 	private function create_site_db_entry() {
 
-
 		$data = array(
 			'sitename'   => $this->site_name,
 			'site_type'  => $this->site_type,
@@ -580,5 +581,22 @@ class Site_Command extends EE_Command {
 		}
 		EE::success( 'Rollback complete. Exiting now.' );
 		exit;
+	}
+
+	/**
+	 * Shutdown function to catch and rollback from fatal errors.
+	 */
+	private function shutDownFunction() {
+		$error = error_get_last();
+		if ( isset( $error ) ) {
+			if ( $error['type'] === E_ERROR ) {
+				EE::warning( 'An Error occurred. Initiating clean-up...' );
+				$this->logger->error( 'Type: ' . $error['type'] );
+				$this->logger->error( 'Message: ' . $error['message'] );
+				$this->logger->error( 'File: ' . $error['file'] );
+				$this->logger->error( 'Line: ' . $error['line'] );
+				$this->rollback();
+			}
+		}
 	}
 }
