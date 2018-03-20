@@ -1,8 +1,8 @@
 {
-    "name": "ee/site-command",
+    "name": "mrrobot47/site-command",
     "description": "",
     "type": "wp-cli-package",
-    "homepage": "https://github.com/ee/site",
+    "homepage": "https://github.com/mrrobot47/site-command",
     "license": "MIT",
     "authors": [],
     "minimum-stability": "dev",
