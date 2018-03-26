@@ -480,18 +480,18 @@ class Site_Command extends EE_Command {
 	 * Function to create entry in /etc/hosts.
 	 */
 	private function create_etc_hosts_entry() {
-
+		$HOME      = HOME;
 		$host_line = LOCALHOST_IP . "\t$this->site_name";
-		$etc_hosts = file_get_contents( '/etc/hosts' );
+		$etc_hosts = file_get_contents( "$HOME/.ee4/ee4_hosts" );
 		if ( ! preg_match( "/\s+$this->site_name\$/m", $etc_hosts ) ) {
 			$host_line       .= "\n" . LOCALHOST_IP . "\tmail.$this->site_name";
-			$etc_hosts_entry = EE::launch(
-				"sudo /bin/bash -c 'echo \"$host_line\" >> /etc/hosts'", false
-			);
-			if ( ! $etc_hosts_entry ) {
+			$etc_hosts_entry = file_put_contents( "$HOME/.ee4/ee4_hosts", $host_line . PHP_EOL, FILE_APPEND | LOCK_EX );
+			if ( $etc_hosts_entry ) {
 				EE::success( 'Host entry successfully added.' );
+				$entry = EE::launch( "docker exec dnsmasq kill -1 1", false, true );
+				EE::debug( print_r( $entry, true ) );
 			} else {
-				EE::warning( "Failed to add $this->site_name in host entry, Please do it manually!" );
+				EE::warning( "Failed to add $this->site_name in dnsmasq host entry, Please do it manually!" );
 			}
 		} else {
 			EE::log( 'Host entry already exists.' );
