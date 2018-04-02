@@ -7,6 +7,8 @@ use function \EE\Utils\copy_recursive;
 use function \EE\Utils\remove_trailing_slash;
 use function \EE\Utils\random_password;
 use function \EE\Utils\delete_dir;
+use function \EE\Utils\delem_log;
+use function \EE\Utils\launch_debug;
 
 
 /**
@@ -88,7 +90,7 @@ class Site_Command extends EE_Command {
 	 * : E-Mail of the administrator.
 	 */
 	public function create( $args, $assoc_args ) {
-		$this->logger->info( '========================site create start========================' );
+		delem_log( 'site create start' );
 
 		$this->logger->debug( 'args:', $args );
 		$this->logger->debug( 'assoc_args:', empty( $assoc_args ) ? array( 'NULL' ) : $assoc_args );
@@ -107,14 +109,14 @@ class Site_Command extends EE_Command {
 
 		$this->configure_site();
 		$this->create_site();
-		$this->logger->info( '========================site create end========================' );
+		delem_log( 'site create end' );
 	}
 
 	/**
 	 * Lists the created websites.
 	 */
 	public function list() {
-		$this->logger->info( '========================site list start========================' );
+		delem_log( 'site list start' );
 		$sites = $this->db::select( array( 'sitename' ) );
 		if ( $sites ) {
 			EE::log( "List of Sites:\n" );
@@ -125,7 +127,7 @@ class Site_Command extends EE_Command {
 		} else {
 			EE::warning( 'No sites found. Go create some!' );
 		}
-		$this->logger->info( '========================site list end========================' );
+		delem_log( 'site list end' );
 	}
 
 	/**
@@ -137,18 +139,21 @@ class Site_Command extends EE_Command {
 	 * : Name of website to be deleted.
 	 */
 	public function delete( $args ) {
-		$this->logger->info( '========================site delete start========================' );
+		delem_log( 'site delete start' );
 
 		$this->site_name = remove_trailing_slash( $args[0] );
 		if ( $this->db::site_in_db( $this->site_name ) ) {
 
-			$this->proxy_type = $this->db::select( array( 'proxy_type' ), array( 'sitename' => $this->site_name ) )[0]['proxy_type'];
+			$db_select = $this->db::select( array( 'proxy_type', 'site_path' ), array( 'sitename' => $this->site_name ) );
+
+			$this->proxy_type = $db_select[0]['proxy_type'];
+			$this->site_root  = $db_select[0]['site_path'];
 			$this->level      = 5;
 			$this->delete_site();
 		} else {
 			EE::error( "Site $this->site_name does not exist." );
 		}
-		$this->logger->info( '========================site delete end========================' );
+		delem_log( 'site delete end' );
 	}
 
 	/**
@@ -230,13 +235,14 @@ class Site_Command extends EE_Command {
 	 */
 	private function create_site_root() {
 
-
 		if ( is_dir( $this->site_root ) ) {
 			return false;
 		}
 
 		try {
-			if ( ! @mkdir( $this->site_root, 0777, true ) ) {
+			$create_site_root = EE::launch("mkdir $this->site_root",false,true);
+			launch_debug($create_site_root);
+			if ( $create_site_root->return_code ) {
 				return false;
 			}
 			$this->level = 1;
@@ -282,12 +288,11 @@ class Site_Command extends EE_Command {
 	 *  Level - 5: Remove db entry.
 	 */
 	private function delete_site() {
-		$this->site_root   = WEBROOT . $this->site_name;
 		$chdir_return_code = chdir( $this->site_root );
 		if ( $chdir_return_code && ( $this->level > 1 ) ) {
 			if ( $this->level >= 3 ) {
 				$docker_remove = EE::launch( 'docker-compose down', false, true );
-				EE::debug( print_r( $docker_remove, true ) );
+				launch_debug( $docker_remove );
 				if ( ! $docker_remove->return_code ) {
 					EE::log( "[$this->site_name] Docker Containers removed." );
 				} else {
@@ -297,7 +302,7 @@ class Site_Command extends EE_Command {
 				}
 
 				$network_disconnect = EE::launch( "docker network disconnect $this->site_name $this->proxy_type", false, true );
-				EE::debug( print_r( $network_disconnect, true ) );
+				launch_debug( $network_disconnect );
 				if ( ! $network_disconnect->return_code ) {
 					EE::log( "[$this->site_name] Disconnected from Docker network $this->proxy_type" );
 				} else {
@@ -308,7 +313,7 @@ class Site_Command extends EE_Command {
 
 			if ( $this->level >= 2 ) {
 				$network_remove = EE::launch( "docker network rm $this->site_name", false, true );
-				EE::debug( print_r( $network_remove, true ) );
+				launch_debug( $network_remove );
 				if ( ! $network_remove->return_code ) {
 					EE::log( "[$this->site_name] Docker network $this->proxy_type removed." );
 				} else {
@@ -381,7 +386,7 @@ class Site_Command extends EE_Command {
 		$this->level    = 2;
 		$create_network = EE::launch( "docker network create $this->site_name", false, true );
 
-		EE::debug( print_r( $create_network, true ) );
+		launch_debug( $create_network );
 
 		try {
 			if ( ! $create_network->return_code ) {
@@ -391,7 +396,7 @@ class Site_Command extends EE_Command {
 			}
 			$this->level     = 3;
 			$connect_network = EE::launch( "docker network connect $this->site_name $this->proxy_type", false, true );
-			EE::debug( print_r( $connect_network, true ) );
+			launch_debug( $connect_network );
 			if ( ! $connect_network->return_code ) {
 				EE::success( "Site connected to $this->proxy_type." );
 			} else {
@@ -413,7 +418,7 @@ class Site_Command extends EE_Command {
 		try {
 			if ( $chdir_return_code ) {
 				$docker_compose_up = EE::launch( "docker-compose up -d", false, true );
-				EE::debug( print_r( $docker_compose_up, true ) );
+				launch_debug( $docker_compose_up );
 
 				if ( $docker_compose_up->return_code ) {
 					throw new Exception( 'There was some error in docker-compose up.' );
@@ -433,7 +438,7 @@ class Site_Command extends EE_Command {
 	private function start_proxy_server() {
 
 		$start_docker_return_code = EE::launch( "docker start $this->proxy_type", false, true );
-		EE::debug( print_r( $start_docker_return_code, true ) );
+		launch_debug( $start_docker_return_code );
 		if ( ! $start_docker_return_code->return_code ) {
 			EE::success( 'Container started.' );
 		} else {
@@ -456,12 +461,12 @@ class Site_Command extends EE_Command {
 			);
 		} else {
 			$proxy_return_code = EE::launch(
-				"docker run --name nginx-proxy --restart always -d -p 80:80 -p 443:443 -v $HOME/.ee4/etc/nginx/certs:/etc/nginx/certs -v $HOME/.ee4/etc/nginx/conf.d:/etc/nginx/conf.d -v $HOME/.ee4/etc/nginx/htpasswd:/etc/nginx/htpasswd -v $HOME/.ee4/etc/nginx/vhost.d:/etc/nginx/vhost.d -v $HOME/.ee4/usr/share/nginx/html:/usr/share/nginx/html -v /var/run/docker.sock:/tmp/docker.sock:ro jwilder/nginx-proxy"
+				"docker run --name nginx-proxy -e LOCAL_USER_ID=`id -u` -e LOCAL_GROUP_ID=`id -g` --restart=always -d -p 80:80 -p 443:443 -v $HOME/.ee4/nginx/certs:/etc/nginx/certs -v $HOME/.ee4/nginx/dhparam:/etc/nginx/dhparam -v $HOME/.ee4/nginx/conf.d:/etc/nginx/conf.d -v $HOME/.ee4/nginx/htpasswd:/etc/nginx/htpasswd -v $HOME/.ee4/nginx/vhost.d:/etc/nginx/vhost.d -v /var/run/docker.sock:/tmp/docker.sock:ro -v $HOME/.ee4:/app/ee4 dharmin/nginx-proxy"
 				, false, true
 			);
 		}
 
-		EE::debug( print_r( $proxy_return_code, true ) );
+		launch_debug( $proxy_return_code );
 
 		/*
 		$letsencrypt_return_code = EE::launch( "docker run -d --name letsencrypt -v /var/run/docker.sock:/var/run/docker.sock:ro --volumes-from nginx-proxy jrcs/letsencrypt-nginx-proxy-companion", false, true );
@@ -480,23 +485,26 @@ class Site_Command extends EE_Command {
 	 * Function to create entry in /etc/hosts.
 	 */
 	private function create_etc_hosts_entry() {
-		$HOME      = HOME;
+		
 		$host_line = LOCALHOST_IP . "\t$this->site_name";
-		$etc_hosts = file_get_contents( "$HOME/.ee4/ee4_hosts" );
+		$etc_hosts = file_get_contents( '/etc/hosts' );
 		if ( ! preg_match( "/\s+$this->site_name\$/m", $etc_hosts ) ) {
 			$host_line       .= "\n" . LOCALHOST_IP . "\tmail.$this->site_name";
-			$etc_hosts_entry = file_put_contents( "$HOME/.ee4/ee4_hosts", $host_line . PHP_EOL, FILE_APPEND | LOCK_EX );
-			if ( $etc_hosts_entry ) {
+			$host_line       .= "\n" . LOCALHOST_IP . "\tpma.$this->site_name";
+			$etc_hosts_entry = EE::launch(
+				"sudo /bin/bash -c 'echo \"$host_line\" >> /etc/hosts'", false, true
+			);
+			launch_debug( $etc_hosts_entry );
+			if ( ! $etc_hosts_entry->return_code ) {
 				EE::success( 'Host entry successfully added.' );
-				$entry = EE::launch( "docker exec dnsmasq kill -1 1", false, true );
-				EE::debug( print_r( $entry, true ) );
 			} else {
-				EE::warning( "Failed to add $this->site_name in dnsmasq host entry, Please do it manually!" );
+				EE::warning( "Failed to add $this->site_name in host entry, Please do it manually!" );
 			}
 		} else {
 			EE::log( 'Host entry already exists.' );
 		}
 	}
+
 
 	/**
 	 * Install wordpress with given credentials.
@@ -519,6 +527,7 @@ class Site_Command extends EE_Command {
 			'sitename'   => $this->site_name,
 			'site_type'  => $this->site_type,
 			'proxy_type' => $this->proxy_type,
+			'site_path'  => $this->site_root,
 		);
 		try {
 			if ( $this->db::insert( $data ) ) {
@@ -563,11 +572,11 @@ class Site_Command extends EE_Command {
 	 * @param Exception $e
 	 */
 	private function catch_clean( $e ) {
-		$this->logger->info( '========================site cleanup start========================' );
+		delem_log( 'site cleanup start' );
 		EE::warning( $e->getMessage() );
 		EE::warning( 'Initiating clean-up...' );
 		$this->delete_site();
-		$this->logger->info( '========================site cleanup end========================' );
+		delem_log( 'site cleanup end' );
 		exit;
 	}
 
