@@ -98,12 +98,12 @@ class Site_Command extends EE_Command {
 
 		$this->logger->debug( 'args:', $args );
 		$this->logger->debug( 'assoc_args:', empty( $assoc_args ) ? array( 'NULL' ) : $assoc_args );
-		$this->site_name  = strtolower( remove_trailing_slash( $args[0] ) );
+		$this->site_name = strtolower( remove_trailing_slash( $args[0] ) );
 		$this->site_type = $this->get_site_type( $assoc_args );
-		if( FALSE === $this->site_type ){
-			EE::error("Invalid arguments");
+		if ( false === $this->site_type ) {
+			EE::error( "Invalid arguments" );
 		}
-		$this->proxy_type = ! empty( $assoc_args['traefik-proxy'] ) ? 'traefik-proxy' : 'nginx-proxy';
+		$this->proxy_type = ! empty( $assoc_args['traefik-proxy'] ) ? 'ee4_traefik-proxy' : 'ee4_nginx-proxy';
 		$this->cache_type = ! empty( $assoc_args['wpredis'] ) ? 'ee4_redis' : 'none';
 		$this->site_title = ! empty( $assoc_args['title'] ) ? $assoc_args['title'] : $this->site_name;
 		$this->site_user  = ! empty( $assoc_args['user'] ) ? $assoc_args['user'] : 'admin';
@@ -112,7 +112,7 @@ class Site_Command extends EE_Command {
 		$this->le         = ! empty( $assoc_args['letsencrypt'] ) ? true : false;
 
 		$this->init_checks();
-		if( $this->cache_type != 'none' ){
+		if ( 'none' !== $this->cache_type ) {
 			$this->cache_checks();
 		}
 
@@ -173,8 +173,7 @@ class Site_Command extends EE_Command {
 	/**
 	 * Function to check all the required configurations needed to create the site.
 	 *
-	 * Invokes function start_proxy_server() to start the given proxy if it exists but is not running.
-	 * Invokes function create_proxy_server() to create and start the given proxy if it does not exist.
+	 * Boots up the container if it is stopped or not running.
 	 */
 	private function init_checks() {
 		if ( 'running' !== $this->docker::container_status( $this->proxy_type ) ) {
@@ -200,25 +199,14 @@ class Site_Command extends EE_Command {
 	/**
 	 * Function to check if the cache server is running.
 	 *
-	 * Invokes function start_cache_server() to start the given proxy if it exists but is not running.
-	 * Invokes function create_cache_server() to create and start the given proxy if it does not exist.
+	 * Boots up the container if it is stopped or not running.
 	 */
 	private function cache_checks() {
-		if( ! file_exists ( EE_CONF_ROOT.'/redis.conf' ) ){
-			copy( EE_SITE_CONF_ROOT.'redis/redis.conf', EE_CONF_ROOT.'/redis.conf' );
+		if ( ! file_exists( EE_CONF_ROOT . '/redis' ) ) {
+			copy_recursive( EE_SITE_CONF_ROOT . '/redis', EE_CONF_ROOT . '/redis' );
 		}
-		$is_cache_running = EE::launch( "docker inspect -f '{{.State.Running}}' $this->cache_type", false, true );
-
-		if ( ! $is_cache_running->return_code ) {
-			if ( preg_match( '/false/', $is_cache_running->stdout ) ) {
-				$this->start_cache_server();
-			}
-		} else {
-			$this->create_cache_server();
-		}
+		$this->docker::boot_container( $this->cache_type );
 	}
-
-
 
 
 	/**
@@ -231,7 +219,7 @@ class Site_Command extends EE_Command {
 		$site_docker_yml     = $this->site_root . '/docker-compose.yml';
 		$this->site_conf_env = $this->site_root . '/.env';
 
-		$ee_conf = EE_SITE_CONF_ROOT . $this->site_type . '/config';
+		$ee_conf = EE_SITE_CONF_ROOT . "/$this->site_type/config";
 
 		if ( ! $this->create_site_root() ) {
 			EE::error( "Webroot directory for site $this->site_name already exists." );
@@ -245,15 +233,6 @@ class Site_Command extends EE_Command {
 		$docker_compose_content = $this->docker::create_docker_composer( $filter );
 
 		try {
-			if( $this->cache_type == 'ee4_redis' ){
-				$default_conf_location = "$ee_conf/nginx/default.conf";
-				$default_conf_content = file_get_contents($default_conf_location);
-				$old_conf = ['include common/php7.conf;','# include common/redis-php7.conf;'];
-				$redis_conf = ['# include common/php7.conf;','include common/redis-php7.conf;'];
-				$default_conf_content = str_replace( $old_conf,$redis_conf,$default_conf_content );
-				file_put_contents( $default_conf_location,$default_conf_content );
-			}
-
 			if ( ! ( copy_recursive( $ee_conf, $site_conf_dir )
 				&& file_put_contents( $site_docker_yml, $docker_compose_content )
 				&& rename( "$site_conf_dir/.env.example", $this->site_conf_env ) ) ) {
@@ -342,7 +321,7 @@ class Site_Command extends EE_Command {
 	 *  Level - 5: Remove db entry.
 	 */
 	private function delete_site() {
-    
+
 		if ( $this->level >= 3 ) {
 			if ( $this->docker::docker_compose_down( $this->site_root ) ) {
 				EE::log( "[$this->site_name] Docker Containers removed." );
@@ -352,14 +331,14 @@ class Site_Command extends EE_Command {
 				}
 			}
 
-				// Cache disconnect
-				$network_disconnect = EE::launch( "docker network disconnect $this->site_name $this->cache_type", false, true );
-				launch_debug( $network_disconnect );
-				if ( ! $network_disconnect->return_code ) {
-					EE::log( "[$this->site_name] Disconnected from Docker network $this->cache_type" );
-				} else {
-					EE::warning( "Error in disconnecting from Docker network $this->cache_type" );
-				}
+			// Cache disconnect
+			$network_disconnect = EE::launch( "docker network disconnect $this->site_name $this->cache_type", false, true );
+			default_debug( $network_disconnect );
+			if ( ! $network_disconnect->return_code ) {
+				EE::log( "[$this->site_name] Disconnected from Docker network $this->cache_type" );
+			} else {
+				EE::warning( "Error in disconnecting from Docker network $this->cache_type" );
+			}
 
 			if ( $this->docker::disconnect_network( $this->site_name, $this->proxy_type ) ) {
 				EE::log( "[$this->site_name] Disconnected from Docker network $this->proxy_type" );
@@ -380,11 +359,11 @@ class Site_Command extends EE_Command {
 		}
 
 		if ( is_dir( $this->site_root ) ) {
-				$rmdir = EE::launch( "sudo rm -rf $this->site_root" );
-				if ( $rmdir ) {
-					EE::log( $rmdir );
-					EE::error( 'Could not remove site root. Please check if you have sufficient rights.' );
-				}
+			$rmdir = EE::launch( "sudo rm -rf $this->site_root" );
+			if ( $rmdir ) {
+				EE::log( $rmdir );
+				EE::error( 'Could not remove site root. Please check if you have sufficient rights.' );
+			}
 			EE::log( "[$this->site_name] site root removed." );
 		}
 		if ( $this->level > 4 ) {
@@ -451,13 +430,11 @@ class Site_Command extends EE_Command {
 			} else {
 				throw new Exception( "There was some error connecting to $this->proxy_type." );
 			}
-			if( $this->cache_type !== "none" ){
-				$connect_network = EE::launch( "docker network connect $this->site_name $this->cache_type", false, true );
-				launch_debug( $connect_network );
-				if ( ! $connect_network->return_code ) {
-					EE::success( "Site connected to $this->proxy_type." );
+			if ( 'none' !== $this->cache_type ) {
+				if ( $this->docker::connect_network( $this->site_name, $this->cache_type ) ) {
+					EE::success( "Site connected to $this->cache_type." );
 				} else {
-					throw new Exception( "There was some error connecting to $this->proxy_type." );
+					throw new Exception( "There was some error connecting to $this->cache_type." );
 				}
 			}
 		}
@@ -537,25 +514,26 @@ class Site_Command extends EE_Command {
 	 * @return string Type of site parsed from argument given from user.
 	 */
 	private function get_site_type( $assoc_args ) {
-
+		$type = '';
 		$type_of_sites = array(
 			'wp',
 			'php',
 			'html',
 			'wpredis'
 		);
-		$cnt=0;
+		$cnt           = 0;
 		foreach ( $type_of_sites as $site ) {
 			if ( get_flag_value( $assoc_args, $site ) ) {
-				$cnt++;
+				$cnt ++;
+				$type = $site;
 			}
 		}
-		if( $cnt == 1 ){
-			return $site;
-		}else if( $cnt == 0){
+		if ( $cnt == 1 ) {
+			return $type;
+		} else if ( $cnt == 0 ) {
 			return 'wp';
-		}else{
-			return FALSE;
+		} else {
+			return false;
 		}
 	}
 
