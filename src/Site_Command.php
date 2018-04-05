@@ -38,6 +38,7 @@ class Site_Command extends EE_Command {
 	private $level;
 	private $logger;
 	private $le;
+	private $db_pass;
 
 	public function __construct() {
 		$this->level = 0;
@@ -96,6 +97,7 @@ class Site_Command extends EE_Command {
 		$this->site_title = ! empty( $assoc_args['title'] ) ? $assoc_args['title'] : $this->site_name;
 		$this->site_user  = ! empty( $assoc_args['user'] ) ? $assoc_args['user'] : 'admin';
 		$this->site_pass  = ! empty( $assoc_args['pass'] ) ? $assoc_args['pass'] : random_password();
+		$this->db_pass    = random_password();
 		$this->site_email = ! empty( $assoc_args['email'] ) ? $assoc_args['email'] : strtolower( 'mail@' . $this->site_name );
 		$this->le         = ! empty( $assoc_args['letsencrypt'] ) ? true : false;
 
@@ -233,7 +235,7 @@ class Site_Command extends EE_Command {
 
 			// Updating config file.
 			EE::log( 'Updating configuration files...' );
-			$this->env = str_replace( '{V_HOST}', $this->site_name, $this->env );
+			$this->env = str_replace( [ '{V_HOST}', 'password' ], [ $this->site_name, $this->db_pass ], $this->env );
 			EE::success( 'Configuration files updated.' );
 			if ( ! file_put_contents( $this->site_conf_env, $this->env ) ) {
 				throw new Exception( 'Could not modify configuration files.' );
@@ -356,11 +358,12 @@ class Site_Command extends EE_Command {
 		}
 		if ( $this->level > 4 ) {
 			if ( $this->db::delete( array( 'sitename' => $this->site_name ) ) ) {
-				EE::log( 'Removing database entry' );
+				EE::log( 'Removing database entry.' );
 			} else {
 				EE::error( 'Could not remove the database entry' );
 			}
 		}
+		EE::log( "Site $this->site_name deleted." );
 	}
 
 
@@ -464,7 +467,9 @@ class Site_Command extends EE_Command {
 		chdir( $this->site_root );
 		exec( "docker-compose exec --user='www-data' php wp core install --url='" . $this->site_name . "' --title='" . $this->site_title . "' --admin_user='" . $this->site_user . "'" . ( ! $this->site_pass ? "" : " --admin_password='" . $this->site_pass . "'" ) . " --admin_email='" . $this->site_email . "'", $op );
 		EE::success( "http://" . $this->site_name . " has been created successfully!" );
-		EE::log( "Site Title :\t" . $this->site_title . "\nUsername :\t" . $this->site_user . "\nPassword :\t" . $this->site_pass );
+		EE::log( "Access phpMyAdmin:\tpma.$this->site_name" );
+		EE::log( "Access mail:\tmail.$this->site_name" );
+		EE::log( "Site Title :\t" . $this->site_title . "\nUsername :\t" . $this->site_user . "\nPassword :\t" . $this->site_pass . "\nDB Password :\t" . $this->db_pass );
 		EE::log( "E-Mail :\t" . $this->site_email );
 	}
 
