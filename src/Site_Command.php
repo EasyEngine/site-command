@@ -91,7 +91,7 @@ class Site_Command extends EE_Command {
 		if ( false === $this->site_type ) {
 			EE::error( "Invalid arguments" );
 		}
-		$this->proxy_type = 'ee4_traefik-proxy';
+		$this->proxy_type = 'ee4_nginx-proxy';
 		$this->cache_type = ! empty( $assoc_args['wpredis'] ) ? 'ee4_redis' : 'none';
 		$this->site_title = ! empty( $assoc_args['title'] ) ? $assoc_args['title'] : $this->site_name;
 		$this->site_user  = ! empty( $assoc_args['user'] ) ? $assoc_args['user'] : 'admin';
@@ -218,7 +218,7 @@ class Site_Command extends EE_Command {
 		if ( $this->le ) {
 			$filter[] = 'le';
 		}
-		$docker_compose_content = $this->docker::create_docker_composer( $filter );
+		$docker_compose_content = $this->docker::generate_docker_composer_yml( $filter );
 
 		try {
 			if ( ! ( copy_recursive( $ee_conf, $site_conf_dir )
