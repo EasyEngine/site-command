@@ -63,20 +63,8 @@ class Site_Command extends EE_Command {
 	 * [--wp]
 	 * : WordPress website.
 	 *
-	 * [--php]
-	 * : PHP website.
-	 *
-	 * [--html]
-	 * : HTML website.
-	 *
-	 * [--mysql]
-	 * : PHP + MySql website.
-	 *
 	 * [--wpredis]
 	 * : Use redis for wordpress
-	 *
-	 * [--nginx-proxy]
-	 * : Use nginx proxy.
 	 *
 	 * [--letsencrypt]
 	 * : Preconfigured letsencrypt supported website.
@@ -103,7 +91,7 @@ class Site_Command extends EE_Command {
 		if ( false === $this->site_type ) {
 			EE::error( "Invalid arguments" );
 		}
-		$this->proxy_type = ! empty( $assoc_args['traefik-proxy'] ) ? 'ee4_traefik-proxy' : 'ee4_nginx-proxy';
+		$this->proxy_type = 'ee4_traefik-proxy';
 		$this->cache_type = ! empty( $assoc_args['wpredis'] ) ? 'ee4_redis' : 'none';
 		$this->site_title = ! empty( $assoc_args['title'] ) ? $assoc_args['title'] : $this->site_name;
 		$this->site_user  = ! empty( $assoc_args['user'] ) ? $assoc_args['user'] : 'admin';
@@ -514,11 +502,9 @@ class Site_Command extends EE_Command {
 	 * @return string Type of site parsed from argument given from user.
 	 */
 	private function get_site_type( $assoc_args ) {
-		$type = '';
+		$type          = '';
 		$type_of_sites = array(
 			'wp',
-			'php',
-			'html',
 			'wpredis'
 		);
 		$cnt           = 0;
