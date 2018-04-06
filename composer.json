@@ -1,8 +1,8 @@
 {
-    "name": "mrrobot47/site-command",
+    "name": "easyengine/site-command",
     "description": "",
-    "type": "wp-cli-package",
-    "homepage": "https://github.com/mrrobot47/site-command",
+    "type": "ee-cli-package",
+    "homepage": "https://github.com/easyengine/site-command",
     "license": "MIT",
     "authors": [],
     "minimum-stability": "dev",
