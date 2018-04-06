@@ -84,7 +84,7 @@ class Site_Command extends EE_Command {
 	 */
 	public function create( $args, $assoc_args ) {
 		delem_log( 'site create start' );
-
+		EE::warning( 'This is a beta version. Please don\'t use it in production.' );
 		$this->logger->debug( 'args:', $args );
 		$this->logger->debug( 'assoc_args:', empty( $assoc_args ) ? array( 'NULL' ) : $assoc_args );
 		$this->site_name = strtolower( remove_trailing_slash( $args[0] ) );
@@ -128,7 +128,7 @@ class Site_Command extends EE_Command {
 			}
 			EE::log( '' );
 		} else {
-			EE::warning( 'No sites found. Go create some!' );
+			EE::log( 'No sites found. Go create some!' );
 		}
 		delem_log( 'site list end' );
 	}
