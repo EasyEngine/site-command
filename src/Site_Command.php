@@ -33,6 +33,7 @@ class Site_Command extends EE_Command {
 	private $env;
 	private $site_conf_env;
 	private $proxy_type;
+	private $cache_type;
 	private $db;
 	private $docker;
 	private $level;
@@ -257,9 +258,7 @@ class Site_Command extends EE_Command {
 		}
 
 		try {
-			$create_site_root = EE::launch( "mkdir $this->site_root", false, true );
-			default_debug( $create_site_root );
-			if ( $create_site_root->return_code ) {
+			if ( ! default_launch( "mkdir $this->site_root" ) ) {
 				return false;
 			}
 			$this->level = 1;
@@ -321,13 +320,12 @@ class Site_Command extends EE_Command {
 				}
 			}
 
-			// Cache disconnect
-			$network_disconnect = EE::launch( "docker network disconnect $this->site_name $this->cache_type", false, true );
-			default_debug( $network_disconnect );
-			if ( ! $network_disconnect->return_code ) {
-				EE::log( "[$this->site_name] Disconnected from Docker network $this->cache_type" );
-			} else {
-				EE::warning( "Error in disconnecting from Docker network $this->cache_type" );
+			if ( 'none' !== $this->cache_type ) {
+				if ( $this->docker::disconnect_network( $this->site_name, $this->cache_type ) ) {
+					EE::log( "[$this->site_name] Disconnected from Docker network $this->cache_type" );
+				} else {
+					EE::warning( "Error in disconnecting from Docker network $this->cache_type" );
+				}
 			}
 
 			if ( $this->docker::disconnect_network( $this->site_name, $this->proxy_type ) ) {
@@ -349,9 +347,7 @@ class Site_Command extends EE_Command {
 		}
 
 		if ( is_dir( $this->site_root ) ) {
-			$rmdir = EE::launch( "sudo rm -rf $this->site_root" );
-			if ( $rmdir ) {
-				EE::log( $rmdir );
+			if ( ! default_launch( "sudo rm -rf $this->site_root" ) ) {
 				EE::error( 'Could not remove site root. Please check if you have sufficient rights.' );
 			}
 			EE::log( "[$this->site_name] site root removed." );
@@ -442,13 +438,10 @@ class Site_Command extends EE_Command {
 		$host_line = LOCALHOST_IP . "\t$this->site_name";
 		$etc_hosts = file_get_contents( '/etc/hosts' );
 		if ( ! preg_match( "/\s+$this->site_name\$/m", $etc_hosts ) ) {
-			$host_line       .= "\n" . LOCALHOST_IP . "\tmail.$this->site_name";
-			$host_line       .= "\n" . LOCALHOST_IP . "\tpma.$this->site_name";
-			$etc_hosts_entry = EE::launch(
-				"sudo /bin/bash -c 'echo \"$host_line\" >> /etc/hosts'", false, true
-			);
-			default_debug( $etc_hosts_entry );
-			if ( ! $etc_hosts_entry->return_code ) {
+			$host_line .= "\n" . LOCALHOST_IP . "\tmail.$this->site_name";
+			$host_line .= "\n" . LOCALHOST_IP . "\tpma.$this->site_name";
+
+			if ( default_launch( "sudo /bin/bash -c 'echo \"$host_line\" >> /etc/hosts'" ) ) {
 				EE::success( 'Host entry successfully added.' );
 			} else {
 				EE::warning( "Failed to add $this->site_name in host entry, Please do it manually!" );
