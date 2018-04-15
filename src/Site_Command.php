@@ -2,15 +2,7 @@
 
 declare( ticks=1 );
 
-use function \EE\Utils\get_type;
-use function \EE\Utils\copy_recursive;
-use function \EE\Utils\remove_trailing_slash;
-use function \EE\Utils\random_password;
-use function \EE\Utils\delete_dir;
-use function \EE\Utils\delem_log;
-use function \EE\Utils\default_debug;
-use function \EE\Utils\default_launch;
-
+use EE\Utils;
 
 /**
  * Creates a simple WordPress Website.
@@ -89,13 +81,13 @@ class Site_Command extends EE_Command {
 	 * : E-Mail of the administrator.
 	 */
 	public function create( $args, $assoc_args ) {
-		delem_log( 'site create start' );
+		\EE\Utils\delem_log( 'site create start' );
 		EE::warning( 'This is a beta version. Please don\'t use it in production.' );
 		$this->logger->debug( 'args:', $args );
 		$this->logger->debug( 'assoc_args:', empty( $assoc_args ) ? array( 'NULL' ) : $assoc_args );
-		$this->site_name  = strtolower( remove_trailing_slash( $args[0] ) );
-		$this->site_type  = get_type( $assoc_args, [ 'wp', 'wpredis' ], 'wp' );
-		$this->multi_type = get_type( $assoc_args, [ 'wpsubdom', 'wpsubdir' ] );
+		$this->site_name  = strtolower( \EE\Utils\remove_trailing_slash( $args[0] ) );
+		$this->site_type  = \EE\Utils\get_type( $assoc_args, [ 'wp', 'wpredis' ], 'wp' );
+		$this->multi_type = \EE\Utils\get_type( $assoc_args, [ 'wpsubdom', 'wpsubdir' ] );
 		if ( false === $this->site_type ) {
 			EE::error( 'Invalid arguments' );
 		}
@@ -104,8 +96,8 @@ class Site_Command extends EE_Command {
 		$this->cache_type = ! empty( $assoc_args['wpredis'] ) ? 'ee4_redis' : 'none';
 		$this->site_title = ! empty( $assoc_args['title'] ) ? $assoc_args['title'] : $this->site_name;
 		$this->site_user  = ! empty( $assoc_args['user'] ) ? $assoc_args['user'] : 'admin';
-		$this->site_pass  = ! empty( $assoc_args['pass'] ) ? $assoc_args['pass'] : random_password();
-		$this->db_pass    = random_password();
+		$this->site_pass  = ! empty( $assoc_args['pass'] ) ? $assoc_args['pass'] : \EE\Utils\random_password();
+		$this->db_pass    = \EE\Utils\random_password();
 		$this->site_email = ! empty( $assoc_args['email'] ) ? $assoc_args['email'] : strtolower( 'mail@' . $this->site_name );
 		$this->le         = ! empty( $assoc_args['letsencrypt'] ) ? true : false;
 
@@ -118,7 +110,7 @@ class Site_Command extends EE_Command {
 
 		$this->configure_site();
 		$this->create_site();
-		delem_log( 'site create end' );
+		\EE\Utils\delem_log( 'site create end' );
 	}
 
 	/**
@@ -127,7 +119,7 @@ class Site_Command extends EE_Command {
 	 * @subcommand list
 	 */
 	public function _list() {
-		delem_log( 'site list start' );
+		\EE\Utils\delem_log( 'site list start' );
 		$sites = $this->db::select( array( 'sitename' ) );
 		if ( $sites ) {
 			EE::log( "List of Sites:\n" );
@@ -138,7 +130,7 @@ class Site_Command extends EE_Command {
 		} else {
 			EE::log( 'No sites found. Go create some!' );
 		}
-		delem_log( 'site list end' );
+		\EE\Utils\delem_log( 'site list end' );
 	}
 
 	/**
@@ -150,9 +142,9 @@ class Site_Command extends EE_Command {
 	 * : Name of website to be deleted.
 	 */
 	public function delete( $args ) {
-		delem_log( 'site delete start' );
+		\EE\Utils\delem_log( 'site delete start' );
 
-		$this->site_name = remove_trailing_slash( $args[0] );
+		$this->site_name = \EE\Utils\remove_trailing_slash( $args[0] );
 		if ( $this->db::site_in_db( $this->site_name ) ) {
 
 			$db_select = $this->db::select( array( 'cache_type', 'proxy_type', 'site_path' ), array( 'sitename' => $this->site_name ) );
@@ -165,7 +157,7 @@ class Site_Command extends EE_Command {
 		} else {
 			EE::error( "Site $this->site_name does not exist." );
 		}
-		delem_log( 'site delete end' );
+		\EE\Utils\delem_log( 'site delete end' );
 	}
 
 	/**
@@ -201,7 +193,7 @@ class Site_Command extends EE_Command {
 	 */
 	private function cache_checks() {
 		if ( ! file_exists( EE_CONF_ROOT . '/redis' ) ) {
-			copy_recursive( EE_SITE_CONF_ROOT . '/redis', EE_CONF_ROOT . '/redis' );
+			\EE\Utils\copy_recursive( EE_SITE_CONF_ROOT . '/redis', EE_CONF_ROOT . '/redis' );
 		}
 		$this->docker::boot_container( $this->cache_type );
 	}
@@ -231,14 +223,14 @@ class Site_Command extends EE_Command {
 		$docker_compose_content = $this->docker::generate_docker_composer_yml( $filter );
 
 		try {
-			if ( ! ( copy_recursive( $ee_conf, $site_conf_dir )
+			if ( ! ( \EE\Utils\copy_recursive( $ee_conf, $site_conf_dir )
 				&& file_put_contents( $site_docker_yml, $docker_compose_content )
 				&& rename( "$site_conf_dir/.env.example", $site_conf_env ) ) ) {
 				throw new Exception( 'Could not copy configuration files.' );
 			}
 
 			if ( 'wpsubdir' === $this->multi_type ) {
-				copy_recursive( EE_SITE_CONF_ROOT . "/$this->multi_type/config", $site_conf_dir );
+				\EE\Utils\copy_recursive( EE_SITE_CONF_ROOT . "/$this->multi_type/config", $site_conf_dir );
 			}
 
 
@@ -248,7 +240,7 @@ class Site_Command extends EE_Command {
 			$server_name = ( 'wpsubdom' === $this->multi_type ) ? "$this->site_name *.$this->site_name" : $this->site_name;
 			EE::log( 'Updating configuration files...' );
 			EE::success( 'Configuration files updated.' );
-			if ( ! ( file_put_contents( $site_conf_env, str_replace( [ '{V_HOST}', 'password' ], [ $this->site_name, $this->db_pass ], file_get_contents( $site_conf_env ) ) )
+			if ( ! ( file_put_contents( $site_conf_env, str_replace( [ '{V_HOST}', 'password' ], [ $this->site_name, $this->db_pass ], file_get_contents( $site_conf_env ) ) ) 
 				&& ( file_put_contents( $site_nginx_default_conf, str_replace( '{V_HOST}', $server_name, file_get_contents( $site_nginx_default_conf ) ) ) ) ) ) {
 				throw new Exception( 'Could not modify configuration files.' );
 			}
@@ -269,7 +261,7 @@ class Site_Command extends EE_Command {
 		}
 
 		try {
-			if ( ! default_launch( "mkdir $this->site_root" ) ) {
+			if ( ! \EE\Utils\default_launch( "mkdir $this->site_root" ) ) {
 				return false;
 			}
 			$this->level = 1;
@@ -358,7 +350,7 @@ class Site_Command extends EE_Command {
 		}
 
 		if ( is_dir( $this->site_root ) ) {
-			if ( ! default_launch( "sudo rm -rf $this->site_root" ) ) {
+			if ( ! \EE\Utils\default_launch( "sudo rm -rf $this->site_root" ) ) {
 				EE::error( 'Could not remove site root. Please check if you have sufficient rights.' );
 			}
 			EE::log( "[$this->site_name] site root removed." );
@@ -452,7 +444,7 @@ class Site_Command extends EE_Command {
 			$host_line .= "\n" . LOCALHOST_IP . "\tmail.$this->site_name";
 			$host_line .= "\n" . LOCALHOST_IP . "\tpma.$this->site_name";
 
-			if ( default_launch( "sudo /bin/bash -c 'echo \"$host_line\" >> /etc/hosts'" ) ) {
+			if ( \EE\Utils\default_launch( "sudo /bin/bash -c 'echo \"$host_line\" >> /etc/hosts'" ) ) {
 				EE::success( 'Host entry successfully added.' );
 			} else {
 				EE::warning( "Failed to add $this->site_name in host entry, Please do it manually!" );
@@ -519,11 +511,11 @@ class Site_Command extends EE_Command {
 	 * @param Exception $e
 	 */
 	private function catch_clean( $e ) {
-		delem_log( 'site cleanup start' );
+		\EE\Utils\delem_log( 'site cleanup start' );
 		EE::warning( $e->getMessage() );
 		EE::warning( 'Initiating clean-up...' );
 		$this->delete_site();
-		delem_log( 'site cleanup end' );
+		\EE\Utils\delem_log( 'site cleanup end' );
 		exit;
 	}
 
