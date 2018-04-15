@@ -2,7 +2,7 @@
 
 declare( ticks=1 );
 
-use function \EE\Utils\get_flag_value;
+use function \EE\Utils\get_type;
 use function \EE\Utils\copy_recursive;
 use function \EE\Utils\remove_trailing_slash;
 use function \EE\Utils\random_password;
@@ -26,12 +26,11 @@ class Site_Command extends EE_Command {
 	private $site_name;
 	private $site_root;
 	private $site_type;
+	private $multi_type;
 	private $site_title;
 	private $site_user;
 	private $site_pass;
 	private $site_email;
-	private $env;
-	private $site_conf_env;
 	private $proxy_type;
 	private $cache_type;
 	private $db;
@@ -66,7 +65,13 @@ class Site_Command extends EE_Command {
 	 * : WordPress website.
 	 *
 	 * [--wpredis]
-	 * : Use redis for wordpress
+	 * : Use redis for WordPress.
+	 *
+	 * [--wpsubdir]
+	 * : WordPress sub-dir Multi-site.
+	 *
+	 * [--wpsubdom]
+	 * : WordPress sub-domain Multi-site.
 	 *
 	 * [--letsencrypt]
 	 * : Preconfigured letsencrypt supported website.
@@ -88,11 +93,13 @@ class Site_Command extends EE_Command {
 		EE::warning( 'This is a beta version. Please don\'t use it in production.' );
 		$this->logger->debug( 'args:', $args );
 		$this->logger->debug( 'assoc_args:', empty( $assoc_args ) ? array( 'NULL' ) : $assoc_args );
-		$this->site_name = strtolower( remove_trailing_slash( $args[0] ) );
-		$this->site_type = $this->get_site_type( $assoc_args );
+		$this->site_name  = strtolower( remove_trailing_slash( $args[0] ) );
+		$this->site_type  = get_type( $assoc_args, [ 'wp', 'wpredis' ], 'wp' );
+		$this->multi_type = get_type( $assoc_args, [ 'wpsubdom', 'wpsubdir' ] );
 		if ( false === $this->site_type ) {
-			EE::error( "Invalid arguments" );
+			EE::error( 'Invalid arguments' );
 		}
+
 		$this->proxy_type = 'ee4_nginx-proxy';
 		$this->cache_type = ! empty( $assoc_args['wpredis'] ) ? 'ee4_redis' : 'none';
 		$this->site_title = ! empty( $assoc_args['title'] ) ? $assoc_args['title'] : $this->site_name;
@@ -205,10 +212,11 @@ class Site_Command extends EE_Command {
 	 */
 	private function configure_site() {
 
-		$this->site_root     = WEBROOT . $this->site_name;
-		$site_conf_dir       = $this->site_root . '/config';
-		$site_docker_yml     = $this->site_root . '/docker-compose.yml';
-		$this->site_conf_env = $this->site_root . '/.env';
+		$this->site_root         = WEBROOT . $this->site_name;
+		$site_conf_dir           = $this->site_root . '/config';
+		$site_docker_yml         = $this->site_root . '/docker-compose.yml';
+		$site_conf_env           = $this->site_root . '/.env';
+		$site_nginx_default_conf = $site_conf_dir . '/nginx/default.conf';
 
 		$ee_conf = EE_SITE_CONF_ROOT . "/$this->site_type/config";
 
@@ -218,27 +226,30 @@ class Site_Command extends EE_Command {
 		EE::log( "Creating WordPress site $this->site_name..." );
 		EE::log( 'Copying configuration files...' );
 		$filter = array();
-		if ( $this->le ) {
-			$filter[] = 'le';
-		}
+		( ! $this->le ) ?: $filter[] = 'le';
+		( ! $this->multi_type ) ?: $filter[] = $this->multi_type;
 		$docker_compose_content = $this->docker::generate_docker_composer_yml( $filter );
 
 		try {
 			if ( ! ( copy_recursive( $ee_conf, $site_conf_dir )
 				&& file_put_contents( $site_docker_yml, $docker_compose_content )
-				&& rename( "$site_conf_dir/.env.example", $this->site_conf_env ) ) ) {
+				&& rename( "$site_conf_dir/.env.example", $site_conf_env ) ) ) {
 				throw new Exception( 'Could not copy configuration files.' );
 			}
 
-			$this->env = file_get_contents( $this->site_conf_env );
+			if ( 'wpsubdir' === $this->multi_type ) {
+				copy_recursive( EE_SITE_CONF_ROOT . "/$this->multi_type/config", $site_conf_dir );
+			}
+
 
 			EE::success( 'Configuration files copied.' );
 
 			// Updating config file.
+			$server_name = ( 'wpsubdom' === $this->multi_type ) ? "$this->site_name *.$this->site_name" : $this->site_name;
 			EE::log( 'Updating configuration files...' );
-			$this->env = str_replace( [ '{V_HOST}', 'password' ], [ $this->site_name, $this->db_pass ], $this->env );
 			EE::success( 'Configuration files updated.' );
-			if ( ! file_put_contents( $this->site_conf_env, $this->env ) ) {
+			if ( ! ( file_put_contents( $site_conf_env, str_replace( [ '{V_HOST}', 'password' ], [ $this->site_name, $this->db_pass ], file_get_contents( $site_conf_env ) ) )
+				&& ( file_put_contents( $site_nginx_default_conf, str_replace( '{V_HOST}', $server_name, file_get_contents( $site_nginx_default_conf ) ) ) ) ) ) {
 				throw new Exception( 'Could not modify configuration files.' );
 			}
 		}
@@ -458,7 +469,18 @@ class Site_Command extends EE_Command {
 	private function install_wp() {
 		EE::log( "\nInstalling WordPress site..." );
 		chdir( $this->site_root );
-		exec( "docker-compose exec --user='www-data' php wp core install --url='" . $this->site_name . "' --title='" . $this->site_title . "' --admin_user='" . $this->site_user . "'" . ( ! $this->site_pass ? "" : " --admin_password='" . $this->site_pass . "'" ) . " --admin_email='" . $this->site_email . "'", $op );
+		$install_command = "docker-compose exec --user='www-data' php wp core install --url='" . $this->site_name . "' --title='" . $this->site_title . "' --admin_user='" . $this->site_user . "'" . ( ! $this->site_pass ? "" : " --admin_password='" . $this->site_pass . "'" ) . " --admin_email='" . $this->site_email . "'";
+
+		EE::debug( 'COMMAND: ' . $install_command );
+		EE::debug( 'STDOUT: ' . shell_exec( $install_command ) );
+
+		if ( $this->multi_type ) {
+			$type               = $this->multi_type === 'wpsubdom' ? ' --subdomains' : '';
+			$multi_type_command = "docker-compose exec --user='www-data' php wp core multisite-convert" . $type;
+			EE::debug( 'COMMAND: ' . $multi_type_command );
+			EE::debug( 'STDOUT: ' . shell_exec( $multi_type_command ) );
+		}
+
 		EE::success( "http://" . $this->site_name . " has been created successfully!" );
 		EE::log( "Access phpMyAdmin:\tpma.$this->site_name" );
 		EE::log( "Access mail:\tmail.$this->site_name" );
@@ -489,36 +511,6 @@ class Site_Command extends EE_Command {
 			$this->catch_clean( $e );
 		}
 
-	}
-
-
-	/**
-	 * Function to return the type of site.
-	 *
-	 * @param array $assoc_args User input arguments.
-	 *
-	 * @return string Type of site parsed from argument given from user.
-	 */
-	private function get_site_type( $assoc_args ) {
-		$type          = '';
-		$type_of_sites = array(
-			'wp',
-			'wpredis'
-		);
-		$cnt           = 0;
-		foreach ( $type_of_sites as $site ) {
-			if ( get_flag_value( $assoc_args, $site ) ) {
-				$cnt ++;
-				$type = $site;
-			}
-		}
-		if ( $cnt == 1 ) {
-			return $type;
-		} else if ( $cnt == 0 ) {
-			return 'wp';
-		} else {
-			return false;
-		}
 	}
 
 	/**
