@@ -209,8 +209,8 @@ class Site_Command extends EE_Command {
 		$site_docker_yml         = $this->site_root . '/docker-compose.yml';
 		$site_conf_env           = $this->site_root . '/.env';
 		$site_nginx_default_conf = $site_conf_dir . '/nginx/default.conf';
-
-		$ee_conf = EE_SITE_CONF_ROOT . "/$this->site_type/config";
+		$default_conf            = EE_SITE_CONF_ROOT . "/default/config";
+		$ee_conf                 = EE_SITE_CONF_ROOT . "/$this->site_type/config";
 
 		if ( ! $this->create_site_root() ) {
 			EE::error( "Webroot directory for site $this->site_name already exists." );
@@ -223,7 +223,8 @@ class Site_Command extends EE_Command {
 		$docker_compose_content = $this->docker::generate_docker_composer_yml( $filter );
 
 		try {
-			if ( ! ( \EE\Utils\copy_recursive( $ee_conf, $site_conf_dir )
+			if ( ! ( \EE\Utils\copy_recursive( $default_conf, $site_conf_dir )
+				&& ( \EE\Utils\copy_recursive( $ee_conf, $site_conf_dir ) )
 				&& file_put_contents( $site_docker_yml, $docker_compose_content )
 				&& rename( "$site_conf_dir/.env.example", $site_conf_env ) ) ) {
 				throw new Exception( 'Could not copy configuration files.' );
@@ -240,7 +241,7 @@ class Site_Command extends EE_Command {
 			$server_name = ( 'wpsubdom' === $this->multi_type ) ? "$this->site_name *.$this->site_name" : $this->site_name;
 			EE::log( 'Updating configuration files...' );
 			EE::success( 'Configuration files updated.' );
-			if ( ! ( file_put_contents( $site_conf_env, str_replace( [ '{V_HOST}', 'password' ], [ $this->site_name, $this->db_pass ], file_get_contents( $site_conf_env ) ) ) 
+			if ( ! ( file_put_contents( $site_conf_env, str_replace( [ '{V_HOST}', 'password' ], [ $this->site_name, $this->db_pass ], file_get_contents( $site_conf_env ) ) )
 				&& ( file_put_contents( $site_nginx_default_conf, str_replace( '{V_HOST}', $server_name, file_get_contents( $site_nginx_default_conf ) ) ) ) ) ) {
 				throw new Exception( 'Could not modify configuration files.' );
 			}
