@@ -143,21 +143,52 @@ class Site_Command extends EE_Command {
 	 */
 	public function delete( $args ) {
 		\EE\Utils\delem_log( 'site delete start' );
-
-		$this->site_name = \EE\Utils\remove_trailing_slash( $args[0] );
-		if ( $this->db::site_in_db( $this->site_name ) ) {
-
-			$db_select = $this->db::select( array( 'cache_type', 'proxy_type', 'site_path' ), array( 'sitename' => $this->site_name ) );
-
-			$this->proxy_type = $db_select[0]['proxy_type'];
-			$this->cache_type = $db_select[0]['cache_type'];
-			$this->site_root  = $db_select[0]['site_path'];
-			$this->level      = 5;
-			$this->delete_site();
-		} else {
-			EE::error( "Site $this->site_name does not exist." );
-		}
+		$this->populate_site_info( $args );
+		$this->level = 5;
+		$this->delete_site();
 		\EE\Utils\delem_log( 'site delete end' );
+	}
+
+	/**
+	 * Enables a website. It will start the docker containers of the website if they are stopped.
+	 *
+	 * ## OPTIONS
+	 *
+	 * <site-name>
+	 * : Name of website to be enabled.
+	 */
+	public function enable( $args ) {
+		\EE\Utils\delem_log( 'site enable start' );
+		$this->populate_site_info( $args );
+		EE::log( "Enabling site $this->site_name..." );
+		if ( $this->docker::docker_compose_up( $this->site_root ) ) {
+			$this->db::update( [ 'is_enabled' => '1' ], [ 'sitename' => $this->site_name ] );
+			EE::success( "Site $this->site_name enabled." );
+		} else {
+			EE::error( "There was error in enabling $this->site_name. Please check logs." );
+		}
+		\EE\Utils\delem_log( 'site enable end' );
+	}
+
+	/**
+	 * Disables a website. It will stop and remove the docker containers of the website if they are running.
+	 *
+	 * ## OPTIONS
+	 *
+	 * <site-name>
+	 * : Name of website to be disabled.
+	 */
+	public function disable( $args ) {
+		\EE\Utils\delem_log( 'site disable start' );
+		$this->populate_site_info( $args );
+		EE::log( "Disabling site $this->site_name..." );
+		if ( $this->docker::docker_compose_down( $this->site_root ) ) {
+			$this->db::update( [ 'is_enabled' => '0' ], [ 'sitename' => $this->site_name ] );
+			EE::success( "Site $this->site_name disabled." );
+		} else {
+			EE::error( "There was error in disabling $this->site_name. Please check logs." );
+		}
+		\EE\Utils\delem_log( 'site disable end' );
 	}
 
 	/**
@@ -290,7 +321,9 @@ class Site_Command extends EE_Command {
 		$this->setup_site_network();
 		$this->level = 3;
 		try {
-			$this->docker::docker_compose_up( $this->site_root );
+			if ( ! $this->docker::docker_compose_up( $this->site_root ) ) {
+				throw new Exception( 'There was some error in docker-compose up.' );
+			}
 		}
 		catch ( Exception $e ) {
 			$this->catch_clean( $e );
@@ -503,7 +536,26 @@ class Site_Command extends EE_Command {
 		catch ( Exception $e ) {
 			$this->catch_clean( $e );
 		}
+	}
 
+	/**
+	 * Populate basic site info from db.
+	 */
+	private function populate_site_info( $args ) {
+
+		$this->site_name = \EE\Utils\remove_trailing_slash( $args[0] );
+
+		if ( $this->db::site_in_db( $this->site_name ) ) {
+
+			$db_select = $this->db::select( array( 'cache_type', 'proxy_type', 'site_path' ), array( 'sitename' => $this->site_name ) );
+
+			$this->proxy_type = $db_select[0]['proxy_type'];
+			$this->cache_type = $db_select[0]['cache_type'];
+			$this->site_root  = $db_select[0]['site_path'];
+
+		} else {
+			EE::error( "Site $this->site_name does not exist." );
+		}
 	}
 
 	/**
