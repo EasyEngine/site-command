@@ -18,7 +18,6 @@ class Site_Command extends EE_Command {
 	private $site_name;
 	private $site_root;
 	private $site_type;
-	private $multi_type;
 	private $site_title;
 	private $site_user;
 	private $site_pass;
@@ -85,9 +84,8 @@ class Site_Command extends EE_Command {
 		EE::warning( 'This is a beta version. Please don\'t use it in production.' );
 		$this->logger->debug( 'args:', $args );
 		$this->logger->debug( 'assoc_args:', empty( $assoc_args ) ? array( 'NULL' ) : $assoc_args );
-		$this->site_name  = strtolower( \EE\Utils\remove_trailing_slash( $args[0] ) );
-		$this->site_type  = \EE\Utils\get_type( $assoc_args, [ 'wp', 'wpredis' ], 'wp' );
-		$this->multi_type = \EE\Utils\get_type( $assoc_args, [ 'wpsubdom', 'wpsubdir' ] );
+		$this->site_name = strtolower( \EE\Utils\remove_trailing_slash( $args[0] ) );
+		$this->site_type = \EE\Utils\get_type( $assoc_args, [ 'wp', 'wpsubdom', 'wpsubdir' ], 'wp' );
 		if ( false === $this->site_type ) {
 			EE::error( 'Invalid arguments' );
 		}
@@ -241,7 +239,6 @@ class Site_Command extends EE_Command {
 		$site_conf_env           = $this->site_root . '/.env';
 		$site_nginx_default_conf = $site_conf_dir . '/nginx/default.conf';
 		$default_conf            = EE_SITE_CONF_ROOT . "/default/config";
-		$ee_conf                 = EE_SITE_CONF_ROOT . "/$this->site_type/config";
 
 		if ( ! $this->create_site_root() ) {
 			EE::error( "Webroot directory for site $this->site_name already exists." );
@@ -250,26 +247,27 @@ class Site_Command extends EE_Command {
 		EE::log( 'Copying configuration files...' );
 		$filter = array();
 		( ! $this->le ) ?: $filter[] = 'le';
-		( ! $this->multi_type ) ?: $filter[] = $this->multi_type;
+		$filter[]               = $this->site_type;
 		$docker_compose_content = $this->docker::generate_docker_composer_yml( $filter );
 
 		try {
 			if ( ! ( \EE\Utils\copy_recursive( $default_conf, $site_conf_dir )
-				&& ( \EE\Utils\copy_recursive( $ee_conf, $site_conf_dir ) )
 				&& file_put_contents( $site_docker_yml, $docker_compose_content )
 				&& rename( "$site_conf_dir/.env.example", $site_conf_env ) ) ) {
 				throw new Exception( 'Could not copy configuration files.' );
 			}
-
-			if ( 'wpsubdir' === $this->multi_type ) {
-				\EE\Utils\copy_recursive( EE_SITE_CONF_ROOT . "/$this->multi_type/config", $site_conf_dir );
+			if ( 'wpsubdir' !== $this->site_type ) {
+				$ee_conf = ( 'ee4_redis' === $this->cache_type ) ? 'wpredis' : 'wp';
+			} else {
+				$ee_conf = ( 'ee4_redis' === $this->cache_type ) ? 'wpredis-subdir' : 'wpsubdir';
 			}
 
+			\EE\Utils\copy_recursive( EE_SITE_CONF_ROOT . "/$ee_conf/config", $site_conf_dir );
 
 			EE::success( 'Configuration files copied.' );
 
 			// Updating config file.
-			$server_name = ( 'wpsubdom' === $this->multi_type ) ? "$this->site_name *.$this->site_name" : $this->site_name;
+			$server_name = ( 'wpsubdom' === $this->site_type ) ? "$this->site_name *.$this->site_name" : $this->site_name;
 			EE::log( 'Updating configuration files...' );
 			EE::success( 'Configuration files updated.' );
 			if ( ! ( file_put_contents( $site_conf_env, str_replace( [ '{V_HOST}', 'password' ], [ $this->site_name, $this->db_pass ], file_get_contents( $site_conf_env ) ) )
@@ -500,8 +498,8 @@ class Site_Command extends EE_Command {
 		EE::debug( 'COMMAND: ' . $install_command );
 		EE::debug( 'STDOUT: ' . shell_exec( $install_command ) );
 
-		if ( $this->multi_type ) {
-			$type               = $this->multi_type === 'wpsubdom' ? ' --subdomains' : '';
+		if ( 'wpsubdom' === $this->site_type || 'wpsubdir' === $this->site_type ) {
+			$type               = $this->site_type === 'wpsubdom' ? ' --subdomains' : '';
 			$multi_type_command = "docker-compose exec --user='www-data' php wp core multisite-convert" . $type;
 			EE::debug( 'COMMAND: ' . $multi_type_command );
 			EE::debug( 'STDOUT: ' . shell_exec( $multi_type_command ) );
