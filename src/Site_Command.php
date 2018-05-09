@@ -92,11 +92,11 @@ class Site_Command extends EE_Command {
 
 		$this->proxy_type = 'ee4_nginx-proxy';
 		$this->cache_type = ! empty( $assoc_args['wpredis'] ) ? 'ee4_redis' : 'none';
-		$this->site_title = ! empty( $assoc_args['title'] ) ? $assoc_args['title'] : $this->site_name;
-		$this->site_user  = ! empty( $assoc_args['user'] ) ? $assoc_args['user'] : 'admin';
-		$this->site_pass  = ! empty( $assoc_args['pass'] ) ? $assoc_args['pass'] : \EE\Utils\random_password();
+		$this->site_title = \EE\Utils\get_flag_value( $assoc_args, 'title', $this->site_name );
+		$this->site_user  = \EE\Utils\get_flag_value( $assoc_args, 'user', 'admin' );
+		$this->site_pass  = \EE\Utils\get_flag_value( $assoc_args, 'pass', \EE\Utils\random_password() );
 		$this->db_pass    = \EE\Utils\random_password();
-		$this->site_email = ! empty( $assoc_args['email'] ) ? $assoc_args['email'] : strtolower( 'mail@' . $this->site_name );
+		$this->site_email = \EE\Utils\get_flag_value( $assoc_args, 'email', strtolower( 'mail@' . $this->site_name ) );
 		$this->le         = ! empty( $assoc_args['letsencrypt'] ) ? true : false;
 
 		$this->init_checks();
@@ -187,6 +187,31 @@ class Site_Command extends EE_Command {
 			EE::error( "There was error in disabling $this->site_name. Please check logs." );
 		}
 		\EE\Utils\delem_log( 'site disable end' );
+	}
+
+	/**
+	 * Display all the relevant site information, credentials and useful links.
+	 */
+	public function info( $args = '' ) {
+		\EE\Utils\delem_log( 'site info start' );
+
+		if ( ! isset( $this->site_name ) ) {
+			$this->populate_site_info( $args );
+		}
+		EE::log( "Details for site $this->site_name:" );
+		$info = array(
+			array( 'Access phpMyAdmin', "http://pma.$this->site_name" ),
+			array( 'Access mail', "http://mail.$this->site_name" ),
+			array( 'Site Title', $this->site_title ),
+			array( 'WordPress Username', $this->site_user ),
+			array( 'WordPress Password', $this->site_pass ),
+			array( 'DB Password', $this->db_pass ),
+			array( 'E-Mail', $this->site_email ),
+			array( 'Cache Type', $this->cache_type ),
+		);
+		\EE\Utils\format_table( $info );
+
+		\EE\Utils\delem_log( 'site info end' );
 	}
 
 	/**
@@ -506,10 +531,7 @@ class Site_Command extends EE_Command {
 		}
 
 		EE::success( "http://" . $this->site_name . " has been created successfully!" );
-		EE::log( "Access phpMyAdmin:\tpma.$this->site_name" );
-		EE::log( "Access mail:\tmail.$this->site_name" );
-		EE::log( "Site Title :\t" . $this->site_title . "\nUsername :\t" . $this->site_user . "\nPassword :\t" . $this->site_pass . "\nDB Password :\t" . $this->db_pass );
-		EE::log( "E-Mail :\t" . $this->site_email );
+		$this->info();
 	}
 
 	/**
@@ -518,12 +540,19 @@ class Site_Command extends EE_Command {
 	private function create_site_db_entry() {
 
 		$data = array(
-			'sitename'   => $this->site_name,
-			'site_type'  => $this->site_type,
-			'proxy_type' => $this->proxy_type,
-			'cache_type' => $this->cache_type,
-			'site_path'  => $this->site_root,
+			'sitename'    => $this->site_name,
+			'site_type'   => $this->site_type,
+			'site_title'  => $this->site_title,
+			'proxy_type'  => $this->proxy_type,
+			'cache_type'  => $this->cache_type,
+			'site_path'   => $this->site_root,
+			'db_password' => $this->db_pass,
+			'wp_user'     => $this->site_user,
+			'wp_pass'     => $this->site_pass,
+			'email'       => $this->site_email,
+			'created_on'  => date( 'Y-m-d H:i:s', time() ),
 		);
+
 		try {
 			if ( $this->db::insert( $data ) ) {
 				EE::log( 'Site entry created.' );
@@ -545,11 +574,19 @@ class Site_Command extends EE_Command {
 
 		if ( $this->db::site_in_db( $this->site_name ) ) {
 
-			$db_select = $this->db::select( array( 'cache_type', 'proxy_type', 'site_path' ), array( 'sitename' => $this->site_name ) );
+			$data = array( 'site_type', 'site_title', 'proxy_type', 'cache_type', 'site_path', 'db_password', 'wp_user', 'wp_pass', 'email' );
 
+			$db_select = $this->db::select( $data, array( 'sitename' => $this->site_name ) );
+
+			$this->site_type  = $db_select[0]['site_type'];
+			$this->site_title = $db_select[0]['site_title'];
 			$this->proxy_type = $db_select[0]['proxy_type'];
 			$this->cache_type = $db_select[0]['cache_type'];
 			$this->site_root  = $db_select[0]['site_path'];
+			$this->db_pass    = $db_select[0]['db_password'];
+			$this->site_user  = $db_select[0]['wp_user'];
+			$this->site_pass  = $db_select[0]['wp_pass'];
+			$this->site_email = $db_select[0]['email'];
 
 		} else {
 			EE::error( "Site $this->site_name does not exist." );
