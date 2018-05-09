@@ -114,21 +114,59 @@ class Site_Command extends EE_Command {
 	/**
 	 * Lists the created websites.
 	 *
+	 * [--enabled]
+	 * : List only enabled sites.
+	 *
+	 * [--disabled]
+	 * : List only disabled sites.
+	 *
 	 * @subcommand list
 	 */
-	public function _list() {
+	public function _list( $args, $assoc_args ) {
 		\EE\Utils\delem_log( 'site list start' );
-		$sites = $this->db::select( array( 'sitename' ) );
+
+		$enabled  = \EE\Utils\get_flag_value( $assoc_args, 'enabled' );
+		$disabled = \EE\Utils\get_flag_value( $assoc_args, 'disabled' );
+
+		$sites = $this->db::select( array( 'sitename', 'is_enabled' ) );
+
 		if ( $sites ) {
-			EE::log( "List of Sites:\n" );
-			foreach ( $sites as $site ) {
-				EE::log( " - " . $site['sitename'] );
+			if ( $enabled || $disabled ) {
+				if ( $enabled ) {
+					$this->list_print( $sites, 'enabled', 1 );
+				}
+				if ( $disabled ) {
+					$this->list_print( $sites, 'disabled', 0 );
+				}
+			} else {
+				$this->list_print( $sites, 'all', 2 );
 			}
-			EE::log( '' );
 		} else {
 			EE::log( 'No sites found. Go create some!' );
 		}
 		\EE\Utils\delem_log( 'site list end' );
+	}
+
+	/**
+	 * Print the list of sites according to parameters.
+	 *
+	 * @param array  $sites List of sites.
+	 * @param String $type  Type of site to be listed - enabled/disabled/all.
+	 * @param int    $check Enabled - 1, Disabled - 0, Both - 2.
+	 */
+	private function list_print( $sites, $type, $check ) {
+		$count = 0;
+		EE::log( "List of $type Sites:\n" );
+		foreach ( $sites as $site ) {
+			if ( 2 === $check || $check === $site['is_enabled'] ) {
+				EE::log( ' - ' . $site['sitename'] );
+				$count ++;
+			}
+		}
+		if ( 0 === $count ) {
+			EE::log( "No $type sites found!" );
+		}
+		EE::log( '' );
 	}
 
 	/**
