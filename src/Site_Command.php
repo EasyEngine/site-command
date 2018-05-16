@@ -191,6 +191,9 @@ class Site_Command extends EE_Command {
 
 	/**
 	 * Display all the relevant site information, credentials and useful links.
+	 *
+	 * <site-name>
+	 * : Name of the website whose info is required.
 	 */
 	public function info( $args = '' ) {
 		\EE\Utils\delem_log( 'site info start' );
