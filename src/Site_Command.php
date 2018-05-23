@@ -30,6 +30,7 @@ class Site_Command extends EE_Command {
 	private $logger;
 	private $le;
 	private $db_pass;
+	private $skip_install;
 
 	public function __construct() {
 		$this->level = 0;
@@ -78,6 +79,9 @@ class Site_Command extends EE_Command {
 	 *
 	 * [--email=<email>]
 	 * : E-Mail of the administrator.
+	 *
+	 * [--skip-install]
+	 * : Skips wp-core install.
 	 */
 	public function create( $args, $assoc_args ) {
 		\EE\Utils\delem_log( 'site create start' );
@@ -90,14 +94,15 @@ class Site_Command extends EE_Command {
 			EE::error( 'Invalid arguments' );
 		}
 
-		$this->proxy_type = 'ee4_nginx-proxy';
-		$this->cache_type = ! empty( $assoc_args['wpredis'] ) ? 'ee4_redis' : 'none';
-		$this->site_title = \EE\Utils\get_flag_value( $assoc_args, 'title', $this->site_name );
-		$this->site_user  = \EE\Utils\get_flag_value( $assoc_args, 'user', 'admin' );
-		$this->site_pass  = \EE\Utils\get_flag_value( $assoc_args, 'pass', \EE\Utils\random_password() );
-		$this->db_pass    = \EE\Utils\random_password();
-		$this->site_email = \EE\Utils\get_flag_value( $assoc_args, 'email', strtolower( 'mail@' . $this->site_name ) );
-		$this->le         = ! empty( $assoc_args['letsencrypt'] ) ? 'letsencrypt' : false;
+		$this->proxy_type   = 'ee4_nginx-proxy';
+		$this->cache_type   = ! empty( $assoc_args['wpredis'] ) ? 'ee4_redis' : 'none';
+		$this->site_title   = \EE\Utils\get_flag_value( $assoc_args, 'title', $this->site_name );
+		$this->site_user    = \EE\Utils\get_flag_value( $assoc_args, 'user', 'admin' );
+		$this->site_pass    = \EE\Utils\get_flag_value( $assoc_args, 'pass', \EE\Utils\random_password() );
+		$this->db_pass      = \EE\Utils\random_password();
+		$this->site_email   = \EE\Utils\get_flag_value( $assoc_args, 'email', strtolower( 'mail@' . $this->site_name ) );
+		$this->le           = ! empty( $assoc_args['letsencrypt'] ) ? 'letsencrypt' : false;
+		$this->skip_install = \EE\Utils\get_flag_value( $assoc_args, 'skip-install' );
 
 		$this->init_checks();
 		if ( 'none' !== $this->cache_type ) {
@@ -396,8 +401,10 @@ class Site_Command extends EE_Command {
 			$this->catch_clean( $e );
 		}
 		$this->create_etc_hosts_entry();
-		$this->site_status_check();
-		$this->install_wp();
+		if ( ! $this->skip_install ) {
+			$this->site_status_check();
+			$this->install_wp();
+		}
 		$this->create_site_db_entry();
 	}
 
