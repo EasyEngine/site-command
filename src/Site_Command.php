@@ -97,7 +97,7 @@ class Site_Command extends EE_Command {
 		$this->site_pass  = \EE\Utils\get_flag_value( $assoc_args, 'pass', \EE\Utils\random_password() );
 		$this->db_pass    = \EE\Utils\random_password();
 		$this->site_email = \EE\Utils\get_flag_value( $assoc_args, 'email', strtolower( 'mail@' . $this->site_name ) );
-		$this->le         = ! empty( $assoc_args['letsencrypt'] ) ? true : false;
+		$this->le         = ! empty( $assoc_args['letsencrypt'] ) ? 'letsencrypt' : false;
 
 		$this->init_checks();
 		if ( 'none' !== $this->cache_type ) {
@@ -278,6 +278,9 @@ class Site_Command extends EE_Command {
 					EE::error( "There was some error in starting $this->proxy_type container. Please check logs." );
 				}
 			}
+		}
+		if ( $this->le ) {
+			$this->docker::boot_container( $this->le );
 		}
 	}
 
@@ -571,7 +574,8 @@ class Site_Command extends EE_Command {
 			EE::debug( 'STDOUT: ' . shell_exec( $multi_type_command ) );
 		}
 
-		EE::success( "http://" . $this->site_name . " has been created successfully!" );
+		$prefix = ( $this->le ) ? 'https://' : 'http://';
+		EE::success( $prefix . $this->site_name . " has been created successfully!" );
 		$this->info();
 	}
 
@@ -579,8 +583,8 @@ class Site_Command extends EE_Command {
 	 * Function to save the site configuration entry into database.
 	 */
 	private function create_site_db_entry() {
-
-		$data = array(
+		$is_ssl = ( $this->le ) ? 1 : 0;
+		$data   = array(
 			'sitename'    => $this->site_name,
 			'site_type'   => $this->site_type,
 			'site_title'  => $this->site_title,
@@ -591,6 +595,7 @@ class Site_Command extends EE_Command {
 			'wp_user'     => $this->site_user,
 			'wp_pass'     => $this->site_pass,
 			'email'       => $this->site_email,
+			'is_ssl'      => $is_ssl,
 			'created_on'  => date( 'Y-m-d H:i:s', time() ),
 		);
 
@@ -615,7 +620,7 @@ class Site_Command extends EE_Command {
 
 		if ( $this->db::site_in_db( $this->site_name ) ) {
 
-			$data = array( 'site_type', 'site_title', 'proxy_type', 'cache_type', 'site_path', 'db_password', 'wp_user', 'wp_pass', 'email' );
+			$data = array( 'site_type', 'site_title', 'proxy_type', 'cache_type', 'site_path', 'db_password', 'wp_user', 'wp_pass', 'email', 'is_ssl' );
 
 			$db_select = $this->db::select( $data, array( 'sitename' => $this->site_name ) );
 
@@ -628,6 +633,7 @@ class Site_Command extends EE_Command {
 			$this->site_user  = $db_select[0]['wp_user'];
 			$this->site_pass  = $db_select[0]['wp_pass'];
 			$this->site_email = $db_select[0]['email'];
+			$this->le         = ( $db_select[0]['is_ssl'] ) ? 'letsencrypt' : false;
 
 		} else {
 			EE::error( "Site $this->site_name does not exist." );
