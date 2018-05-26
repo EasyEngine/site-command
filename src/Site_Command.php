@@ -249,12 +249,17 @@ class Site_Command extends EE_Command {
 			array( 'Access phpMyAdmin', "http://pma.$this->site_name" ),
 			array( 'Access mail', "http://mail.$this->site_name" ),
 			array( 'Site Title', $this->site_title ),
-			array( 'WordPress Username', $this->site_user ),
-			array( 'WordPress Password', $this->site_pass ),
 			array( 'DB Password', $this->db_pass ),
 			array( 'E-Mail', $this->site_email ),
 			array( 'Cache Type', $this->cache_type ),
+			array( 'ssl', ( $this->le ) ? 'enabled' : 'no ssl' ),
 		);
+
+		if ( ! empty( $this->site_user ) && ! $this->skip_install ) {
+			$info[] = array( 'WordPress Username', $this->site_user );
+			$info[] = array( 'WordPress Password', $this->site_pass );
+		}
+
 		\EE\Utils\format_table( $info );
 
 		\EE\Utils\delem_log( 'site info end' );
@@ -405,6 +410,7 @@ class Site_Command extends EE_Command {
 			$this->site_status_check();
 			$this->install_wp();
 		}
+		$this->info();
 		$this->create_site_db_entry();
 	}
 
@@ -436,6 +442,14 @@ class Site_Command extends EE_Command {
 					EE::log( "[$this->site_name] Disconnected from Docker network $this->cache_type" );
 				} else {
 					EE::warning( "Error in disconnecting from Docker network $this->cache_type" );
+				}
+			}
+
+			if ( $this->le ) {
+				if ( $this->docker::disconnect_network( $this->site_name, $this->le ) ) {
+					EE::log( "[$this->site_name] Disconnected from Docker network $this->le" );
+				} else {
+					EE::warning( "Error in disconnecting from Docker network $this->le" );
 				}
 			}
 
@@ -583,7 +597,6 @@ class Site_Command extends EE_Command {
 
 		$prefix = ( $this->le ) ? 'https://' : 'http://';
 		EE::success( $prefix . $this->site_name . " has been created successfully!" );
-		$this->info();
 	}
 
 	/**
@@ -599,12 +612,15 @@ class Site_Command extends EE_Command {
 			'cache_type'  => $this->cache_type,
 			'site_path'   => $this->site_root,
 			'db_password' => $this->db_pass,
-			'wp_user'     => $this->site_user,
-			'wp_pass'     => $this->site_pass,
 			'email'       => $this->site_email,
 			'is_ssl'      => $is_ssl,
 			'created_on'  => date( 'Y-m-d H:i:s', time() ),
 		);
+
+		if ( ! $this->skip_install ) {
+			$data['wp_user'] = $this->site_user;
+			$data['wp_pass'] = $this->site_pass;
+		}
 
 		try {
 			if ( $this->db::insert( $data ) ) {
