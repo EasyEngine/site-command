@@ -30,6 +30,7 @@ class Site_Command extends EE_Command {
 	private $logger;
 	private $le;
 	private $db_pass;
+	private $skip_install;
 
 	public function __construct() {
 		$this->level = 0;
@@ -64,9 +65,6 @@ class Site_Command extends EE_Command {
 	 * [--wpsubdom]
 	 * : WordPress sub-domain Multi-site.
 	 *
-	 * [--letsencrypt]
-	 * : Preconfigured letsencrypt supported website.
-	 *
 	 * [--title=<title>]
 	 * : Title of your site.
 	 *
@@ -78,6 +76,9 @@ class Site_Command extends EE_Command {
 	 *
 	 * [--email=<email>]
 	 * : E-Mail of the administrator.
+	 *
+	 * [--skip-install]
+	 * : Skips wp-core install.
 	 */
 	public function create( $args, $assoc_args ) {
 		\EE\Utils\delem_log( 'site create start' );
@@ -90,14 +91,14 @@ class Site_Command extends EE_Command {
 			EE::error( 'Invalid arguments' );
 		}
 
-		$this->proxy_type = 'ee4_nginx-proxy';
-		$this->cache_type = ! empty( $assoc_args['wpredis'] ) ? 'ee4_redis' : 'none';
-		$this->site_title = \EE\Utils\get_flag_value( $assoc_args, 'title', $this->site_name );
-		$this->site_user  = \EE\Utils\get_flag_value( $assoc_args, 'user', 'admin' );
-		$this->site_pass  = \EE\Utils\get_flag_value( $assoc_args, 'pass', \EE\Utils\random_password() );
-		$this->db_pass    = \EE\Utils\random_password();
-		$this->site_email = \EE\Utils\get_flag_value( $assoc_args, 'email', strtolower( 'mail@' . $this->site_name ) );
-		$this->le         = ! empty( $assoc_args['letsencrypt'] ) ? true : false;
+		$this->proxy_type   = 'ee4_nginx-proxy';
+		$this->cache_type   = ! empty( $assoc_args['wpredis'] ) ? 'ee4_redis' : 'none';
+		$this->site_title   = \EE\Utils\get_flag_value( $assoc_args, 'title', $this->site_name );
+		$this->site_user    = \EE\Utils\get_flag_value( $assoc_args, 'user', 'admin' );
+		$this->site_pass    = \EE\Utils\get_flag_value( $assoc_args, 'pass', \EE\Utils\random_password() );
+		$this->db_pass      = \EE\Utils\random_password();
+		$this->site_email   = \EE\Utils\get_flag_value( $assoc_args, 'email', strtolower( 'mail@' . $this->site_name ) );
+		$this->skip_install = \EE\Utils\get_flag_value( $assoc_args, 'skip-install' );
 
 		$this->init_checks();
 		if ( 'none' !== $this->cache_type ) {
@@ -244,12 +245,16 @@ class Site_Command extends EE_Command {
 			array( 'Access phpMyAdmin', "http://pma.$this->site_name" ),
 			array( 'Access mail', "http://mail.$this->site_name" ),
 			array( 'Site Title', $this->site_title ),
-			array( 'WordPress Username', $this->site_user ),
-			array( 'WordPress Password', $this->site_pass ),
 			array( 'DB Password', $this->db_pass ),
 			array( 'E-Mail', $this->site_email ),
 			array( 'Cache Type', $this->cache_type ),
 		);
+
+		if ( ! empty( $this->site_user ) && ! $this->skip_install ) {
+			$info[] = array( 'WordPress Username', $this->site_user );
+			$info[] = array( 'WordPress Password', $this->site_pass );
+		}
+
 		\EE\Utils\format_table( $info );
 
 		\EE\Utils\delem_log( 'site info end' );
@@ -312,7 +317,6 @@ class Site_Command extends EE_Command {
 		EE::log( "Creating WordPress site $this->site_name..." );
 		EE::log( 'Copying configuration files...' );
 		$filter = array();
-		( ! $this->le ) ?: $filter[] = 'le';
 		$filter[]               = $this->site_type;
 		$docker_compose_content = $this->docker::generate_docker_composer_yml( $filter );
 
@@ -393,8 +397,11 @@ class Site_Command extends EE_Command {
 			$this->catch_clean( $e );
 		}
 		$this->create_etc_hosts_entry();
-		$this->site_status_check();
-		$this->install_wp();
+		if ( ! $this->skip_install ) {
+			$this->site_status_check();
+			$this->install_wp();
+		}
+		$this->info();
 		$this->create_site_db_entry();
 	}
 
@@ -571,16 +578,15 @@ class Site_Command extends EE_Command {
 			EE::debug( 'STDOUT: ' . shell_exec( $multi_type_command ) );
 		}
 
-		EE::success( "http://" . $this->site_name . " has been created successfully!" );
-		$this->info();
+		$prefix = 'http://';
+		EE::success( $prefix . $this->site_name . " has been created successfully!" );
 	}
 
 	/**
 	 * Function to save the site configuration entry into database.
 	 */
 	private function create_site_db_entry() {
-
-		$data = array(
+		$data   = array(
 			'sitename'    => $this->site_name,
 			'site_type'   => $this->site_type,
 			'site_title'  => $this->site_title,
@@ -588,11 +594,14 @@ class Site_Command extends EE_Command {
 			'cache_type'  => $this->cache_type,
 			'site_path'   => $this->site_root,
 			'db_password' => $this->db_pass,
-			'wp_user'     => $this->site_user,
-			'wp_pass'     => $this->site_pass,
 			'email'       => $this->site_email,
 			'created_on'  => date( 'Y-m-d H:i:s', time() ),
 		);
+
+		if ( ! $this->skip_install ) {
+			$data['wp_user'] = $this->site_user;
+			$data['wp_pass'] = $this->site_pass;
+		}
 
 		try {
 			if ( $this->db::insert( $data ) ) {
