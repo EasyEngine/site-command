@@ -92,7 +92,7 @@ class Site_Command extends EE_Command {
 		}
 
 		$this->proxy_type   = 'ee4_nginx-proxy';
-		$this->cache_type   = ! empty( $assoc_args['wpredis'] ) ? 'ee4_redis' : 'none';
+		$this->cache_type   = ! empty( $assoc_args['wpredis'] ) ? 'wpredis' : 'none';
 		$this->site_title   = \EE\Utils\get_flag_value( $assoc_args, 'title', $this->site_name );
 		$this->site_user    = \EE\Utils\get_flag_value( $assoc_args, 'user', 'admin' );
 		$this->site_pass    = \EE\Utils\get_flag_value( $assoc_args, 'pass', \EE\Utils\random_password() );
@@ -101,9 +101,6 @@ class Site_Command extends EE_Command {
 		$this->skip_install = \EE\Utils\get_flag_value( $assoc_args, 'skip-install' );
 
 		$this->init_checks();
-		if ( 'none' !== $this->cache_type ) {
-			$this->cache_checks();
-		}
 
 		EE::log( 'Configuring project...' );
 
@@ -287,19 +284,6 @@ class Site_Command extends EE_Command {
 	}
 
 	/**
-	 * Function to check if the cache server is running.
-	 *
-	 * Boots up the container if it is stopped or not running.
-	 */
-	private function cache_checks() {
-		if ( ! file_exists( EE_CONF_ROOT . '/redis' ) ) {
-			\EE\Utils\copy_recursive( EE_SITE_CONF_ROOT . '/redis', EE_CONF_ROOT . '/redis' );
-		}
-		$this->docker::boot_container( $this->cache_type );
-	}
-
-
-	/**
 	 * Function to configure site and copy all the required files.
 	 */
 	private function configure_site() {
@@ -318,6 +302,7 @@ class Site_Command extends EE_Command {
 		EE::log( 'Copying configuration files...' );
 		$filter = array();
 		$filter[]               = $this->site_type;
+		$filter[]               = $this->cache_type;
 		$docker_compose_content = $this->docker::generate_docker_composer_yml( $filter );
 
 		try {
@@ -327,9 +312,9 @@ class Site_Command extends EE_Command {
 				throw new Exception( 'Could not copy configuration files.' );
 			}
 			if ( 'wpsubdir' !== $this->site_type ) {
-				$ee_conf = ( 'ee4_redis' === $this->cache_type ) ? 'wpredis' : 'wp';
+				$ee_conf = ( 'wpredis' === $this->cache_type ) ? 'wpredis' : 'wp';
 			} else {
-				$ee_conf = ( 'ee4_redis' === $this->cache_type ) ? 'wpredis-subdir' : 'wpsubdir';
+				$ee_conf = ( 'wpredis' === $this->cache_type ) ? 'wpredis-subdir' : 'wpsubdir';
 			}
 
 			\EE\Utils\copy_recursive( EE_SITE_CONF_ROOT . "/$ee_conf/config", $site_conf_dir );
@@ -428,28 +413,15 @@ class Site_Command extends EE_Command {
 				}
 			}
 
-			if ( 'none' !== $this->cache_type ) {
-				if ( $this->docker::disconnect_network( $this->site_name, $this->cache_type ) ) {
-					EE::log( "[$this->site_name] Disconnected from Docker network $this->cache_type" );
-				} else {
-					EE::warning( "Error in disconnecting from Docker network $this->cache_type" );
-				}
-			}
-
-			if ( $this->docker::disconnect_network( $this->site_name, $this->proxy_type ) ) {
-				EE::log( "[$this->site_name] Disconnected from Docker network $this->proxy_type" );
-			} else {
-				EE::warning( "Error in disconnecting from Docker network $this->proxy_type" );
-			}
-
+			$this->docker::disconnect_site_network_from( $this->site_name, $this->proxy_type );
 		}
 
 		if ( $this->level >= 2 ) {
 			if ( $this->docker::rm_network( $this->site_name ) ) {
-				EE::log( "[$this->site_name] Docker network $this->proxy_type removed." );
+				EE::log( "[$this->site_name] Docker container removed from network $this->proxy_type." );
 			} else {
 				if ( $this->level > 2 ) {
-					EE::warning( "Error in removing Docker network $this->proxy_type" );
+					EE::warning( "Error in removing Docker container from network $this->proxy_type" );
 				}
 			}
 		}
@@ -506,7 +478,7 @@ class Site_Command extends EE_Command {
 	}
 
 	/**
-	 * Function to setup site networking and connect given proxy.
+	 * Function to setup site network.
 	 */
 	private function setup_site_network() {
 
@@ -520,18 +492,7 @@ class Site_Command extends EE_Command {
 			}
 			$this->level = 3;
 
-			if ( $this->docker::connect_network( $this->site_name, $this->proxy_type ) ) {
-				EE::success( "Site connected to $this->proxy_type." );
-			} else {
-				throw new Exception( "There was some error connecting to $this->proxy_type." );
-			}
-			if ( 'none' !== $this->cache_type ) {
-				if ( $this->docker::connect_network( $this->site_name, $this->cache_type ) ) {
-					EE::success( "Site connected to $this->cache_type." );
-				} else {
-					throw new Exception( "There was some error connecting to $this->cache_type." );
-				}
-			}
+			$this->docker::connect_site_network_to( $this->site_name, $this->proxy_type );
 		}
 		catch ( Exception $e ) {
 			$this->catch_clean( $e );
