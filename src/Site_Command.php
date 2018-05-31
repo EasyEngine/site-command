@@ -65,9 +65,6 @@ class Site_Command extends EE_Command {
 	 * [--wpsubdom]
 	 * : WordPress sub-domain Multi-site.
 	 *
-	 * [--letsencrypt]
-	 * : Preconfigured letsencrypt supported website.
-	 *
 	 * [--title=<title>]
 	 * : Title of your site.
 	 *
@@ -101,7 +98,6 @@ class Site_Command extends EE_Command {
 		$this->site_pass    = \EE\Utils\get_flag_value( $assoc_args, 'pass', \EE\Utils\random_password() );
 		$this->db_pass      = \EE\Utils\random_password();
 		$this->site_email   = \EE\Utils\get_flag_value( $assoc_args, 'email', strtolower( 'mail@' . $this->site_name ) );
-		$this->le           = ! empty( $assoc_args['letsencrypt'] ) ? 'letsencrypt' : false;
 		$this->skip_install = \EE\Utils\get_flag_value( $assoc_args, 'skip-install' );
 
 		$this->init_checks();
@@ -252,7 +248,6 @@ class Site_Command extends EE_Command {
 			array( 'DB Password', $this->db_pass ),
 			array( 'E-Mail', $this->site_email ),
 			array( 'Cache Type', $this->cache_type ),
-			array( 'ssl', ( $this->le ) ? 'enabled' : 'no ssl' ),
 		);
 
 		if ( ! empty( $this->site_user ) && ! $this->skip_install ) {
@@ -289,9 +284,6 @@ class Site_Command extends EE_Command {
 				}
 			}
 		}
-		if ( $this->le ) {
-			$this->docker::boot_container( $this->le );
-		}
 	}
 
 	/**
@@ -325,7 +317,6 @@ class Site_Command extends EE_Command {
 		EE::log( "Creating WordPress site $this->site_name..." );
 		EE::log( 'Copying configuration files...' );
 		$filter = array();
-		( ! $this->le ) ?: $filter[] = 'le';
 		$filter[]               = $this->site_type;
 		$docker_compose_content = $this->docker::generate_docker_composer_yml( $filter );
 
@@ -442,14 +433,6 @@ class Site_Command extends EE_Command {
 					EE::log( "[$this->site_name] Disconnected from Docker network $this->cache_type" );
 				} else {
 					EE::warning( "Error in disconnecting from Docker network $this->cache_type" );
-				}
-			}
-
-			if ( $this->le ) {
-				if ( $this->docker::disconnect_network( $this->site_name, $this->le ) ) {
-					EE::log( "[$this->site_name] Disconnected from Docker network $this->le" );
-				} else {
-					EE::warning( "Error in disconnecting from Docker network $this->le" );
 				}
 			}
 
@@ -595,7 +578,7 @@ class Site_Command extends EE_Command {
 			EE::debug( 'STDOUT: ' . shell_exec( $multi_type_command ) );
 		}
 
-		$prefix = ( $this->le ) ? 'https://' : 'http://';
+		$prefix = 'http://';
 		EE::success( $prefix . $this->site_name . " has been created successfully!" );
 	}
 
@@ -603,7 +586,6 @@ class Site_Command extends EE_Command {
 	 * Function to save the site configuration entry into database.
 	 */
 	private function create_site_db_entry() {
-		$is_ssl = ( $this->le ) ? 1 : 0;
 		$data   = array(
 			'sitename'    => $this->site_name,
 			'site_type'   => $this->site_type,
@@ -613,7 +595,6 @@ class Site_Command extends EE_Command {
 			'site_path'   => $this->site_root,
 			'db_password' => $this->db_pass,
 			'email'       => $this->site_email,
-			'is_ssl'      => $is_ssl,
 			'created_on'  => date( 'Y-m-d H:i:s', time() ),
 		);
 
@@ -643,7 +624,7 @@ class Site_Command extends EE_Command {
 
 		if ( $this->db::site_in_db( $this->site_name ) ) {
 
-			$data = array( 'site_type', 'site_title', 'proxy_type', 'cache_type', 'site_path', 'db_password', 'wp_user', 'wp_pass', 'email', 'is_ssl' );
+			$data = array( 'site_type', 'site_title', 'proxy_type', 'cache_type', 'site_path', 'db_password', 'wp_user', 'wp_pass', 'email' );
 
 			$db_select = $this->db::select( $data, array( 'sitename' => $this->site_name ) );
 
@@ -656,7 +637,6 @@ class Site_Command extends EE_Command {
 			$this->site_user  = $db_select[0]['wp_user'];
 			$this->site_pass  = $db_select[0]['wp_pass'];
 			$this->site_email = $db_select[0]['email'];
-			$this->le         = ( $db_select[0]['is_ssl'] ) ? 'letsencrypt' : false;
 
 		} else {
 			EE::error( "Site $this->site_name does not exist." );
