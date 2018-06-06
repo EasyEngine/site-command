@@ -2,8 +2,6 @@
 
 declare( ticks=1 );
 
-// use \EE\Utils;
-
 /**
  * Creates a simple WordPress Website.
  *
