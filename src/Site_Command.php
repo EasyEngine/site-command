@@ -77,6 +77,9 @@ class Site_Command extends EE_Command {
 	 * [--email=<email>]
 	 * : E-Mail of the administrator.
 	 *
+	 * [--letsencrypt]
+	 * : Enable letsencrypt on the site.
+	 *
 	 * [--skip-install]
 	 * : Skips wp-core install.
 	 */
@@ -91,8 +94,9 @@ class Site_Command extends EE_Command {
 			EE::error( 'Invalid arguments' );
 		}
 
-		$this->proxy_type   = 'ee4_nginx-proxy';
+		$this->proxy_type   = 'ee4_traefik';
 		$this->cache_type   = ! empty( $assoc_args['wpredis'] ) ? 'wpredis' : 'none';
+		$this->le           = ! empty( $assoc_args['letsencrypt'] ) ? 'le' : 'none';
 		$this->site_title   = \EE\Utils\get_flag_value( $assoc_args, 'title', $this->site_name );
 		$this->site_user    = \EE\Utils\get_flag_value( $assoc_args, 'user', 'admin' );
 		$this->site_pass    = \EE\Utils\get_flag_value( $assoc_args, 'pass', \EE\Utils\random_password() );
@@ -303,6 +307,7 @@ class Site_Command extends EE_Command {
 		$filter                 = array();
 		$filter[]               = $this->site_type;
 		$filter[]               = $this->cache_type;
+		$filter[]               = $this->le;
 		$site_docker            = new Site_Docker();
 		$docker_compose_content = $site_docker->generate_docker_compose_yml( $filter );
 
