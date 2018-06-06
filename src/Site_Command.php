@@ -2,8 +2,7 @@
 
 declare( ticks=1 );
 
-use EE\Utils;
-use function \EE\Utils\mustache_render;
+// use \EE\Utils;
 
 /**
  * Creates a simple WordPress Website.
@@ -295,6 +294,7 @@ class Site_Command extends EE_Command {
 		$site_conf_env           = $this->site_root . '/.env';
 		$site_nginx_default_conf = $site_conf_dir . '/nginx/default.conf';
 		$server_name             = ( 'wpsubdom' === $this->site_type ) ? "$this->site_name *.$this->site_name" : $this->site_name;
+		$process_user            = posix_getpwuid( posix_geteuid() );
 
 		if ( ! $this->create_site_root() ) {
 			EE::error( "Webroot directory for site $this->site_name already exists." );
@@ -302,13 +302,24 @@ class Site_Command extends EE_Command {
 
 		EE::log( "Creating WordPress site $this->site_name..." );
 		EE::log( 'Copying configuration files...' );
+
 		$filter                 = array();
 		$filter[]               = $this->site_type;
 		$filter[]               = $this->cache_type;
 		$site_docker            = new Site_Docker();
 		$docker_compose_content = $site_docker->generate_docker_compose_yml( $filter );
 		$default_conf_content   = $this->generate_default_conf( $this->site_type, $this->cache_type, $server_name );
-		$env_content            = mustache_render( EE_CONFIG_TEMPLATE_ROOT . '/.env.mustache', [ 'virtual_host' => $this->site_name, 'password' => $this->db_pass ] );
+		$env_data = [
+			'virtual_host'   => $this->site_name,
+			'root_password'  => $this->db_pass,
+			'mysql_database' => 'wordpress',
+			'mysql_user'     => 'wordpress',
+			'user_password'  => $this->db_pass,
+			'wp_db_host'     => 'db',
+			'user_id'        => $process_user['uid'],
+			'group_id'       => $process_user['gid'],
+		];
+		$env_content            = \EE\Utils\mustache_render( EE_CONFIG_TEMPLATE_ROOT . '/.env.mustache', $env_data );
 
 		try {
 			if ( ! ( \EE\Utils\copy_recursive( EE_CONFIG_TEMPLATE_ROOT, $site_conf_dir )
@@ -340,7 +351,7 @@ class Site_Command extends EE_Command {
 		$default_conf_data['wpsubdir']       = $site_type === 'wpsubdir' && $cache_type !== 'wpredis';
 		$default_conf_data['wpsubdir-redis'] = $site_type === 'wpsubdir' && $cache_type === 'wpredis';
 
-		return mustache_render( EE_CONFIG_TEMPLATE_ROOT . '/nginx/default.conf.mustache', $default_conf_data );
+		return \EE\Utils\mustache_render( EE_CONFIG_TEMPLATE_ROOT . '/nginx/default.conf.mustache', $default_conf_data );
 	}
 
 	/**
