@@ -1,6 +1,6 @@
 <?php
 
-use \EE\Utils\mustache_render;
+use function \EE\Utils\mustache_render;
 
 class Site_Docker {
 
@@ -94,7 +94,7 @@ class Site_Docker {
 			'network'  => true,
 		);
 
-		$docker_compose_yml = $this->mustache_render( 'vendor/easyengine/site-command/templates/docker-compose.mustache', $binding );
+		$docker_compose_yml = mustache_render( 'vendor/easyengine/site-command/templates/docker-compose.mustache', $binding );
 
 		return $docker_compose_yml;
 	}
