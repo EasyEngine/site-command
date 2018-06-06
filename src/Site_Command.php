@@ -278,7 +278,9 @@ class Site_Command extends EE_Command {
 			if ( ! ( $port_80_exit_status && $port_443_exit_status ) ) {
 				EE::error( 'Cannot create/start proxy container. Please make sure port 80 and 443 are free.' );
 			} else {
-				if ( $this->docker::boot_container( $this->proxy_type ) ) {
+				$HOME                = HOME;
+				$ee4_traefik_command = "docker run -d -p 8080:8080 -p 80:80 -p 443:443 -v /var/run/docker.sock:/var/run/docker.sock -v $HOME/.ee4/traefik/traefik.toml:/etc/traefik/traefik.toml -v $HOME/.ee4/traefik/acme.json:/etc/traefik/acme.json --name $this->proxy_type traefik --logLevel=DEBUG";
+				if ( $this->docker::boot_container( $this->proxy_type, $ee4_traefik_command ) ) {
 					EE::success( "$this->proxy_type container is up." );
 				} else {
 					EE::error( "There was some error in starting $this->proxy_type container. Please check logs." );
