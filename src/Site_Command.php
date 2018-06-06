@@ -300,10 +300,11 @@ class Site_Command extends EE_Command {
 		}
 		EE::log( "Creating WordPress site $this->site_name..." );
 		EE::log( 'Copying configuration files...' );
-		$filter = array();
+		$filter                 = array();
 		$filter[]               = $this->site_type;
 		$filter[]               = $this->cache_type;
-		$docker_compose_content = $this->docker::generate_docker_composer_yml( $filter );
+		$site_docker            = new Site_Docker();
+		$docker_compose_content = $site_docker->generate_docker_compose_yml( $filter );
 
 		try {
 			if ( ! ( \EE\Utils\copy_recursive( $default_conf, $site_conf_dir )
@@ -547,7 +548,7 @@ class Site_Command extends EE_Command {
 	 * Function to save the site configuration entry into database.
 	 */
 	private function create_site_db_entry() {
-		$data   = array(
+		$data = array(
 			'sitename'    => $this->site_name,
 			'site_type'   => $this->site_type,
 			'site_title'  => $this->site_title,
