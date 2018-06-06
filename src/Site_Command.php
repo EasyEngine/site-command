@@ -3,6 +3,7 @@
 declare( ticks=1 );
 
 use EE\Utils;
+use function \EE\Utils\mustache_render;
 
 /**
  * Creates a simple WordPress Website.
@@ -293,11 +294,12 @@ class Site_Command extends EE_Command {
 		$site_docker_yml         = $this->site_root . '/docker-compose.yml';
 		$site_conf_env           = $this->site_root . '/.env';
 		$site_nginx_default_conf = $site_conf_dir . '/nginx/default.conf';
-		$default_conf            = EE_SITE_CONF_ROOT . "/default/config";
+		$server_name             = ( 'wpsubdom' === $this->site_type ) ? "$this->site_name *.$this->site_name" : $this->site_name;
 
 		if ( ! $this->create_site_root() ) {
 			EE::error( "Webroot directory for site $this->site_name already exists." );
 		}
+
 		EE::log( "Creating WordPress site $this->site_name..." );
 		EE::log( 'Copying configuration files...' );
 		$filter                 = array();
@@ -305,37 +307,41 @@ class Site_Command extends EE_Command {
 		$filter[]               = $this->cache_type;
 		$site_docker            = new Site_Docker();
 		$docker_compose_content = $site_docker->generate_docker_compose_yml( $filter );
+		$default_conf_content   = $this->generate_default_conf( $this->site_type, $this->cache_type, $server_name );
+		$env_content            = mustache_render( EE_CONFIG_TEMPLATE_ROOT . '/.env.mustache', [ 'virtual_host' => $this->site_name, 'password' => $this->db_pass ] );
 
 		try {
-			if ( ! ( \EE\Utils\copy_recursive( $default_conf, $site_conf_dir )
+			if ( ! ( \EE\Utils\copy_recursive( EE_CONFIG_TEMPLATE_ROOT, $site_conf_dir )
 				&& file_put_contents( $site_docker_yml, $docker_compose_content )
-				&& rename( "$site_conf_dir/.env.example", $site_conf_env ) ) ) {
+				&& file_put_contents( $site_nginx_default_conf, $default_conf_content )
+				&& file_put_contents( $site_nginx_default_conf, $default_conf_content )
+				&& file_put_contents( $site_conf_env, $env_content ) ) ) {
 				throw new Exception( 'Could not copy configuration files.' );
 			}
-			if ( 'wpsubdir' !== $this->site_type ) {
-				$ee_conf = ( 'wpredis' === $this->cache_type ) ? 'wpredis' : 'wp';
-			} else {
-				$ee_conf = ( 'wpredis' === $this->cache_type ) ? 'wpredis-subdir' : 'wpsubdir';
-			}
-
-			\EE\Utils\copy_recursive( EE_SITE_CONF_ROOT . "/$ee_conf/config", $site_conf_dir );
-
 			EE::success( 'Configuration files copied.' );
-
-			// Updating config file.
-			$server_name = ( 'wpsubdom' === $this->site_type ) ? "$this->site_name *.$this->site_name" : $this->site_name;
-			EE::log( 'Updating configuration files...' );
-			EE::success( 'Configuration files updated.' );
-			if ( ! ( file_put_contents( $site_conf_env, str_replace( [ '{V_HOST}', 'password' ], [ $this->site_name, $this->db_pass ], file_get_contents( $site_conf_env ) ) )
-				&& ( file_put_contents( $site_nginx_default_conf, str_replace( '{V_HOST}', $server_name, file_get_contents( $site_nginx_default_conf ) ) ) ) ) ) {
-				throw new Exception( 'Could not modify configuration files.' );
-			}
 		}
 		catch ( Exception $e ) {
 			$this->catch_clean( $e );
 		}
 	}
 
+	/**
+	 * Function to generate default.conf from mustache templates.
+	 *
+	 * @param string $site_type   Type of site (wpsubdom, wpredis etc..)
+	 * @param string $cache_type  Type of cache(wpredis or none)
+	 * @param string $server_name Name of server to use in virtual_host
+	 */
+	private function generate_default_conf( $site_type, $cache_type, $server_name ) {
+		$default_conf_data['site_type']      = $site_type;
+		$default_conf_data['server_name']    = $server_name;
+		$default_conf_data['wp']             = $site_type === 'wp';
+		$default_conf_data['wpredis']        = $site_type === 'wpredis';
+		$default_conf_data['wpsubdir']       = $site_type === 'wpsubdir' && $cache_type !== 'wpredis';
+		$default_conf_data['wpsubdir-redis'] = $site_type === 'wpsubdir' && $cache_type === 'wpredis';
+
+		return mustache_render( EE_CONFIG_TEMPLATE_ROOT . '/nginx/default.conf.mustache', $default_conf_data );
+	}
 
 	/**
 	 * Function to create site root directory.

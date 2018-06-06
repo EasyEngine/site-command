@@ -1,0 +1,37 @@
+server {
+    access_log   /var/log/nginx/access.log;
+    error_log    /var/log/nginx/error.log;
+
+    root /var/www/html;
+
+    server_name {{server_name}};
+
+    index index.php index.html index.htm;
+
+    {{! If the site type is WordPress}}
+    {{#wp}}
+    include common/php.conf;
+    {{/wp}}
+
+    {{! If the site type is WordPress multisite with subdirectory }}
+    {{#wpsubdir}}
+    include common/wpsubdir.conf;
+    include common/php.conf;
+    {{/wpsubdir}}
+
+    {{! If the site type is WordPress with redis caching }}
+    {{#wpredis}}
+    include common/redis.conf;
+    {{/wpredis}}
+
+    {{! If the site type is WordPress multisite with subdirectory with redis caching }}
+    {{#wpredis-subdir}}
+    include common/redis.conf;
+    include common/wpsubdir.conf;
+    {{/wpredis-subdir}}
+
+    include common/wpcommon.conf;
+    include common/locations.conf;
+
+    client_max_body_size 100m;
+}
