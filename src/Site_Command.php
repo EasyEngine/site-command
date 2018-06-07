@@ -421,7 +421,6 @@ class Site_Command extends EE_Command {
 		$all         = \EE\Utils\get_flag_value( $assoc_args, 'all' );
 		$nginx       = \EE\Utils\get_flag_value( $assoc_args, 'nginx' );
 		$php         = \EE\Utils\get_flag_value( $assoc_args, 'php' );
-		$mysql       = \EE\Utils\get_flag_value( $assoc_args, 'mysql' );
 
 		$no_service_specified = !( $all || $nginx || $php || $mysql || $redis || $mailcatcher );
 
@@ -430,7 +429,8 @@ class Site_Command extends EE_Command {
 		chdir( $this->site_root );
 
 		if( $all || $no_service_specified ) {
-			shell_exec( "docker-compose start" );
+			shell_exec( "docker-compose exec nginx sh -c 'nginx -t && service openresty reload'" );
+			shell_exec( "docker-compose exec php kill -USR2 1" );
 		}
 		else {
 			if ($nginx) {
@@ -438,9 +438,6 @@ class Site_Command extends EE_Command {
 			}
 			if ($php) {
 				shell_exec( "docker-compose exec php kill -USR2 1" );
-			}
-			if ($mysql) {
-				shell_exec( "docker-compose start db" );
 			}
 		}
 	}
