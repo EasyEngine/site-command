@@ -75,10 +75,7 @@ class Site_Command extends EE_Command {
 	 * : Password for the the administrator.
 	 *
 	 * [--email=<email>]
-	 * : E-Mail of the administrator.
-	 *
-	 * [--letsencrypt]
-	 * : Enable letsencrypt on the site.
+	 * : E-Mail of the administrator. 
 	 *
 	 * [--skip-install]
 	 * : Skips wp-core install.
