@@ -96,7 +96,7 @@ class Site_Command extends EE_Command {
 
 		$this->proxy_type   = 'ee4_traefik';
 		$this->cache_type   = ! empty( $assoc_args['wpredis'] ) ? 'wpredis' : 'none';
-		$this->le           = ! empty( $assoc_args['letsencrypt'] ) ? 'le' : 'none';
+		$this->le           = ! empty( $assoc_args['letsencrypt'] ) ? 'le' : false;
 		$this->site_title   = \EE\Utils\get_flag_value( $assoc_args, 'title', $this->site_name );
 		$this->site_user    = \EE\Utils\get_flag_value( $assoc_args, 'user', 'admin' );
 		$this->site_pass    = \EE\Utils\get_flag_value( $assoc_args, 'pass', \EE\Utils\random_password() );
@@ -235,16 +235,17 @@ class Site_Command extends EE_Command {
 	 * <site-name>
 	 * : Name of the website whose info is required.
 	 */
-	public function info( $args = '' ) {
+	public function info( $args ) {
 		\EE\Utils\delem_log( 'site info start' );
 
 		if ( ! isset( $this->site_name ) ) {
 			$this->populate_site_info( $args );
 		}
 		EE::log( "Details for site $this->site_name:" );
-		$info = array(
-			array( 'Access phpMyAdmin', "http://pma.$this->site_name" ),
-			array( 'Access mail', "http://mail.$this->site_name" ),
+		$prefix = ( $this->le ) ? 'https://' : 'http://';
+		$info   = array(
+			array( 'Access phpMyAdmin', $prefix . $this->site_name . '/ee-admin/pma/' ),
+			array( 'Access mail', $prefix . $this->site_name . '/ee-admin/mailhog/' ),
 			array( 'Site Title', $this->site_title ),
 			array( 'DB Password', $this->db_pass ),
 			array( 'E-Mail', $this->site_email ),
@@ -394,7 +395,7 @@ class Site_Command extends EE_Command {
 			$this->site_status_check();
 			$this->install_wp();
 		}
-		$this->info();
+		$this->info( array( $this->site_name ) );
 		$this->create_site_db_entry();
 	}
 
@@ -547,7 +548,7 @@ class Site_Command extends EE_Command {
 			EE::debug( 'STDOUT: ' . shell_exec( $multi_type_command ) );
 		}
 
-		$prefix = 'http://';
+		$prefix = ( $this->le ) ? 'https://' : 'http://';
 		EE::success( $prefix . $this->site_name . " has been created successfully!" );
 	}
 
