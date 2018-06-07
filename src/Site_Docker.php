@@ -48,8 +48,7 @@ class Site_Docker {
 				array( 'name' => './config/php-fpm/php.ini:/usr/local/etc/php/php.ini' )
 			)
 		);
-
-		$php['environment'] = array(
+		$php['environment']  = array(
 			'env' => array(
 				array( 'name' => 'WORDPRESS_DB_HOST' ),
 				array( 'name' => 'WORDPRESS_DB_USER=${MYSQL_USER}' ),
@@ -58,7 +57,7 @@ class Site_Docker {
 				array( 'name' => 'GROUP_ID=${GROUP_ID}' ),
 			),
 		);
-		$php['networks']    = $network_default;
+		$php['networks']     = $network_default;
 
 
 		// nginx configuration..
@@ -69,7 +68,7 @@ class Site_Docker {
 
 		$v_host = in_array( 'wpsubdom', $filters, true ) ? '${VIRTUAL_HOST},*.${VIRTUAL_HOST}' : '${VIRTUAL_HOST}';
 
-		$nginx['labels'] = array(
+		$nginx['labels']  = array(
 			'label' => array(
 				array( 'name' => 'traefik.port=80' ),
 				array( 'name' => 'traefik.enable=true' ),
@@ -79,7 +78,6 @@ class Site_Docker {
 				array( 'name' => "traefik.frontend.rule=Host:$v_host" ),
 			),
 		);
-
 		$nginx['volumes'] = array(
 			'vol' => array(
 				array( 'name' => './app/src:/var/www/html' ),
@@ -95,13 +93,18 @@ class Site_Docker {
 		$phpmyadmin['service_name'] = array( 'name' => 'phpmyadmin' );
 		$phpmyadmin['image']        = array( 'name' => 'easyengine/phpmyadmin' );
 		$phpmyadmin['restart']      = $restart_default;
+		$phpmyadmin['environment']  = array(
+			'env' => array(
+				array( 'name' => 'PMA_ABSOLUTE_URI=http://${VIRTUAL_HOST}/ee-admin/pma/' ),
+			),
+		);
 		$phpmyadmin['labels']       = array(
 			'label' => array(
 				array( 'name' => 'traefik.port=80' ),
 				array( 'name' => 'traefik.enable=true' ),
 				array( 'name' => 'traefik.protocol=http' ),
 				array( 'name' => "traefik.frontend.entryPoints=$frontend_entrypoints" ),
-				array( 'name' => 'traefik.frontend.rule=Host:pma.${VIRTUAL_HOST}' ),
+				array( 'name' => 'traefik.frontend.rule=Host:${VIRTUAL_HOST};PathPrefixStrip:/ee-admin/pma/' ),
 			),
 		);
 
@@ -118,7 +121,7 @@ class Site_Docker {
 				array( 'name' => 'traefik.enable=true' ),
 				array( 'name' => 'traefik.protocol=http' ),
 				array( 'name' => "traefik.frontend.entryPoints=$frontend_entrypoints" ),
-				array( 'name' => 'traefik.frontend.rule=Host:mail.${VIRTUAL_HOST}' ),
+				array( 'name' => 'traefik.frontend.rule=Host:${VIRTUAL_HOST};PathPrefixStrip:/ee-admin/mailhog/' ),
 			),
 		);
 
