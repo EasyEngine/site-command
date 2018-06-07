@@ -313,28 +313,28 @@ class Site_Command extends EE_Command {
 	 * Starts containers associated with site.
 	 *
 	 * <site-name>
-	 * : Name of the website whose info is required.
+	 * : Name of the site.
 	 *
 	 * [--all]
-	 * : List only enabled sites.
+	 * : Start all containers of site.
 	 *
 	 * [--nginx]
-	 * : List only enabled sites.
+	 * : Start nginx container of site.
 	 *
 	 * [--php]
-	 * : List only enabled sites.
+	 * : Start php container of site.
 	 *
 	 * [--mysql]
-	 * : List only enabled sites.
+	 * : Start mysql container of site.
 	 *
 	 * [--redis]
-	 * : List only enabled sites.
+	 * : Start redis container of site.
 	 *
 	 * [--mailcatcher]
-	 * : List only enabled sites.
+	 * : Start mailcatcher container of site.
 	 *
 	 * [--phpmyadmin]
-	 * : List only enabled sites.
+	 * : Start phpmyadmin container of site.
 	 */
 	public function start( $args, $assoc_args ) {
 		$this->site_docker_compose_execute( $args[0], 'start', $args, $assoc_args);
@@ -344,28 +344,28 @@ class Site_Command extends EE_Command {
 	 * Stops containers associated with site.
 	 *
 	 * <site-name>
-	 * : Name of the website whose info is required.
+	 * : Name of the site.
 	 *
 	 * [--all]
-	 * : List only enabled sites.
+	 * : Stop all containers of site.
 	 *
 	 * [--nginx]
-	 * : List only enabled sites.
+	 * : Stop nginx container of site.
 	 *
 	 * [--php]
-	 * : List only enabled sites.
+	 * : Stop php container of site.
 	 *
 	 * [--mysql]
-	 * : List only enabled sites.
+	 * : Stop mysql container of site.
 	 *
 	 * [--redis]
-	 * : List only enabled sites.
+	 * : Stop redis container of site.
 	 *
 	 * [--mailcatcher]
-	 * : List only enabled sites.
+	 * : Stop mailcatcher container of site.
 	 *
 	 * [--phpmyadmin]
-	 * : List only enabled sites.
+	 * : Stop phpmyadmin container of site.
 	 */
 	public function stop( $args, $assoc_args ) {
 		$this->site_docker_compose_execute( $args[0], 'stop', $args, $assoc_args);
@@ -375,28 +375,28 @@ class Site_Command extends EE_Command {
 	 * Restarts containers associated with site.
 	 *
 	 * <site-name>
-	 * : Name of the website whose info is required.
+	 * : Name of the site.
 	 *
 	 * [--all]
-	 * : List only enabled sites.
+	 * : Restart all containers of site.
 	 *
 	 * [--nginx]
-	 * : List only enabled sites.
+	 * : Restart nginx container of site.
 	 *
 	 * [--php]
-	 * : List only enabled sites.
+	 * : Restart php container of site.
 	 *
 	 * [--mysql]
-	 * : List only enabled sites.
+	 * : Restart mysql container of site.
 	 *
 	 * [--redis]
-	 * : List only enabled sites.
+	 * : Restart redis container of site.
 	 *
 	 * [--mailcatcher]
-	 * : List only enabled sites.
+	 * : Restart mailcatcher container of site.
 	 *
 	 * [--phpmyadmin]
-	 * : List only enabled sites.
+	 * : Restart phpmyadmin container of site.
 	 */
 	public function restart( $args, $assoc_args ) {
 		$this->site_docker_compose_execute( $args[0], 'restart', $args, $assoc_args);
@@ -406,37 +406,22 @@ class Site_Command extends EE_Command {
 	 * Reload services in containers without restarting container(s) associated with site.
 	 *
 	 * <site-name>
-	 * : Name of the website whose info is required.
+	 * : Name of the site.
 	 *
 	 * [--all]
-	 * : List only enabled sites.
+	 * : Reload all services of site(which are supported).
 	 *
 	 * [--nginx]
-	 * : List only enabled sites.
+	 * : Reload nginx service in container.
 	 *
 	 * [--php]
-	 * : List only enabled sites.
-	 *
-	 * [--mysql]
-	 * : List only enabled sites.
-	 *
-	 * [--redis]
-	 * : List only enabled sites.
-	 *
-	 * [--mailcatcher]
-	 * : List only enabled sites.
-	 *
-	 * [--phpmyadmin]
-	 * : List only enabled sites.
+	 * : Start php service in container.
 	 */
 	public function reload( $args, $assoc_args ) {
 		$all         = \EE\Utils\get_flag_value( $assoc_args, 'all' );
 		$nginx       = \EE\Utils\get_flag_value( $assoc_args, 'nginx' );
 		$php         = \EE\Utils\get_flag_value( $assoc_args, 'php' );
 		$mysql       = \EE\Utils\get_flag_value( $assoc_args, 'mysql' );
-		$redis       = \EE\Utils\get_flag_value( $assoc_args, 'redis' );
-		$mailcatcher = \EE\Utils\get_flag_value( $assoc_args, 'mailcatcher' );
-		$phpmyadmin  = \EE\Utils\get_flag_value( $assoc_args, 'phpmyadmin' );
 
 		$no_service_specified = !( $all || $nginx || $php || $mysql || $redis || $mailcatcher );
 
@@ -456,15 +441,6 @@ class Site_Command extends EE_Command {
 			}
 			if ($mysql) {
 				shell_exec( "docker-compose start db" );
-			}
-			if ($redis) {
-				shell_exec( "docker-compose start redis" );
-			}
-			if ($mailcatcher) {
-				shell_exec( "docker-compose start mail" );
-			}
-			if ($phpmyadmin) {
-				shell_exec( "docker-compose $action phpmyadmin" );
 			}
 		}
 	}
