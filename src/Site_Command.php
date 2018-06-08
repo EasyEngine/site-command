@@ -398,8 +398,8 @@ class Site_Command extends EE_Command {
 		catch ( Exception $e ) {
 			$this->catch_clean( $e );
 		}
-		$this->create_etc_hosts_entry();
 		if ( ! $this->skip_install ) {
+			$this->create_etc_hosts_entry();
 			$this->site_status_check();
 			$this->install_wp();
 		}
@@ -524,9 +524,6 @@ class Site_Command extends EE_Command {
 		$host_line = LOCALHOST_IP . "\t$this->site_name";
 		$etc_hosts = file_get_contents( '/etc/hosts' );
 		if ( ! preg_match( "/\s+$this->site_name\$/m", $etc_hosts ) ) {
-			$host_line .= "\n" . LOCALHOST_IP . "\tmail.$this->site_name";
-			$host_line .= "\n" . LOCALHOST_IP . "\tpma.$this->site_name";
-
 			if ( \EE\Utils\default_launch( "sudo /bin/bash -c 'echo \"$host_line\" >> /etc/hosts'" ) ) {
 				EE::success( 'Host entry successfully added.' );
 			} else {
