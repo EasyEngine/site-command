@@ -1,6 +1,7 @@
 <?php
 
 use function \EE\Utils\mustache_render;
+use Yosymfony\Toml\TomlBuilder;
 
 class Site_Docker {
 
@@ -147,8 +148,39 @@ class Site_Docker {
 			'network'  => true,
 		);
 
-		$docker_compose_yml = mustache_render( 'vendor/easyengine/site-command/templates/docker-compose.mustache', $binding );
+		$docker_compose_yml = mustache_render( EE_ROOT . '/vendor/easyengine/site-command/templates/docker-compose.mustache', $binding );
 
 		return $docker_compose_yml;
+	}
+
+	public function generate_traefik_toml() {
+		$tb     = new TomlBuilder();
+		$result = $tb->addComment( 'Traefik Configuration' )
+			->addValue( 'defaultEntryPoints', array( 'http', 'https' ) )
+			->addValue( 'InsecureSkipVerify', true )
+			->addValue( 'logLevel', 'DEBUG' )
+			->addTable( 'entryPoints' )
+			->addTable( 'entryPoints.traefik' )
+			->addValue( 'address', ':8080' )
+			->addTable( 'entryPoints.traefik.auth.basic' )
+			->addValue( 'users', array( 'easyengine:$apr1$CSR8Nxt6$h/Mid6X/vb6ozs4lrXrcw1' ) )
+			->addTable( 'entryPoints.http' )
+			->addValue( 'address', ':80' )
+			->addTable( 'entryPoints.https' )
+			->addValue( 'address', ':443' )
+			->addTable( 'api' )
+			->addValue( 'entryPoint', 'traefik' )
+			->addValue( 'dashboard', true )
+			->addValue( 'debug', true )
+			->addTable( 'docker' )
+			->addValue( 'domain', 'docker.local' )
+			->addValue( 'watch', true )
+			->addValue( 'exposedByDefault', false )
+			->addTable( 'file' )
+			->addValue( 'directory', '/etc/traefik/endpoints/' )
+			->addValue( 'watch', true )
+			->getTomlString();
+
+		return $result;
 	}
 }
