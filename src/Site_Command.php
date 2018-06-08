@@ -324,7 +324,8 @@ class Site_Command extends EE_Command {
 				&& file_put_contents( $site_docker_yml, $docker_compose_content )
 				&& file_put_contents( $site_nginx_default_conf, $default_conf_content )
 				&& file_put_contents( $site_nginx_default_conf, $default_conf_content )
-				&& file_put_contents( $site_conf_env, $env_content ) ) ) {
+				&& file_put_contents( $site_conf_env, $env_content )
+				&& unlink( $site_conf_dir . '/default.conf.mustache' ) ) ) {
 				throw new Exception( 'Could not copy configuration files.' );
 			}
 			EE::success( 'Configuration files copied.' );
@@ -342,12 +343,11 @@ class Site_Command extends EE_Command {
 	 * @param string $server_name Name of server to use in virtual_host
 	 */
 	private function generate_default_conf( $site_type, $cache_type, $server_name ) {
-		$default_conf_data['site_type']      = $site_type;
-		$default_conf_data['server_name']    = $server_name;
-		$default_conf_data['wp']             = $site_type === 'wp';
-		$default_conf_data['wpredis']        = $site_type === 'wpredis';
-		$default_conf_data['wpsubdir']       = $site_type === 'wpsubdir' && $cache_type !== 'wpredis';
-		$default_conf_data['wpsubdir-redis'] = $site_type === 'wpsubdir' && $cache_type === 'wpredis';
+		$default_conf_data['site_type']                    = $site_type;
+		$default_conf_data['server_name']                  = $server_name;
+		$default_conf_data['include_php_conf']             = $site_type === 'wp' || ( $site_type === 'wpsubdir' && $cache_type === 'none' );
+		$default_conf_data['include_wpsubdir_conf']        = $site_type === 'wpsubdir';
+		$default_conf_data['include_redis_conf']           = $cache_type === 'wpredis';
 
 		return \EE\Utils\mustache_render( EE_CONFIG_TEMPLATE_ROOT . '/nginx/default.conf.mustache', $default_conf_data );
 	}

@@ -1,37 +1,185 @@
+# Add your custom config in custom.conf
+# ALL CHANGES IN THIS FILE WILL BE LOST AFTER EasyEngine Update
+
 server {
-    access_log   /var/log/nginx/access.log;
-    error_log    /var/log/nginx/error.log;
+	access_log   /var/log/nginx/access.log;
+	error_log    /var/log/nginx/error.log;
 
-    root /var/www/html;
+	root /var/www/html;
 
-    server_name {{server_name}};
+	server_name {{server_name}};
 
-    index index.php index.html index.htm;
+	index index.php index.html index.htm;
 
-    {{! If the site type is WordPress}}
-    {{#wp}}
-    include common/php.conf;
-    {{/wp}}
+	{{#include_redis_conf}}
+	# Redis NGINX CONFIGURATION
+	set $skip 0;
+	# POST requests and URL with a query string should always go to php
+	if ($request_method = POST) {
+		set $skip 1;
+	}
+	if ($query_string != "") {
+		set $skip 1;
+	}
+	# Don't cache URL containing the following segments
+	if ($request_uri ~* "(/wp-admin/|/xmlrpc.php|wp-.*.php|index.php|/feed/|sitemap(_index)?.xml|[a-z0-9_-]+-sitemap([0-9]+)?.xml)") {
+		set $skip 1;
+	}
+	# Don't use the cache for logged in users or recent commenter or customer with items in cart
+	if ($http_cookie ~* "comment_author|wordpress_[a-f0-9]+|wp-postpass|wordpress_no_cache|wordpress_logged_in|woocommerce_items_in_cart") {
+		set $skip 1;
+	}
+	# Use cached or actual file if they exists, Otherwise pass request to WordPress
+	location / {
+		try_files $uri $uri/ /index.php?$args;
+	}
 
-    {{! If the site type is WordPress multisite with subdirectory }}
-    {{#wpsubdir}}
-    include common/wpsubdir.conf;
-    include common/php.conf;
-    {{/wpsubdir}}
+	location /redis-fetch {
+		internal  ;
+		set  $redis_key $args;
+		redis_pass  ee_redis:6379;
+	}
+	location /redis-store {
+		internal  ;
+		set_unescape_uri $key $arg_key ;
+		redis2_query  set $key $echo_request_body;
+		redis2_query expire $key 14400;
+		redis2_pass  ee_redis:6379;
+	}
 
-    {{! If the site type is WordPress with redis caching }}
-    {{#wpredis}}
-    include common/redis.conf;
-    {{/wpredis}}
+	location ~ \.php$ {
+		#  add_header Cache-Control "max-age=0, no-cache, no-store, must-revalidate";
+		set $key "nginx-cache:$scheme$request_method$host$request_uri";
+		try_files $uri =404;
 
-    {{! If the site type is WordPress multisite with subdirectory with redis caching }}
-    {{#wpredis-subdir}}
-    include common/redis.conf;
-    include common/wpsubdir.conf;
-    {{/wpredis-subdir}}
+		srcache_fetch_skip $skip;
+		srcache_store_skip $skip;
 
-    include common/wpcommon.conf;
-    include common/locations.conf;
+		srcache_response_cache_control off;
 
-    client_max_body_size 100m;
+		set_escape_uri $escaped_key $key;
+
+		srcache_fetch GET /redis-fetch $key;
+		srcache_store PUT /redis-store key=$escaped_key;
+
+		more_set_headers 'X-SRCache-Fetch-Status $srcache_fetch_status';
+		more_set_headers 'X-SRCache-Store-Status $srcache_store_status';
+
+		include fastcgi_params;
+		fastcgi_pass php:9000;
+	}
+
+	{{/include_redis_conf}}
+
+	{{#include_wpsubdir_conf}}
+	# WPSUBDIRECTORY NGINX CONFIGURATION
+	if (!-e $request_filename) {
+
+		# Redirect wp-admin to wp-admin/
+		rewrite /wp-admin$ $scheme://$host$uri/ permanent;
+
+		# Redirect wp-* files/folders
+		rewrite ^(/[^/]+)?(/wp-.*) $2 last;
+
+		# Redirect other php files
+		rewrite ^(/[^/]+)?(/.*\.php) $2 last;
+	}
+	{{/include_wpsubdir_conf}}
+
+	{{#include_php_conf}}
+	# PHP NGINX CONFIGURATION
+	location / {
+		try_files $uri $uri/ /index.php?$args;
+	}
+	location ~ \.php$ {
+		try_files $uri =404;
+		fastcgi_param  SCRIPT_FILENAME  $document_root$fastcgi_script_name;
+		include fastcgi_params;
+		fastcgi_pass php:9000;
+	}
+	{{/include_php_conf}}
+
+	{{! wpcommon.conf }}
+	# WordPress COMMON SETTINGS
+	# Limit access to avoid brute force attack
+	location = /wp-login.php {
+		limit_req zone=one burst=1 nodelay;
+		include fastcgi_params;
+		fastcgi_pass php:9000;
+	}
+	# Disable wp-config.txt
+	location = /wp-config.txt {
+		deny all;
+		access_log off;
+		log_not_found off;
+	}
+	# Disallow php in upload folder
+	location /wp-content/uploads/ {
+		location ~ \.php$ {
+			#Prevent Direct Access Of PHP Files From Web Browsers
+			deny all;
+		}
+	}
+	{{! /wpcommon.conf }}
+
+	{{! locations.conf }}
+	# NGINX CONFIGURATION FOR COMMON LOCATION
+	# Basic locations files
+	location = /favicon.ico {
+		access_log off;
+		log_not_found off;
+		expires max;
+	}
+
+	location = /robots.txt {
+	# Some WordPress plugin gererate robots.txt file
+	# Refer #340 issue
+	return 200 'User-agent: *\nDisallow: /';
+		access_log off;
+		log_not_found off;
+	}
+	# Cache static files
+	location ~* \.(ogg|ogv|svg|svgz|eot|otf|woff|mp4|ttf|rss|atom|jpg|jpeg|gif|png|ico|zip|tgz|gz|rar|bz2|doc|xls|exe|ppt|tar|mid|midi|wav|bmp|rtf|swf)$ {
+		add_header "Access-Control-Allow-Origin" "*";
+		access_log off;
+		log_not_found off;
+		expires max;
+	}
+	# Security settings for better privacy
+	# Deny hidden files
+	location /.well-known {
+		allow all;
+	}
+	location ~ /\. {
+		deny all;
+		access_log off;
+		log_not_found off;
+	}
+	# Deny backup extensions & log files
+	location ~* ^.+\.(bak|log|old|orig|original|php#|php~|php_bak|save|swo|swp|sql)$ {
+		deny all;
+		access_log off;
+		log_not_found off;
+	}
+	# Return 403 forbidden for readme.(txt|html) or license.(txt|html) or example.(txt|html)
+	if ($uri ~* "^.+(readme|license|example)\.(txt|html)$") {
+		return 403;
+	}
+	# Status pages
+	location /nginx_status {
+		stub_status on;
+		access_log off;
+	}
+	location ~ ^/(status|ping) {
+		include fastcgi_params;
+		fastcgi_pass php:9000;
+	}
+	location ~*  \.(css|js)$ {
+		expires 5s;
+		add_header Cache-Control "public, must-revalidate";
+	}
+
+	{{! /locations.conf }}
+
+	client_max_body_size 100m;
 }
