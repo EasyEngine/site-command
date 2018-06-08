@@ -285,11 +285,10 @@ class Site_Command extends EE_Command {
 				touch( EE_CONF_ROOT . '/traefik/acme.json' );
 				chmod( EE_CONF_ROOT . '/traefik/acme.json', 600 );
 				$traefik_toml = new Site_Docker();
-				EE::error( $traefik_toml->generate_traefik_toml() );
 				file_put_contents( EE_CONF_ROOT . '/traefik/traefik.toml', $traefik_toml->generate_traefik_toml() );
 
 				$HOME                = HOME;
-				$ee4_traefik_command = 'docker run -d -p 80:80 -p 443:443 -l "traefik.port=8080" -l "traefik.enable=true" -l "traefik.protocol=http" -l "traefik.frontend.entryPoints=http" -l "traefik.frontend.rule=Host:traefik.local" -v /var/run/docker.sock:/var/run/docker.sock -v ' . $HOME . '/.ee4/traefik/traefik.toml:/etc/traefik/traefik.toml -v ' . $HOME . '/.ee4/traefik/acme.json:/etc/traefik/acme.json -v ' . $HOME . '/.ee4/traefik/endpoints:/etc/traefik/endpoints -v ' . $HOME . '/.ee4/traefik/certs:/etc/traefik/certs -v ' . $HOME . '/.ee4/traefik/log:/var/log --name ee4_traefik easyengine/traefik';
+				$ee4_traefik_command = 'docker run -d -p 8080:8080 -p 80:80 -p 443:443 -l "traefik.enable=false" -v /var/run/docker.sock:/var/run/docker.sock -v ' . $HOME . '/.ee4/traefik/traefik.toml:/etc/traefik/traefik.toml -v ' . $HOME . '/.ee4/traefik/acme.json:/etc/traefik/acme.json -v ' . $HOME . '/.ee4/traefik/endpoints:/etc/traefik/endpoints -v ' . $HOME . '/.ee4/traefik/certs:/etc/traefik/certs -v ' . $HOME . '/.ee4/traefik/log:/var/log --name ee4_traefik easyengine/traefik';
 
 				if ( $this->docker::boot_container( $this->proxy_type, $ee4_traefik_command ) ) {
 					EE::success( "$this->proxy_type container is up." );
