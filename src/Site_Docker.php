@@ -52,9 +52,9 @@ class Site_Docker {
 		$nginx['image']        = array( 'name' => 'easyengine/nginx' );
 		$nginx['depends_on']   = array( 'name' => 'php' );
 		$nginx['restart']      = $restart_default;
-		$v_host                = in_array( 'wpsubdom', $filters ) ? 'VIRTUAL_HOST=${VIRTUAL_HOST},*.${VIRTUAL_HOST}' : 'VIRTUAL_HOST';
+		$v_host                = in_array( 'wpsubdom', $filters ) ? 'VIRTUAL_HOST=${VIRTUAL_HOST},HostRegexp:{subdomain:.+}.${VIRTUAL_HOST}' : 'VIRTUAL_HOST';
 		if ( in_array( 'le', $filters ) ) {
-			$le_v_host            = in_array( 'wpsubdom', $filters ) ? 'LETSENCRYPT_HOST=${VIRTUAL_HOST},*.${VIRTUAL_HOST}' : 'LETSENCRYPT_HOST=${VIRTUAL_HOST}';
+			$le_v_host            = in_array( 'wpsubdom', $filters ) ? 'LETSENCRYPT_HOST=${VIRTUAL_HOST},HostRegexp:{subdomain:.+}.${VIRTUAL_HOST}' : 'LETSENCRYPT_HOST=${VIRTUAL_HOST}';
 			$nginx['environment'] = array( 'env' => array( array( 'name' => $v_host ), array( 'name' => $le_v_host ), array( 'name' => 'LETSENCRYPT_EMAIL=${VIRTUAL_HOST_EMAIL}' ) ) );
 		} else {
 			$nginx['environment'] = array( 'env' => array( array( 'name' => $v_host ) ) );
