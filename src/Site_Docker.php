@@ -66,8 +66,7 @@ class Site_Docker {
 		$nginx['image']        = array( 'name' => 'easyengine/nginx' );
 		$nginx['depends_on']   = array( 'name' => 'php' );
 		$nginx['restart']      = $restart_default;
-
-		$v_host = in_array( 'wpsubdom', $filters, true ) ? '${VIRTUAL_HOST},*.${VIRTUAL_HOST}' : '${VIRTUAL_HOST}';
+		$v_host                = in_array( 'wpsubdom', $filters ) ? 'VIRTUAL_HOST=${VIRTUAL_HOST},HostRegexp:{subdomain:.+}.${VIRTUAL_HOST}' : '${VIRTUAL_HOST}';
 
 		$nginx['labels']  = array(
 			'label' => array(
@@ -76,6 +75,7 @@ class Site_Docker {
 				array( 'name' => 'traefik.protocol=http' ),
 				array( 'name' => 'traefik.docker.network=site-network' ),
 				array( 'name' => "traefik.frontend.entryPoints=$frontend_entrypoints" ),
+				array( 'name' => 'traefik.frontend.redirect.entryPoint=https' ),
 				array( 'name' => "traefik.frontend.rule=Host:$v_host" ),
 			),
 		);
@@ -84,7 +84,6 @@ class Site_Docker {
 				array( 'name' => './app/src:/var/www/html' ),
 				array( 'name' => './config/nginx/default.conf:/etc/nginx/conf.d/default.conf' ),
 				array( 'name' => './logs/nginx:/var/log/nginx' ),
-				array( 'name' => './config/nginx/common:/usr/local/openresty/nginx/conf/common' ),
 			),
 		);
 
@@ -105,6 +104,7 @@ class Site_Docker {
 				array( 'name' => 'traefik.enable=true' ),
 				array( 'name' => 'traefik.protocol=http' ),
 				array( 'name' => "traefik.frontend.entryPoints=$frontend_entrypoints" ),
+				array( 'name' => 'traefik.frontend.redirect.entryPoint=https' ),
 				array( 'name' => 'traefik.frontend.rule=Host:${VIRTUAL_HOST};PathPrefixStrip:/ee-admin/pma/' ),
 			),
 		);
@@ -122,6 +122,7 @@ class Site_Docker {
 				array( 'name' => 'traefik.enable=true' ),
 				array( 'name' => 'traefik.protocol=http' ),
 				array( 'name' => "traefik.frontend.entryPoints=$frontend_entrypoints" ),
+				array( 'name' => 'traefik.frontend.redirect.entryPoint=https' ),
 				array( 'name' => 'traefik.frontend.rule=Host:${VIRTUAL_HOST};PathPrefixStrip:/ee-admin/mailhog/' ),
 			),
 		);

@@ -1,5 +1,7 @@
 <?php
 
+define( 'EE_CONFIG_TEMPLATE_ROOT', EE_ROOT . '/vendor/easyengine/site-command/templates/config' );
+
 if ( ! class_exists( 'EE' ) ) {
 	return;
 }
