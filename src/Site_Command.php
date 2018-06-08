@@ -2,8 +2,6 @@
 
 declare( ticks=1 );
 
-use EE\Utils;
-
 /**
  * Creates a simple WordPress Website.
  *
@@ -30,6 +28,7 @@ class Site_Command extends EE_Command {
 	private $logger;
 	private $le;
 	private $db_pass;
+	private $skip_install;
 
 	public function __construct() {
 		$this->level = 0;
@@ -64,9 +63,6 @@ class Site_Command extends EE_Command {
 	 * [--wpsubdom]
 	 * : WordPress sub-domain Multi-site.
 	 *
-	 * [--letsencrypt]
-	 * : Preconfigured letsencrypt supported website.
-	 *
 	 * [--title=<title>]
 	 * : Title of your site.
 	 *
@@ -78,6 +74,9 @@ class Site_Command extends EE_Command {
 	 *
 	 * [--email=<email>]
 	 * : E-Mail of the administrator.
+	 *
+	 * [--skip-install]
+	 * : Skips wp-core install.
 	 */
 	public function create( $args, $assoc_args ) {
 		\EE\Utils\delem_log( 'site create start' );
@@ -90,19 +89,16 @@ class Site_Command extends EE_Command {
 			EE::error( 'Invalid arguments' );
 		}
 
-		$this->proxy_type = 'ee4_nginx-proxy';
-		$this->cache_type = ! empty( $assoc_args['wpredis'] ) ? 'ee4_redis' : 'none';
-		$this->site_title = \EE\Utils\get_flag_value( $assoc_args, 'title', $this->site_name );
-		$this->site_user  = \EE\Utils\get_flag_value( $assoc_args, 'user', 'admin' );
-		$this->site_pass  = \EE\Utils\get_flag_value( $assoc_args, 'pass', \EE\Utils\random_password() );
-		$this->db_pass    = \EE\Utils\random_password();
-		$this->site_email = \EE\Utils\get_flag_value( $assoc_args, 'email', strtolower( 'mail@' . $this->site_name ) );
-		$this->le         = ! empty( $assoc_args['letsencrypt'] ) ? true : false;
+		$this->proxy_type   = 'ee4_nginx-proxy';
+		$this->cache_type   = ! empty( $assoc_args['wpredis'] ) ? 'wpredis' : 'none';
+		$this->site_title   = \EE\Utils\get_flag_value( $assoc_args, 'title', $this->site_name );
+		$this->site_user    = \EE\Utils\get_flag_value( $assoc_args, 'user', 'admin' );
+		$this->site_pass    = \EE\Utils\get_flag_value( $assoc_args, 'pass', \EE\Utils\random_password() );
+		$this->db_pass      = \EE\Utils\random_password();
+		$this->site_email   = \EE\Utils\get_flag_value( $assoc_args, 'email', strtolower( 'mail@' . $this->site_name ) );
+		$this->skip_install = \EE\Utils\get_flag_value( $assoc_args, 'skip-install' );
 
 		$this->init_checks();
-		if ( 'none' !== $this->cache_type ) {
-			$this->cache_checks();
-		}
 
 		EE::log( 'Configuring project...' );
 
@@ -244,12 +240,16 @@ class Site_Command extends EE_Command {
 			array( 'Access phpMyAdmin', "http://pma.$this->site_name" ),
 			array( 'Access mail', "http://mail.$this->site_name" ),
 			array( 'Site Title', $this->site_title ),
-			array( 'WordPress Username', $this->site_user ),
-			array( 'WordPress Password', $this->site_pass ),
 			array( 'DB Password', $this->db_pass ),
 			array( 'E-Mail', $this->site_email ),
 			array( 'Cache Type', $this->cache_type ),
 		);
+
+		if ( ! empty( $this->site_user ) && ! $this->skip_install ) {
+			$info[] = array( 'WordPress Username', $this->site_user );
+			$info[] = array( 'WordPress Password', $this->site_pass );
+		}
+
 		\EE\Utils\format_table( $info );
 
 		\EE\Utils\delem_log( 'site info end' );
@@ -282,19 +282,6 @@ class Site_Command extends EE_Command {
 	}
 
 	/**
-	 * Function to check if the cache server is running.
-	 *
-	 * Boots up the container if it is stopped or not running.
-	 */
-	private function cache_checks() {
-		if ( ! file_exists( EE_CONF_ROOT . '/redis' ) ) {
-			\EE\Utils\copy_recursive( EE_SITE_CONF_ROOT . '/redis', EE_CONF_ROOT . '/redis' );
-		}
-		$this->docker::boot_container( $this->cache_type );
-	}
-
-
-	/**
 	 * Function to configure site and copy all the required files.
 	 */
 	private function configure_site() {
@@ -304,48 +291,69 @@ class Site_Command extends EE_Command {
 		$site_docker_yml         = $this->site_root . '/docker-compose.yml';
 		$site_conf_env           = $this->site_root . '/.env';
 		$site_nginx_default_conf = $site_conf_dir . '/nginx/default.conf';
-		$default_conf            = EE_SITE_CONF_ROOT . "/default/config";
+		$site_php_ini            = $site_conf_dir . '/php-fpm/php.ini';
+		$server_name             = ( 'wpsubdom' === $this->site_type ) ? "$this->site_name *.$this->site_name" : $this->site_name;
+		$process_user            = posix_getpwuid( posix_geteuid() );
 
 		if ( ! $this->create_site_root() ) {
 			EE::error( "Webroot directory for site $this->site_name already exists." );
 		}
+
 		EE::log( "Creating WordPress site $this->site_name..." );
 		EE::log( 'Copying configuration files...' );
-		$filter = array();
-		( ! $this->le ) ?: $filter[] = 'le';
+
+		$filter                 = array();
 		$filter[]               = $this->site_type;
-		$docker_compose_content = $this->docker::generate_docker_composer_yml( $filter );
+		$filter[]               = $this->cache_type;
+		$site_docker            = new Site_Docker();
+		$docker_compose_content = $site_docker->generate_docker_compose_yml( $filter );
+		$default_conf_content   = $this->generate_default_conf( $this->site_type, $this->cache_type, $server_name );
+		$env_data = [
+			'virtual_host'   => $this->site_name,
+			'root_password'  => $this->db_pass,
+			'mysql_database' => 'wordpress',
+			'mysql_user'     => 'wordpress',
+			'user_password'  => $this->db_pass,
+			'wp_db_host'     => 'db',
+			'user_id'        => $process_user['uid'],
+			'group_id'       => $process_user['gid'],
+		];
+		$env_content            = \EE\Utils\mustache_render( EE_CONFIG_TEMPLATE_ROOT . '/.env.mustache', $env_data );
+		$php_ini_content        = \EE\Utils\mustache_render( EE_CONFIG_TEMPLATE_ROOT . '/php-fpm/php.ini.mustache', [] );
 
 		try {
-			if ( ! ( \EE\Utils\copy_recursive( $default_conf, $site_conf_dir )
-				&& file_put_contents( $site_docker_yml, $docker_compose_content )
-				&& rename( "$site_conf_dir/.env.example", $site_conf_env ) ) ) {
+			if ( ! ( file_put_contents( $site_docker_yml, $docker_compose_content )
+				&& file_put_contents( $site_conf_env, $env_content )
+				&& mkdir( $site_conf_dir )
+				&& mkdir( $site_conf_dir . '/nginx' )
+				&& file_put_contents( $site_nginx_default_conf, $default_conf_content )
+				&& mkdir( $site_conf_dir . '/php-fpm' )
+				&& file_put_contents( $site_php_ini, $php_ini_content ) ) ) {
 				throw new Exception( 'Could not copy configuration files.' );
 			}
-			if ( 'wpsubdir' !== $this->site_type ) {
-				$ee_conf = ( 'ee4_redis' === $this->cache_type ) ? 'wpredis' : 'wp';
-			} else {
-				$ee_conf = ( 'ee4_redis' === $this->cache_type ) ? 'wpredis-subdir' : 'wpsubdir';
-			}
-
-			\EE\Utils\copy_recursive( EE_SITE_CONF_ROOT . "/$ee_conf/config", $site_conf_dir );
-
 			EE::success( 'Configuration files copied.' );
-
-			// Updating config file.
-			$server_name = ( 'wpsubdom' === $this->site_type ) ? "$this->site_name *.$this->site_name" : $this->site_name;
-			EE::log( 'Updating configuration files...' );
-			EE::success( 'Configuration files updated.' );
-			if ( ! ( file_put_contents( $site_conf_env, str_replace( [ '{V_HOST}', 'password' ], [ $this->site_name, $this->db_pass ], file_get_contents( $site_conf_env ) ) )
-				&& ( file_put_contents( $site_nginx_default_conf, str_replace( '{V_HOST}', $server_name, file_get_contents( $site_nginx_default_conf ) ) ) ) ) ) {
-				throw new Exception( 'Could not modify configuration files.' );
-			}
 		}
 		catch ( Exception $e ) {
 			$this->catch_clean( $e );
 		}
 	}
 
+	/**
+	 * Function to generate default.conf from mustache templates.
+	 *
+	 * @param string $site_type   Type of site (wpsubdom, wpredis etc..)
+	 * @param string $cache_type  Type of cache(wpredis or none)
+	 * @param string $server_name Name of server to use in virtual_host
+	 */
+	private function generate_default_conf( $site_type, $cache_type, $server_name ) {
+		$default_conf_data['site_type']                    = $site_type;
+		$default_conf_data['server_name']                  = $server_name;
+		$default_conf_data['include_php_conf']             = $cache_type !== 'wpredis';
+		$default_conf_data['include_wpsubdir_conf']        = $site_type === 'wpsubdir';
+		$default_conf_data['include_redis_conf']           = $cache_type === 'wpredis';
+
+		return \EE\Utils\mustache_render( EE_CONFIG_TEMPLATE_ROOT . '/nginx/default.conf.mustache', $default_conf_data );
+	}
 
 	/**
 	 * Function to create site root directory.
@@ -393,8 +401,11 @@ class Site_Command extends EE_Command {
 			$this->catch_clean( $e );
 		}
 		$this->create_etc_hosts_entry();
-		$this->site_status_check();
-		$this->install_wp();
+		if ( ! $this->skip_install ) {
+			$this->site_status_check();
+			$this->install_wp();
+		}
+		$this->info();
 		$this->create_site_db_entry();
 	}
 
@@ -421,28 +432,15 @@ class Site_Command extends EE_Command {
 				}
 			}
 
-			if ( 'none' !== $this->cache_type ) {
-				if ( $this->docker::disconnect_network( $this->site_name, $this->cache_type ) ) {
-					EE::log( "[$this->site_name] Disconnected from Docker network $this->cache_type" );
-				} else {
-					EE::warning( "Error in disconnecting from Docker network $this->cache_type" );
-				}
-			}
-
-			if ( $this->docker::disconnect_network( $this->site_name, $this->proxy_type ) ) {
-				EE::log( "[$this->site_name] Disconnected from Docker network $this->proxy_type" );
-			} else {
-				EE::warning( "Error in disconnecting from Docker network $this->proxy_type" );
-			}
-
+			$this->docker::disconnect_site_network_from( $this->site_name, $this->proxy_type );
 		}
 
 		if ( $this->level >= 2 ) {
 			if ( $this->docker::rm_network( $this->site_name ) ) {
-				EE::log( "[$this->site_name] Docker network $this->proxy_type removed." );
+				EE::log( "[$this->site_name] Docker container removed from network $this->proxy_type." );
 			} else {
 				if ( $this->level > 2 ) {
-					EE::warning( "Error in removing Docker network $this->proxy_type" );
+					EE::warning( "Error in removing Docker container from network $this->proxy_type" );
 				}
 			}
 		}
@@ -499,7 +497,7 @@ class Site_Command extends EE_Command {
 	}
 
 	/**
-	 * Function to setup site networking and connect given proxy.
+	 * Function to setup site network.
 	 */
 	private function setup_site_network() {
 
@@ -513,18 +511,7 @@ class Site_Command extends EE_Command {
 			}
 			$this->level = 3;
 
-			if ( $this->docker::connect_network( $this->site_name, $this->proxy_type ) ) {
-				EE::success( "Site connected to $this->proxy_type." );
-			} else {
-				throw new Exception( "There was some error connecting to $this->proxy_type." );
-			}
-			if ( 'none' !== $this->cache_type ) {
-				if ( $this->docker::connect_network( $this->site_name, $this->cache_type ) ) {
-					EE::success( "Site connected to $this->cache_type." );
-				} else {
-					throw new Exception( "There was some error connecting to $this->cache_type." );
-				}
-			}
+			$this->docker::connect_site_network_to( $this->site_name, $this->proxy_type );
 		}
 		catch ( Exception $e ) {
 			$this->catch_clean( $e );
@@ -571,15 +558,14 @@ class Site_Command extends EE_Command {
 			EE::debug( 'STDOUT: ' . shell_exec( $multi_type_command ) );
 		}
 
-		EE::success( "http://" . $this->site_name . " has been created successfully!" );
-		$this->info();
+		$prefix = 'http://';
+		EE::success( $prefix . $this->site_name . " has been created successfully!" );
 	}
 
 	/**
 	 * Function to save the site configuration entry into database.
 	 */
 	private function create_site_db_entry() {
-
 		$data = array(
 			'sitename'    => $this->site_name,
 			'site_type'   => $this->site_type,
@@ -588,11 +574,14 @@ class Site_Command extends EE_Command {
 			'cache_type'  => $this->cache_type,
 			'site_path'   => $this->site_root,
 			'db_password' => $this->db_pass,
-			'wp_user'     => $this->site_user,
-			'wp_pass'     => $this->site_pass,
 			'email'       => $this->site_email,
 			'created_on'  => date( 'Y-m-d H:i:s', time() ),
 		);
+
+		if ( ! $this->skip_install ) {
+			$data['wp_user'] = $this->site_user;
+			$data['wp_pass'] = $this->site_pass;
+		}
 
 		try {
 			if ( $this->db::insert( $data ) ) {
