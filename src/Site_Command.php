@@ -10,7 +10,7 @@ use EE\Utils;
  * ## EXAMPLES
  *
  *     # Create simple WordPress site
- *     $ ee4 site create example.com --wp
+ *     $ ee site create example.com --wp
  *
  * @package ee-cli
  */
