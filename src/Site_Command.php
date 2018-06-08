@@ -345,7 +345,7 @@ class Site_Command extends EE_Command {
 	private function generate_default_conf( $site_type, $cache_type, $server_name ) {
 		$default_conf_data['site_type']                    = $site_type;
 		$default_conf_data['server_name']                  = $server_name;
-		$default_conf_data['include_php_conf']             = $site_type === 'wp' || ( $site_type === 'wpsubdir' && $cache_type === 'none' );
+		$default_conf_data['include_php_conf']             = $cache_type !== 'wpredis';
 		$default_conf_data['include_wpsubdir_conf']        = $site_type === 'wpsubdir';
 		$default_conf_data['include_redis_conf']           = $cache_type === 'wpredis';
 
