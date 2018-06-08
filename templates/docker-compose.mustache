@@ -11,7 +11,7 @@ services:
     {{/image}}
     {{#depends_on}}
     depends_on:
-      -  {{name}}
+      - {{name}}
     {{/depends_on}}
     {{#restart}}
     restart: {{name}}
@@ -22,24 +22,24 @@ services:
     {{#labels}}
     labels: 
     {{#label}}
-      -  "{{name}}"
+      - "{{name}}"
     {{/label}}
     {{/labels}}
     {{#volumes}}
     volumes:
     {{#vol}}
-      -  "{{name}}"
+      - "{{name}}"
     {{/vol}}
     {{/volumes}}
     {{#environment}}
     environment:
     {{#env}}
-      -  {{name}}
+      - {{name}}
     {{/env}}
     {{/environment}}
     {{#networks}}
     networks:
-      -  {{name}}
+      - {{name}}
     {{/networks}}
     
 {{/services}}

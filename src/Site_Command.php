@@ -8,7 +8,7 @@ declare( ticks=1 );
  * ## EXAMPLES
  *
  *     # Create simple WordPress site
- *     $ ee4 site create example.com --wp
+ *     $ ee site create example.com --wp
  *
  * @package ee-cli
  */
@@ -89,8 +89,9 @@ class Site_Command extends EE_Command {
 			EE::error( 'Invalid arguments' );
 		}
 
-		$this->proxy_type   = 'ee4_nginx-proxy';
+		$this->proxy_type   = 'ee_traefik';
 		$this->cache_type   = ! empty( $assoc_args['wpredis'] ) ? 'wpredis' : 'none';
+		$this->le           = ! empty( $assoc_args['letsencrypt'] ) ? 'le' : false;
 		$this->site_title   = \EE\Utils\get_flag_value( $assoc_args, 'title', $this->site_name );
 		$this->site_user    = \EE\Utils\get_flag_value( $assoc_args, 'user', 'admin' );
 		$this->site_pass    = \EE\Utils\get_flag_value( $assoc_args, 'pass', \EE\Utils\random_password() );
@@ -229,16 +230,17 @@ class Site_Command extends EE_Command {
 	 * <site-name>
 	 * : Name of the website whose info is required.
 	 */
-	public function info( $args = '' ) {
+	public function info( $args ) {
 		\EE\Utils\delem_log( 'site info start' );
 
 		if ( ! isset( $this->site_name ) ) {
 			$this->populate_site_info( $args );
 		}
 		EE::log( "Details for site $this->site_name:" );
-		$info = array(
-			array( 'Access phpMyAdmin', "http://pma.$this->site_name" ),
-			array( 'Access mail', "http://mail.$this->site_name" ),
+		$prefix = ( $this->le ) ? 'https://' : 'http://';
+		$info   = array(
+			array( 'Access phpMyAdmin', $prefix . $this->site_name . '/ee-admin/pma/' ),
+			array( 'Access mail', $prefix . $this->site_name . '/ee-admin/mailhog/' ),
 			array( 'Site Title', $this->site_title ),
 			array( 'DB Password', $this->db_pass ),
 			array( 'E-Mail', $this->site_email ),
@@ -272,7 +274,20 @@ class Site_Command extends EE_Command {
 			if ( ! ( $port_80_exit_status && $port_443_exit_status ) ) {
 				EE::error( 'Cannot create/start proxy container. Please make sure port 80 and 443 are free.' );
 			} else {
-				if ( $this->docker::boot_container( $this->proxy_type ) ) {
+
+				if ( ! is_dir( EE_CONF_ROOT . '/traefik' ) ) {
+					EE::debug( 'Creating traefik folder and config files.' );
+					mkdir( EE_CONF_ROOT . '/traefik' );
+				}
+
+				touch( EE_CONF_ROOT . '/traefik/acme.json' );
+				chmod( EE_CONF_ROOT . '/traefik/acme.json', 600 );
+				$traefik_toml = new Site_Docker();
+				file_put_contents( EE_CONF_ROOT . '/traefik/traefik.toml', $traefik_toml->generate_traefik_toml() );
+
+				$ee_traefik_command = 'docker run -d -p 8080:8080 -p 80:80 -p 443:443 -l "traefik.enable=false" -v /var/run/docker.sock:/var/run/docker.sock -v ' . EE_CONF_ROOT . '/traefik/traefik.toml:/etc/traefik/traefik.toml -v ' . EE_CONF_ROOT . '/traefik/acme.json:/etc/traefik/acme.json -v ' . EE_CONF_ROOT . '/traefik/endpoints:/etc/traefik/endpoints -v ' . EE_CONF_ROOT . '/traefik/certs:/etc/traefik/certs -v ' . EE_CONF_ROOT . '/traefik/log:/var/log --name ee_traefik easyengine/traefik';
+
+				if ( $this->docker::boot_container( $this->proxy_type, $ee_traefik_command ) ) {
 					EE::success( "$this->proxy_type container is up." );
 				} else {
 					EE::error( "There was some error in starting $this->proxy_type container. Please check logs." );
@@ -305,6 +320,7 @@ class Site_Command extends EE_Command {
 		$filter                 = array();
 		$filter[]               = $this->site_type;
 		$filter[]               = $this->cache_type;
+		$filter[]               = $this->le;
 		$site_docker            = new Site_Docker();
 		$docker_compose_content = $site_docker->generate_docker_compose_yml( $filter );
 		$default_conf_content   = $this->generate_default_conf( $this->site_type, $this->cache_type, $server_name );
@@ -400,12 +416,12 @@ class Site_Command extends EE_Command {
 		catch ( Exception $e ) {
 			$this->catch_clean( $e );
 		}
-		$this->create_etc_hosts_entry();
 		if ( ! $this->skip_install ) {
+			$this->create_etc_hosts_entry();
 			$this->site_status_check();
 			$this->install_wp();
 		}
-		$this->info();
+		$this->info( array( $this->site_name ) );
 		$this->create_site_db_entry();
 	}
 
@@ -526,9 +542,6 @@ class Site_Command extends EE_Command {
 		$host_line = LOCALHOST_IP . "\t$this->site_name";
 		$etc_hosts = file_get_contents( '/etc/hosts' );
 		if ( ! preg_match( "/\s+$this->site_name\$/m", $etc_hosts ) ) {
-			$host_line .= "\n" . LOCALHOST_IP . "\tmail.$this->site_name";
-			$host_line .= "\n" . LOCALHOST_IP . "\tpma.$this->site_name";
-
 			if ( \EE\Utils\default_launch( "sudo /bin/bash -c 'echo \"$host_line\" >> /etc/hosts'" ) ) {
 				EE::success( 'Host entry successfully added.' );
 			} else {
@@ -558,7 +571,7 @@ class Site_Command extends EE_Command {
 			EE::debug( 'STDOUT: ' . shell_exec( $multi_type_command ) );
 		}
 
-		$prefix = 'http://';
+		$prefix = ( $this->le ) ? 'https://' : 'http://';
 		EE::success( $prefix . $this->site_name . " has been created successfully!" );
 	}
 

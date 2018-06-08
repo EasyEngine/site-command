@@ -1,6 +1,7 @@
 <?php
 
 use function \EE\Utils\mustache_render;
+use Yosymfony\Toml\TomlBuilder;
 
 class Site_Docker {
 
@@ -14,15 +15,20 @@ class Site_Docker {
 	 * @return String docker-compose.yml content string.
 	 */
 	public function generate_docker_compose_yml( array $filters = [] ) {
-		$base            = array();
+		$base = array();
+
 		$restart_default = array( 'name' => 'always' );
 		$network_default = array( 'name' => 'site-network' );
+
+		$frontend_entrypoints = ( in_array( 'le', $filters ) ) ? 'http,https' : 'http';
+
 		// db configuration.
 		$db['service_name'] = array( 'name' => 'db' );
 		$db['image']        = array( 'name' => 'easyengine/mariadb' );
 		$db['restart']      = $restart_default;
 		$db['volumes']      = array( array( 'vol' => array( 'name' => './app/db:/var/lib/mysql' ) ) );
-		$db['environment']  = array(
+
+		$db['environment'] = array(
 			'env' => array(
 				array( 'name' => 'MYSQL_ROOT_PASSWORD' ),
 				array( 'name' => 'MYSQL_DATABASE' ),
@@ -30,13 +36,19 @@ class Site_Docker {
 				array( 'name' => 'MYSQL_PASSWORD' ),
 			),
 		);
-		$db['networks']     = $network_default;
+		$db['networks']    = $network_default;
+
 		// PHP configuration.
 		$php['service_name'] = array( 'name' => 'php' );
 		$php['image']        = array( 'name' => 'easyengine/php' );
 		$php['depends_on']   = array( 'name' => 'db' );
 		$php['restart']      = $restart_default;
-		$php['volumes']      = array( array( 'vol' => array( array( 'name' => './app/src:/var/www/html' ), array( 'name' => './config/php-fpm/php.ini:/usr/local/etc/php/php.ini' ) ) ) );
+		$php['volumes']      = array(
+			'vol' => array(
+				array( 'name' => './app/src:/var/www/html' ),
+				array( 'name' => './config/php-fpm/php.ini:/usr/local/etc/php/php.ini' )
+			)
+		);
 		$php['environment']  = array(
 			'env' => array(
 				array( 'name' => 'WORDPRESS_DB_HOST' ),
@@ -47,33 +59,75 @@ class Site_Docker {
 			),
 		);
 		$php['networks']     = $network_default;
+
+
 		// nginx configuration..
 		$nginx['service_name'] = array( 'name' => 'nginx' );
 		$nginx['image']        = array( 'name' => 'easyengine/nginx' );
 		$nginx['depends_on']   = array( 'name' => 'php' );
 		$nginx['restart']      = $restart_default;
-		$v_host                = in_array( 'wpsubdom', $filters ) ? 'VIRTUAL_HOST=${VIRTUAL_HOST},HostRegexp:{subdomain:.+}.${VIRTUAL_HOST}' : 'VIRTUAL_HOST';
-		if ( in_array( 'le', $filters ) ) {
-			$le_v_host            = in_array( 'wpsubdom', $filters ) ? 'LETSENCRYPT_HOST=${VIRTUAL_HOST},HostRegexp:{subdomain:.+}.${VIRTUAL_HOST}' : 'LETSENCRYPT_HOST=${VIRTUAL_HOST}';
-			$nginx['environment'] = array( 'env' => array( array( 'name' => $v_host ), array( 'name' => $le_v_host ), array( 'name' => 'LETSENCRYPT_EMAIL=${VIRTUAL_HOST_EMAIL}' ) ) );
-		} else {
-			$nginx['environment'] = array( 'env' => array( array( 'name' => $v_host ) ) );
-		}
-		$nginx['volumes']  = array( array( 'vol' => array( array( 'name' => './app/src:/var/www/html' ), array( 'name' => './config/nginx/default.conf:/etc/nginx/conf.d/default.conf' ), array( 'name' => './logs/nginx:/var/log/nginx' ), array( 'name' => './config/nginx/common:/usr/local/openresty/nginx/conf/common' ) ) ) );
+		$v_host                = in_array( 'wpsubdom', $filters ) ? 'VIRTUAL_HOST=${VIRTUAL_HOST},HostRegexp:{subdomain:.+}.${VIRTUAL_HOST}' : '${VIRTUAL_HOST}';
+
+		$nginx['labels']  = array(
+			'label' => array(
+				array( 'name' => 'traefik.port=80' ),
+				array( 'name' => 'traefik.enable=true' ),
+				array( 'name' => 'traefik.protocol=http' ),
+				array( 'name' => 'traefik.docker.network=site-network' ),
+				array( 'name' => "traefik.frontend.entryPoints=$frontend_entrypoints" ),
+				array( 'name' => 'traefik.frontend.redirect.entryPoint=https' ),
+				array( 'name' => "traefik.frontend.rule=Host:$v_host" ),
+			),
+		);
+		$nginx['volumes'] = array(
+			'vol' => array(
+				array( 'name' => './app/src:/var/www/html' ),
+				array( 'name' => './config/nginx/default.conf:/etc/nginx/conf.d/default.conf' ),
+				array( 'name' => './logs/nginx:/var/log/nginx' ),
+			),
+		);
+
 		$nginx['networks'] = $network_default;
+
 		// PhpMyAdmin configuration.
 		$phpmyadmin['service_name'] = array( 'name' => 'phpmyadmin' );
 		$phpmyadmin['image']        = array( 'name' => 'easyengine/phpmyadmin' );
 		$phpmyadmin['restart']      = $restart_default;
-		$phpmyadmin['environment']  = array( 'env' => array( array( 'name' => 'VIRTUAL_HOST=pma.${VIRTUAL_HOST}' ) ) );
-		$phpmyadmin['networks']     = $network_default;
+		$phpmyadmin['environment']  = array(
+			'env' => array(
+				array( 'name' => 'PMA_ABSOLUTE_URI=http://${VIRTUAL_HOST}/ee-admin/pma/' ),
+			),
+		);
+		$phpmyadmin['labels']       = array(
+			'label' => array(
+				array( 'name' => 'traefik.port=80' ),
+				array( 'name' => 'traefik.enable=true' ),
+				array( 'name' => 'traefik.protocol=http' ),
+				array( 'name' => "traefik.frontend.entryPoints=$frontend_entrypoints" ),
+				array( 'name' => 'traefik.frontend.redirect.entryPoint=https' ),
+				array( 'name' => 'traefik.frontend.rule=Host:${VIRTUAL_HOST};PathPrefixStrip:/ee-admin/pma/' ),
+			),
+		);
+
+		$phpmyadmin['networks'] = $network_default;
+
 		// mailhog configuration.
 		$mail['service_name'] = array( 'name' => 'mail' );
 		$mail['image']        = array( 'name' => 'easyengine/mail' );
 		$mail['restart']      = $restart_default;
 		$mail['command']      = array( 'name' => '["-invite-jim=false"]' );
-		$mail['environment']  = array( 'env' => array( array( 'name' => 'VIRTUAL_HOST=mail.${VIRTUAL_HOST}' ), array( 'name' => 'VIRTUAL_PORT=8025' ) ) );
-		$mail['networks']     = $network_default;
+		$mail['labels']       = array(
+			'label' => array(
+				array( 'name' => 'traefik.port=8025' ),
+				array( 'name' => 'traefik.enable=true' ),
+				array( 'name' => 'traefik.protocol=http' ),
+				array( 'name' => "traefik.frontend.entryPoints=$frontend_entrypoints" ),
+				array( 'name' => 'traefik.frontend.redirect.entryPoint=https' ),
+				array( 'name' => 'traefik.frontend.rule=Host:${VIRTUAL_HOST};PathPrefixStrip:/ee-admin/mailhog/' ),
+			),
+		);
+
+		$mail['networks'] = $network_default;
 
 		// redis configuration.
 		$redis['service_name'] = array( 'name' => 'redis' );
@@ -84,18 +138,50 @@ class Site_Docker {
 			$base[] = $redis;
 		}
 
-		$base[]  = $db;
-		$base[]  = $php;
-		$base[]  = $nginx;
-		$base[]  = $mail;
-		$base[]  = $phpmyadmin;
+		$base[] = $db;
+		$base[] = $php;
+		$base[] = $nginx;
+		$base[] = $mail;
+		$base[] = $phpmyadmin;
+
 		$binding = array(
 			'services' => $base,
 			'network'  => true,
 		);
 
-		$docker_compose_yml = mustache_render( 'vendor/easyengine/site-command/templates/docker-compose.mustache', $binding );
+		$docker_compose_yml = mustache_render( EE_ROOT . '/vendor/easyengine/site-command/templates/docker-compose.mustache', $binding );
 
 		return $docker_compose_yml;
+	}
+
+	public function generate_traefik_toml() {
+		$tb     = new TomlBuilder();
+		$result = $tb->addComment( 'Traefik Configuration' )
+			->addValue( 'defaultEntryPoints', array( 'http', 'https' ) )
+			->addValue( 'InsecureSkipVerify', true )
+			->addValue( 'logLevel', 'DEBUG' )
+			->addTable( 'entryPoints' )
+			->addTable( 'entryPoints.traefik' )
+			->addValue( 'address', ':8080' )
+			->addTable( 'entryPoints.traefik.auth.basic' )
+			->addValue( 'users', array( 'easyengine:$apr1$CSR8Nxt6$h/Mid6X/vb6ozs4lrXrcw1' ) )
+			->addTable( 'entryPoints.http' )
+			->addValue( 'address', ':80' )
+			->addTable( 'entryPoints.https' )
+			->addValue( 'address', ':443' )
+			->addTable( 'api' )
+			->addValue( 'entryPoint', 'traefik' )
+			->addValue( 'dashboard', true )
+			->addValue( 'debug', true )
+			->addTable( 'docker' )
+			->addValue( 'domain', 'docker.local' )
+			->addValue( 'watch', true )
+			->addValue( 'exposedByDefault', false )
+			->addTable( 'file' )
+			->addValue( 'directory', '/etc/traefik/endpoints/' )
+			->addValue( 'watch', true )
+			->getTomlString();
+
+		return $result;
 	}
 }
