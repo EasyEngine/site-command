@@ -134,7 +134,7 @@ server {
 	location = /robots.txt {
 	# Some WordPress plugin gererate robots.txt file
 	# Refer #340 issue
-	return 200 'User-agent: *\nDisallow: /';
+		try_files $uri $uri/ /index.php?$args;
 		access_log off;
 		log_not_found off;
 	}
@@ -175,7 +175,7 @@ server {
 		fastcgi_pass php:9000;
 	}
 	location ~*  \.(css|js)$ {
-		expires 5s;
+		expires 1d;
 		add_header Cache-Control "public, must-revalidate";
 	}
 

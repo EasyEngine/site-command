@@ -291,6 +291,7 @@ class Site_Command extends EE_Command {
 		$site_docker_yml         = $this->site_root . '/docker-compose.yml';
 		$site_conf_env           = $this->site_root . '/.env';
 		$site_nginx_default_conf = $site_conf_dir . '/nginx/default.conf';
+		$site_php_ini            = $site_conf_dir . '/php-fpm/php.ini';
 		$server_name             = ( 'wpsubdom' === $this->site_type ) ? "$this->site_name *.$this->site_name" : $this->site_name;
 		$process_user            = posix_getpwuid( posix_geteuid() );
 
@@ -318,14 +319,16 @@ class Site_Command extends EE_Command {
 			'group_id'       => $process_user['gid'],
 		];
 		$env_content            = \EE\Utils\mustache_render( EE_CONFIG_TEMPLATE_ROOT . '/.env.mustache', $env_data );
+		$php_ini_content        = \EE\Utils\mustache_render( EE_CONFIG_TEMPLATE_ROOT . '/php-fpm/php.ini.mustache', [] );
 
 		try {
-			if ( ! ( \EE\Utils\copy_recursive( EE_CONFIG_TEMPLATE_ROOT, $site_conf_dir )
-				&& file_put_contents( $site_docker_yml, $docker_compose_content )
-				&& file_put_contents( $site_nginx_default_conf, $default_conf_content )
-				&& file_put_contents( $site_nginx_default_conf, $default_conf_content )
+			if ( ! ( file_put_contents( $site_docker_yml, $docker_compose_content )
 				&& file_put_contents( $site_conf_env, $env_content )
-				&& unlink( $site_conf_dir . '/default.conf.mustache' ) ) ) {
+				&& mkdir( $site_conf_dir )
+				&& mkdir( $site_conf_dir . '/nginx' )
+				&& file_put_contents( $site_nginx_default_conf, $default_conf_content )
+				&& mkdir( $site_conf_dir . '/php-fpm' )
+				&& file_put_contents( $site_php_ini, $php_ini_content ) ) ) {
 				throw new Exception( 'Could not copy configuration files.' );
 			}
 			EE::success( 'Configuration files copied.' );
