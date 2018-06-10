@@ -75,7 +75,6 @@ class Site_Docker {
 				array( 'name' => 'traefik.protocol=http' ),
 				array( 'name' => 'traefik.docker.network=site-network' ),
 				array( 'name' => "traefik.frontend.entryPoints=$frontend_entrypoints" ),
-				array( 'name' => 'traefik.frontend.redirect.entryPoint=https' ),
 				array( 'name' => "traefik.frontend.rule=Host:$v_host" ),
 			),
 		);
@@ -104,7 +103,6 @@ class Site_Docker {
 				array( 'name' => 'traefik.enable=true' ),
 				array( 'name' => 'traefik.protocol=http' ),
 				array( 'name' => "traefik.frontend.entryPoints=$frontend_entrypoints" ),
-				array( 'name' => 'traefik.frontend.redirect.entryPoint=https' ),
 				array( 'name' => 'traefik.frontend.rule=Host:${VIRTUAL_HOST};PathPrefixStrip:/ee-admin/pma/' ),
 			),
 		);
@@ -122,7 +120,6 @@ class Site_Docker {
 				array( 'name' => 'traefik.enable=true' ),
 				array( 'name' => 'traefik.protocol=http' ),
 				array( 'name' => "traefik.frontend.entryPoints=$frontend_entrypoints" ),
-				array( 'name' => 'traefik.frontend.redirect.entryPoint=https' ),
 				array( 'name' => 'traefik.frontend.rule=Host:${VIRTUAL_HOST};PathPrefixStrip:/ee-admin/mailhog/' ),
 			),
 		);
