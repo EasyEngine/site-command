@@ -95,7 +95,9 @@ class Site_Command extends EE_Command {
 		$this->site_title   = \EE\Utils\get_flag_value( $assoc_args, 'title', $this->site_name );
 		$this->site_user    = \EE\Utils\get_flag_value( $assoc_args, 'user', 'admin' );
 		$this->site_pass    = \EE\Utils\get_flag_value( $assoc_args, 'pass', \EE\Utils\random_password() );
+		$this->db_name      = str_replace('-', '_', str_replace('.', '_', $this->site_name));
 		$this->db_pass      = \EE\Utils\random_password();
+		$this->db_root_pass = \EE\Utils\random_password();
 		$this->site_email   = \EE\Utils\get_flag_value( $assoc_args, 'email', strtolower( 'mail@' . $this->site_name ) );
 		$this->skip_install = \EE\Utils\get_flag_value( $assoc_args, 'skip-install' );
 
@@ -242,6 +244,8 @@ class Site_Command extends EE_Command {
 			array( 'Access phpMyAdmin', $prefix . $this->site_name . '/ee-admin/pma/' ),
 			array( 'Access mail', $prefix . $this->site_name . '/ee-admin/mailhog/' ),
 			array( 'Site Title', $this->site_title ),
+			array( 'DB Root Password', $this->db_root_pass ),
+			array( 'DB Name', $this->db_name ),
 			array( 'DB Password', $this->db_pass ),
 			array( 'E-Mail', $this->site_email ),
 			array( 'Cache Type', $this->cache_type ),
@@ -326,9 +330,9 @@ class Site_Command extends EE_Command {
 		$default_conf_content   = $this->generate_default_conf( $this->site_type, $this->cache_type, $server_name );
 		$env_data = [
 			'virtual_host'   => $this->site_name,
-			'root_password'  => $this->db_pass,
-			'mysql_database' => 'wordpress',
-			'mysql_user'     => 'wordpress',
+			'root_password'  => $this->db_root_pass,
+			'database_name'  => $this->db_name,
+			'database_user'  => 'wordpress',
 			'user_password'  => $this->db_pass,
 			'wp_db_host'     => 'db',
 			'user_id'        => $process_user['uid'],
