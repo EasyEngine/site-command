@@ -27,7 +27,11 @@ class Site_Command extends EE_Command {
 	private $level;
 	private $logger;
 	private $le;
+	private $db_name;
+	private $db_user;
+	private $db_root_pass;
 	private $db_pass;
+	private $locale;
 	private $skip_install;
 
 	public function __construct() {
@@ -66,19 +70,53 @@ class Site_Command extends EE_Command {
 	 * [--title=<title>]
 	 * : Title of your site.
 	 *
-	 * [--user=<username>]
+	 * [--admin_user=<admin_user>]
 	 * : Username of the administrator.
 	 *
-	 *  [--pass=<password>]
+	 *  [--admin_pass=<admin_pass>]
 	 * : Password for the the administrator.
 	 *
-	 * [--email=<email>]
+	 * [--admin_email=<admin_email>]
 	 * : E-Mail of the administrator.
+	 *
+	 * [--dbname=<dbname>]
+	 * : Set the database name.
+	 * ---
+	 * default: wordpress
+	 * ---
+	 *
+	 * [--dbuser=<dbuser>]
+	 * : Set the database user.
+	 * ---
+	 *  default: wordpress
+	 * ---
+	 *
+	 * [--dbprefix=<dbprefix>]
+	 * : Set the database table prefix.
+	 *
+	 * [--dbcharset=<dbcharset>]
+	 * : Set the database charset.
+	 * ---
+	 * default: utf8
+	 * ---
+	 *
+	 * [--dbcollate=<dbcollate>]
+	 * : Set the database collation.
+	 *
+	 * [--skip-check]
+	 * : If set, the database connection is not checked.
+	 *
+	 * [--version=<version>]
+	 * : Select which wordpress version you want to download. Accepts a version number, ‘latest’ or ‘nightly’.
+	 *
+	 * [--skip-content]
+	 * : Download WP without the default themes and plugins.
 	 *
 	 * [--skip-install]
 	 * : Skips wp-core install.
 	 */
 	public function create( $args, $assoc_args ) {
+
 		\EE\Utils\delem_log( 'site create start' );
 		EE::warning( 'This is a beta version. Please don\'t use it in production.' );
 		$this->logger->debug( 'args:', $args );
@@ -89,16 +127,19 @@ class Site_Command extends EE_Command {
 			EE::error( 'Invalid arguments' );
 		}
 
-		$this->proxy_type   = 'ee_traefik';
-		$this->cache_type   = ! empty( $assoc_args['wpredis'] ) ? 'wpredis' : 'none';
-		$this->le           = ! empty( $assoc_args['letsencrypt'] ) ? 'le' : false;
-		$this->site_title   = \EE\Utils\get_flag_value( $assoc_args, 'title', $this->site_name );
-		$this->site_user    = \EE\Utils\get_flag_value( $assoc_args, 'user', 'admin' );
-		$this->site_pass    = \EE\Utils\get_flag_value( $assoc_args, 'pass', \EE\Utils\random_password() );
-		$this->db_name      = str_replace('-', '_', str_replace('.', '_', $this->site_name));
-		$this->db_pass      = \EE\Utils\random_password();
+		$this->proxy_type = 'ee_traefik';
+		$this->cache_type = ! empty( $assoc_args['wpredis'] ) ? 'wpredis' : 'none';
+		$this->le         = ! empty( $assoc_args['letsencrypt'] ) ? 'le' : false;
+		$this->site_title = \EE\Utils\get_flag_value( $assoc_args, 'title', $this->site_name );
+		$this->site_user  = \EE\Utils\get_flag_value( $assoc_args, 'admin_user', 'admin' );
+		$this->site_pass  = \EE\Utils\get_flag_value( $assoc_args, 'admin_pass', \EE\Utils\random_password() );
+		$this->db_name    = str_replace( '-', '_', str_replace( '.', '_', $this->site_name ) );
+		$this->db_user    = \EE\Utils\get_flag_value( $assoc_args, 'dbuser', 'wordpress' );
+		$this->db_pass    = \EE\Utils\get_flag_value( $assoc_args, 'dbpass', \EE\Utils\random_password() );
+		$this->locale     = \EE\Utils\get_flag_value( $assoc_args, 'locale', EE::get_config( 'locale' ) );
+
 		$this->db_root_pass = \EE\Utils\random_password();
-		$this->site_email   = \EE\Utils\get_flag_value( $assoc_args, 'email', strtolower( 'mail@' . $this->site_name ) );
+		$this->site_email   = \EE\Utils\get_flag_value( $assoc_args, 'admin_email', strtolower( 'mail@' . $this->site_name ) );
 		$this->skip_install = \EE\Utils\get_flag_value( $assoc_args, 'skip-install' );
 
 		$this->init_checks();
@@ -106,7 +147,7 @@ class Site_Command extends EE_Command {
 		EE::log( 'Configuring project...' );
 
 		$this->configure_site();
-		$this->create_site();
+		$this->create_site( $assoc_args );
 		\EE\Utils\delem_log( 'site create end' );
 	}
 
@@ -158,7 +199,7 @@ class Site_Command extends EE_Command {
 		EE::log( "List of $type Sites:\n" );
 		foreach ( $sites as $site ) {
 			if ( 2 === $check || $check === $site['is_enabled'] ) {
-				EE::log( ' - ' . $site['sitename'] );
+				EE::log( $site['sitename'] );
 				$count ++;
 			}
 		}
@@ -246,6 +287,7 @@ class Site_Command extends EE_Command {
 			array( 'Site Title', $this->site_title ),
 			array( 'DB Root Password', $this->db_root_pass ),
 			array( 'DB Name', $this->db_name ),
+			array( 'DB User', $this->db_user ),
 			array( 'DB Password', $this->db_pass ),
 			array( 'E-Mail', $this->site_email ),
 			array( 'Cache Type', $this->cache_type ),
@@ -328,15 +370,15 @@ class Site_Command extends EE_Command {
 		$site_docker            = new Site_Docker();
 		$docker_compose_content = $site_docker->generate_docker_compose_yml( $filter );
 		$default_conf_content   = $this->generate_default_conf( $this->site_type, $this->cache_type, $server_name );
-		$env_data = [
-			'virtual_host'   => $this->site_name,
-			'root_password'  => $this->db_root_pass,
-			'database_name'  => $this->db_name,
-			'database_user'  => 'wordpress',
-			'user_password'  => $this->db_pass,
-			'wp_db_host'     => 'db',
-			'user_id'        => $process_user['uid'],
-			'group_id'       => $process_user['gid'],
+		$env_data               = [
+			'virtual_host'  => $this->site_name,
+			'root_password' => $this->db_root_pass,
+			'database_name' => $this->db_name,
+			'database_user' => 'wordpress',
+			'user_password' => $this->db_pass,
+			'wp_db_host'    => 'db',
+			'user_id'       => $process_user['uid'],
+			'group_id'      => $process_user['gid'],
 		];
 		$env_content            = \EE\Utils\mustache_render( EE_CONFIG_TEMPLATE_ROOT . '/.env.mustache', $env_data );
 		$php_ini_content        = \EE\Utils\mustache_render( EE_CONFIG_TEMPLATE_ROOT . '/php-fpm/php.ini.mustache', [] );
@@ -366,11 +408,11 @@ class Site_Command extends EE_Command {
 	 * @param string $server_name Name of server to use in virtual_host
 	 */
 	private function generate_default_conf( $site_type, $cache_type, $server_name ) {
-		$default_conf_data['site_type']                    = $site_type;
-		$default_conf_data['server_name']                  = $server_name;
-		$default_conf_data['include_php_conf']             = $cache_type !== 'wpredis';
-		$default_conf_data['include_wpsubdir_conf']        = $site_type === 'wpsubdir';
-		$default_conf_data['include_redis_conf']           = $cache_type === 'wpredis';
+		$default_conf_data['site_type']             = $site_type;
+		$default_conf_data['server_name']           = $server_name;
+		$default_conf_data['include_php_conf']      = $cache_type !== 'wpredis';
+		$default_conf_data['include_wpsubdir_conf'] = $site_type === 'wpsubdir';
+		$default_conf_data['include_redis_conf']    = $cache_type === 'wpredis';
 
 		return \EE\Utils\mustache_render( EE_CONFIG_TEMPLATE_ROOT . '/nginx/default.conf.mustache', $default_conf_data );
 	}
@@ -408,7 +450,7 @@ class Site_Command extends EE_Command {
 	/**
 	 * Function to create the site.
 	 */
-	private function create_site() {
+	private function create_site( $assoc_args ) {
 
 		$this->setup_site_network();
 		$this->level = 3;
@@ -420,6 +462,9 @@ class Site_Command extends EE_Command {
 		catch ( Exception $e ) {
 			$this->catch_clean( $e );
 		}
+
+		$this->wp_download_and_config( $assoc_args );
+
 		if ( ! $this->skip_install ) {
 			$this->create_etc_hosts_entry();
 			$this->site_status_check();
@@ -538,6 +583,47 @@ class Site_Command extends EE_Command {
 		}
 	}
 
+	private function wp_download_and_config( $assoc_args ) {
+		$core_download_args = array(
+			'version',
+			'skip-content',
+		);
+
+		$config_args = array(
+			'dbprefix',
+			'dbcharset',
+			'dbcollate',
+			'skip-check',
+		);
+
+		$core_download_arguments = '';
+		if ( ! empty( $assoc_args ) ) {
+			foreach ( $assoc_args as $key => $value ) {
+				if ( in_array( $key, $core_download_args, true ) ) {
+					$core_download_arguments .= ' --' . $key . '=' . $value;
+				}
+			}
+		}
+
+		$config_arguments = '';
+		if ( ! empty( $assoc_args ) ) {
+			foreach ( $assoc_args as $key => $value ) {
+				if ( in_array( $key, $config_args, true ) ) {
+					$config_arguments .= ' --' . $key . '=' . $value;
+				}
+			}
+		}
+
+		$core_download_command = "docker-compose exec --user='www-data' php wp core download --locale='" . $this->locale . "' " . $core_download_arguments;
+		EE::debug( 'COMMAND: ' . $core_download_command );
+		EE::debug( 'STDOUT: ' . shell_exec( $core_download_command ) );
+
+		$install_command = "docker-compose exec --user='www-data' php wp config create --dbuser='" . $this->db_user . "' --dbname='" . $this->db_name . "' --dbpass='" . $this->db_pass . "' --dbhost='db' " . $config_arguments;
+		EE::debug( 'COMMAND: ' . $install_command );
+		EE::debug( 'STDOUT: ' . shell_exec( $install_command ) );
+
+	}
+
 	/**
 	 * Function to create entry in /etc/hosts.
 	 */
@@ -584,15 +670,18 @@ class Site_Command extends EE_Command {
 	 */
 	private function create_site_db_entry() {
 		$data = array(
-			'sitename'    => $this->site_name,
-			'site_type'   => $this->site_type,
-			'site_title'  => $this->site_title,
-			'proxy_type'  => $this->proxy_type,
-			'cache_type'  => $this->cache_type,
-			'site_path'   => $this->site_root,
-			'db_password' => $this->db_pass,
-			'email'       => $this->site_email,
-			'created_on'  => date( 'Y-m-d H:i:s', time() ),
+			'sitename'         => $this->site_name,
+			'site_type'        => $this->site_type,
+			'site_title'       => $this->site_title,
+			'proxy_type'       => $this->proxy_type,
+			'cache_type'       => $this->cache_type,
+			'site_path'        => $this->site_root,
+			'db_name'          => $this->db_name,
+			'db_user'          => $this->db_user,
+			'db_password'      => $this->db_pass,
+			'db_root_password' => $this->db_root_pass,
+			'email'            => $this->site_email,
+			'created_on'       => date( 'Y-m-d H:i:s', time() ),
 		);
 
 		if ( ! $this->skip_install ) {
@@ -621,19 +710,22 @@ class Site_Command extends EE_Command {
 
 		if ( $this->db::site_in_db( $this->site_name ) ) {
 
-			$data = array( 'site_type', 'site_title', 'proxy_type', 'cache_type', 'site_path', 'db_password', 'wp_user', 'wp_pass', 'email' );
+			$data = array( 'site_type', 'site_title', 'proxy_type', 'cache_type', 'site_path', 'db_name', 'db_user', 'db_password', 'db_root_password', 'wp_user', 'wp_pass', 'email' );
 
 			$db_select = $this->db::select( $data, array( 'sitename' => $this->site_name ) );
 
-			$this->site_type  = $db_select[0]['site_type'];
-			$this->site_title = $db_select[0]['site_title'];
-			$this->proxy_type = $db_select[0]['proxy_type'];
-			$this->cache_type = $db_select[0]['cache_type'];
-			$this->site_root  = $db_select[0]['site_path'];
-			$this->db_pass    = $db_select[0]['db_password'];
-			$this->site_user  = $db_select[0]['wp_user'];
-			$this->site_pass  = $db_select[0]['wp_pass'];
-			$this->site_email = $db_select[0]['email'];
+			$this->site_type    = $db_select[0]['site_type'];
+			$this->site_title   = $db_select[0]['site_title'];
+			$this->proxy_type   = $db_select[0]['proxy_type'];
+			$this->cache_type   = $db_select[0]['cache_type'];
+			$this->site_root    = $db_select[0]['site_path'];
+			$this->db_user      = $db_select[0]['db_user'];
+			$this->db_name      = $db_select[0]['db_name'];
+			$this->db_pass      = $db_select[0]['db_password'];
+			$this->db_root_pass = $db_select[0]['db_root_password'];
+			$this->site_user    = $db_select[0]['wp_user'];
+			$this->site_pass    = $db_select[0]['wp_pass'];
+			$this->site_email   = $db_select[0]['email'];
 
 		} else {
 			EE::error( "Site $this->site_name does not exist." );
