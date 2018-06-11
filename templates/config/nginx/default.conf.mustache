@@ -37,14 +37,14 @@ server {
 	location /redis-fetch {
 		internal  ;
 		set  $redis_key $args;
-		redis_pass  ee_redis:6379;
+		redis_pass  redis:6379;
 	}
 	location /redis-store {
 		internal  ;
 		set_unescape_uri $key $arg_key ;
 		redis2_query  set $key $echo_request_body;
 		redis2_query expire $key 14400;
-		redis2_pass  ee_redis:6379;
+		redis2_pass  redis:6379;
 	}
 
 	location ~ \.php$ {
