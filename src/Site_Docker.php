@@ -154,7 +154,7 @@ class Site_Docker {
 	public function generate_traefik_toml() {
 		$tb     = new TomlBuilder();
 		$result = $tb->addComment( 'Traefik Configuration' )
-			->addValue( 'defaultEntryPoints', array( 'http', 'https' ) )
+			->addValue( 'defaultEntryPoints', array( 'http' ) )
 			->addValue( 'InsecureSkipVerify', true )
 			->addValue( 'logLevel', 'DEBUG' )
 			->addTable( 'entryPoints' )
@@ -164,8 +164,6 @@ class Site_Docker {
 			->addValue( 'users', array( 'easyengine:$apr1$CSR8Nxt6$h/Mid6X/vb6ozs4lrXrcw1' ) )
 			->addTable( 'entryPoints.http' )
 			->addValue( 'address', ':80' )
-			->addTable( 'entryPoints.https' )
-			->addValue( 'address', ':443' )
 			->addTable( 'api' )
 			->addValue( 'entryPoint', 'traefik' )
 			->addValue( 'dashboard', true )
