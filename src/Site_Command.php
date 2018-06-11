@@ -148,7 +148,7 @@ class Site_Command extends EE_Command {
 
 		$this->init_checks();
 
-		EE::log( 'Configuring project...' );
+		EE::log( 'Configuring project.' );
 
 		$this->configure_site();
 		$this->create_site( $assoc_args );
@@ -241,7 +241,7 @@ class Site_Command extends EE_Command {
 		\EE\Utils\delem_log( 'site enable start' );
 		$args = \EE\Utils\set_site_arg( $args, 'site enable' );
 		$this->populate_site_info( $args );
-		EE::log( "Enabling site $this->site_name..." );
+		EE::log( "Enabling site $this->site_name." );
 		if ( $this->docker::docker_compose_up( $this->site_root ) ) {
 			$this->db::update( [ 'is_enabled' => '1' ], [ 'sitename' => $this->site_name ] );
 			EE::success( "Site $this->site_name enabled." );
@@ -263,7 +263,7 @@ class Site_Command extends EE_Command {
 		\EE\Utils\delem_log( 'site disable start' );
 		$args = \EE\Utils\set_site_arg( $args, 'site disable' );
 		$this->populate_site_info( $args );
-		EE::log( "Disabling site $this->site_name..." );
+		EE::log( "Disabling site $this->site_name." );
 		if ( $this->docker::docker_compose_down( $this->site_root ) ) {
 			$this->db::update( [ 'is_enabled' => '0' ], [ 'sitename' => $this->site_name ] );
 			EE::success( "Site $this->site_name disabled." );
@@ -366,8 +366,8 @@ class Site_Command extends EE_Command {
 			EE::error( "Webroot directory for site $this->site_name already exists." );
 		}
 
-		EE::log( "Creating WordPress site $this->site_name..." );
-		EE::log( 'Copying configuration files...' );
+		EE::log( "Creating WordPress site $this->site_name." );
+		EE::log( 'Copying configuration files.' );
 
 		$filter                 = array();
 		$filter[]               = $this->site_type;
@@ -461,6 +461,10 @@ class Site_Command extends EE_Command {
 		$this->setup_site_network();
 		$this->level = 3;
 		try {
+			EE::log( 'Pulling latest images. This may take some time.' );
+			chdir( $this->site_root );
+			\EE\Utils\default_launch( 'docker-compose pull' );
+			EE::log( 'Running docker-compose.' );
 			if ( ! $this->docker::docker_compose_up( $this->site_root ) ) {
 				throw new Exception( 'There was some error in docker-compose up.' );
 			}
@@ -620,6 +624,8 @@ class Site_Command extends EE_Command {
 			}
 		}
 
+		EE::log( 'Downloading and configuring WordPress.' );
+
 		$chown_command = "docker-compose exec php chown -R www-data: /var/www/";
 		EE::debug( 'COMMAND: ' . $chown_command );
 		EE::debug( 'STDOUT: ' . shell_exec( $chown_command ) );
@@ -657,7 +663,7 @@ class Site_Command extends EE_Command {
 	 * Install wordpress with given credentials.
 	 */
 	private function install_wp() {
-		EE::log( "\nInstalling WordPress site..." );
+		EE::log( "\nInstalling WordPress site." );
 		chdir( $this->site_root );
 		$install_command = "docker-compose exec --user='www-data' php wp core install --url='" . $this->site_name . "' --title='" . $this->site_title . "' --admin_user='" . $this->site_user . "'" . ( ! $this->site_pass ? "" : " --admin_password='" . $this->site_pass . "'" ) . " --admin_email='" . $this->site_email . "'";
 
@@ -750,7 +756,7 @@ class Site_Command extends EE_Command {
 	private function catch_clean( $e ) {
 		\EE\Utils\delem_log( 'site cleanup start' );
 		EE::warning( $e->getMessage() );
-		EE::warning( 'Initiating clean-up...' );
+		EE::warning( 'Initiating clean-up.' );
 		$this->delete_site();
 		\EE\Utils\delem_log( 'site cleanup end' );
 		exit;
@@ -775,7 +781,7 @@ class Site_Command extends EE_Command {
 		$error = error_get_last();
 		if ( isset( $error ) ) {
 			if ( $error['type'] === E_ERROR ) {
-				EE::warning( 'An Error occurred. Initiating clean-up...' );
+				EE::warning( 'An Error occurred. Initiating clean-up.' );
 				$this->logger->error( 'Type: ' . $error['type'] );
 				$this->logger->error( 'Message: ' . $error['message'] );
 				$this->logger->error( 'File: ' . $error['file'] );
