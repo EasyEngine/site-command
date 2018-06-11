@@ -616,13 +616,17 @@ class Site_Command extends EE_Command {
 			}
 		}
 
+		$chown_command = "docker-compose exec php chown -R www-data: /var/www/";
+		EE::debug( 'COMMAND: ' . $chown_command );
+		EE::debug( 'STDOUT: ' . shell_exec( $chown_command ) );
+
 		$core_download_command = "docker-compose exec --user='www-data' php wp core download --locale='" . $this->locale . "' " . $core_download_arguments;
 		EE::debug( 'COMMAND: ' . $core_download_command );
 		EE::debug( 'STDOUT: ' . shell_exec( $core_download_command ) );
 
-		$install_command = "docker-compose exec --user='www-data' php wp config create --dbuser='" . $this->db_user . "' --dbname='" . $this->db_name . "' --dbpass='" . $this->db_pass . "' --dbhost='db' " . $config_arguments;
-		EE::debug( 'COMMAND: ' . $install_command );
-		EE::debug( 'STDOUT: ' . shell_exec( $install_command ) );
+		$wp_config_create_command = "docker-compose exec --user='www-data' php wp config create --dbuser='" . $this->db_user . "' --dbname='" . $this->db_name . "' --dbpass='" . $this->db_pass . "' --dbhost='db' " . $config_arguments;
+		EE::debug( 'COMMAND: ' . $wp_config_create_command );
+		EE::debug( 'STDOUT: ' . shell_exec( $wp_config_create_command ) );
 
 	}
 
