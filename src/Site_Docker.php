@@ -66,7 +66,7 @@ class Site_Docker {
 		$nginx['image']        = array( 'name' => 'easyengine/nginx' );
 		$nginx['depends_on']   = array( 'name' => 'php' );
 		$nginx['restart']      = $restart_default;
-		$v_host                = in_array( 'wpsubdom', $filters ) ? 'VIRTUAL_HOST=${VIRTUAL_HOST},HostRegexp:{subdomain:.+}.${VIRTUAL_HOST}' : '${VIRTUAL_HOST}';
+		$v_host                = in_array( 'wpsubdom', $filters ) ? 'HostRegexp:{subdomain:.+}.${VIRTUAL_HOST},${VIRTUAL_HOST}' : 'Host:${VIRTUAL_HOST}';
 
 		$nginx['labels']  = array(
 			'label' => array(
@@ -75,7 +75,7 @@ class Site_Docker {
 				array( 'name' => 'traefik.protocol=http' ),
 				array( 'name' => 'traefik.docker.network=site-network' ),
 				array( 'name' => "traefik.frontend.entryPoints=$frontend_entrypoints" ),
-				array( 'name' => "traefik.frontend.rule=Host:$v_host" ),
+				array( 'name' => "traefik.frontend.rule=$v_host" ),
 			),
 		);
 		$nginx['volumes'] = array(
