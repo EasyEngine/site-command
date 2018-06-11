@@ -277,8 +277,8 @@ class Site_Command extends EE_Command {
 	 */
 	public function info( $args ) {
 		\EE\Utils\delem_log( 'site info start' );
-		$args = \EE\Utils\set_site_arg( $args, 'site info' );
 		if ( ! isset( $this->site_name ) ) {
+			$args = \EE\Utils\set_site_arg( $args, 'site info' );
 			$this->populate_site_info( $args );
 		}
 		EE::log( "Details for site $this->site_name:" );
