@@ -252,7 +252,7 @@ class Site_Command extends EE_Command {
 	 *
 	 * ## OPTIONS
 	 *
-	 * <site-name>
+	 * [<site-name>]
 	 * : Name of website to be disabled.
 	 */
 	public function disable( $args ) {
@@ -272,7 +272,7 @@ class Site_Command extends EE_Command {
 	/**
 	 * Display all the relevant site information, credentials and useful links.
 	 *
-	 * <site-name>
+	 * [<site-name>]
 	 * : Name of the website whose info is required.
 	 */
 	public function info( $args ) {
