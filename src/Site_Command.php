@@ -230,11 +230,12 @@ class Site_Command extends EE_Command {
 	 *
 	 * ## OPTIONS
 	 *
-	 * <site-name>
+	 * [<site-name>]
 	 * : Name of website to be enabled.
 	 */
 	public function enable( $args ) {
 		\EE\Utils\delem_log( 'site enable start' );
+		$args = \EE\Utils\set_site_arg( $args, 'site enable' );
 		$this->populate_site_info( $args );
 		EE::log( "Enabling site $this->site_name..." );
 		if ( $this->docker::docker_compose_up( $this->site_root ) ) {
@@ -256,6 +257,7 @@ class Site_Command extends EE_Command {
 	 */
 	public function disable( $args ) {
 		\EE\Utils\delem_log( 'site disable start' );
+		$args = \EE\Utils\set_site_arg( $args, 'site disable' );
 		$this->populate_site_info( $args );
 		EE::log( "Disabling site $this->site_name..." );
 		if ( $this->docker::docker_compose_down( $this->site_root ) ) {
@@ -275,7 +277,7 @@ class Site_Command extends EE_Command {
 	 */
 	public function info( $args ) {
 		\EE\Utils\delem_log( 'site info start' );
-
+		$args = \EE\Utils\set_site_arg( $args, 'site info' );
 		if ( ! isset( $this->site_name ) ) {
 			$this->populate_site_info( $args );
 		}
