@@ -127,6 +127,10 @@ class Site_Command extends EE_Command {
 			EE::error( 'Invalid arguments' );
 		}
 
+		if ( $this->db::site_in_db( $this->site_name ) ) {
+			EE::error( "Site $this->site_name already exists. If you want to re-create it please delete the older one using:\n`ee site delete $this->site_name`" );
+		}
+
 		$this->proxy_type = 'ee_traefik';
 		$this->cache_type = ! empty( $assoc_args['wpredis'] ) ? 'wpredis' : 'none';
 		$this->le         = ! empty( $assoc_args['letsencrypt'] ) ? 'le' : false;
