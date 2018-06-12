@@ -164,53 +164,53 @@ class Site_Command extends EE_Command {
 	 * [--disabled]
 	 * : List only disabled sites.
 	 *
+	 * [--format=<format>]
+	 * : Render output in a particular format.
+	 * ---
+	 * default: table
+	 * options:
+	 *   - table
+	 *   - csv
+	 *   - yaml
+	 *   - json
+	 *   - count
+	 * ---
+	 *
 	 * @subcommand list
 	 */
 	public function _list( $args, $assoc_args ) {
 		\EE\Utils\delem_log( 'site list start' );
 
+		$format   = \EE\Utils\get_flag_value( $assoc_args, 'format' );
 		$enabled  = \EE\Utils\get_flag_value( $assoc_args, 'enabled' );
 		$disabled = \EE\Utils\get_flag_value( $assoc_args, 'disabled' );
 
-		$sites = $this->db::select( array( 'sitename', 'is_enabled' ) );
+		$where = array();
 
-		if ( $sites ) {
-			if ( $enabled || $disabled ) {
-				if ( $enabled ) {
-					$this->list_print( $sites, 'enabled', 1 );
-				}
-				if ( $disabled ) {
-					$this->list_print( $sites, 'disabled', 0 );
-				}
-			} else {
-				$this->list_print( $sites, 'all', 2 );
-			}
-		} else {
-			EE::log( 'No sites found. Go create some!' );
+		if( $enabled ) {
+			$where['is_enabled'] = 1;
 		}
+
+		else if( $disabled ) {
+			$where['is_enabled'] = 0;
+		}
+
+		$sites = $this->db::select( array( 'sitename', 'is_enabled' ), $where );
+
+		if( ! $sites ) {
+			$sites = [];
+		}
+
+		$result = array_map( function( $site ) {
+			$site['site']   = $site['sitename'] ;
+			$site['status'] = $site['is_enabled'] ? 'enabled' : 'disabled' ;
+			return $site;
+		 }, $sites );
+
+		$formatter = new \EE\Formatter( $assoc_args, ['site','status'] );
+		$formatter->display_items( $result );
+
 		\EE\Utils\delem_log( 'site list end' );
-	}
-
-	/**
-	 * Print the list of sites according to parameters.
-	 *
-	 * @param array  $sites List of sites.
-	 * @param String $type  Type of site to be listed - enabled/disabled/all.
-	 * @param int    $check Enabled - 1, Disabled - 0, Both - 2.
-	 */
-	private function list_print( $sites, $type, $check ) {
-		$count = 0;
-		EE::log( "List of $type Sites:\n" );
-		foreach ( $sites as $site ) {
-			if ( 2 === $check || $check === $site['is_enabled'] ) {
-				EE::log( $site['sitename'] );
-				$count ++;
-			}
-		}
-		if ( 0 === $count ) {
-			EE::log( "No $type sites found!" );
-		}
-		EE::log( '' );
 	}
 
 	/**
