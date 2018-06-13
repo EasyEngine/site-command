@@ -37,6 +37,12 @@ services:
       - {{name}}
     {{/env}}
     {{/environment}}
+    {{#healthcheck}}
+    healthcheck:
+    {{#health}}
+      {{name}}
+    {{/health}}
+    {{/healthcheck}}
     {{#networks}}
     networks:
       - {{name}}

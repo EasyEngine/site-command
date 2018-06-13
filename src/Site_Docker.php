@@ -28,6 +28,15 @@ class Site_Docker {
 		$db['restart']      = $restart_default;
 		$db['volumes']      = array( array( 'vol' => array( 'name' => './app/db:/var/lib/mysql' ) ) );
 
+		$db['healthcheck']  = array(
+			'health' => array(
+				array( 'name' => 'test: "/etc/init.d/mysql status"' ),
+				array( 'name' => 'interval: 1s' ),
+				array( 'name' => 'start_period: 5s' ),
+				array( 'name' => 'retries: 120' ),
+			),
+		);
+
 		$db['environment'] = array(
 			'env' => array(
 				array( 'name' => 'MYSQL_ROOT_PASSWORD' ),
