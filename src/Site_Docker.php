@@ -32,7 +32,6 @@ class Site_Docker {
 			'health' => array(
 				array( 'name' => 'test: "/etc/init.d/mysql status"' ),
 				array( 'name' => 'interval: 1s' ),
-				array( 'name' => 'start_period: 5s' ),
 				array( 'name' => 'retries: 120' ),
 			),
 		);
