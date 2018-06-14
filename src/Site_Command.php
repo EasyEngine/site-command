@@ -187,11 +187,11 @@ class Site_Command extends EE_Command {
 
 		$where = array();
 
-		if( $enabled ) {
+		if( $enabled && ! $disabled ) {
 			$where['is_enabled'] = 1;
 		}
 
-		else if( $disabled ) {
+		else if( $disabled && ! $enabled ) {
 			$where['is_enabled'] = 0;
 		}
 
