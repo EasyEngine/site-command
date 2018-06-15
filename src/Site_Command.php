@@ -174,6 +174,7 @@ class Site_Command extends EE_Command {
 	 *   - yaml
 	 *   - json
 	 *   - count
+	 *   - text
 	 * ---
 	 *
 	 * @subcommand list
@@ -187,28 +188,36 @@ class Site_Command extends EE_Command {
 
 		$where = array();
 
-		if( $enabled && ! $disabled ) {
+		if ( $enabled && ! $disabled ) {
 			$where['is_enabled'] = 1;
-		}
-
-		else if( $disabled && ! $enabled ) {
+		} elseif ( $disabled && ! $enabled ) {
 			$where['is_enabled'] = 0;
 		}
 
 		$sites = $this->db::select( array( 'sitename', 'is_enabled' ), $where );
 
-		if( ! $sites ) {
-			$sites = [];
+		if ( ! $sites ) {
+			EE::error( 'No sites found!' );
+		} 
+		
+		if ( 'text' === $format ) {
+			foreach ( $sites as $site ) {
+				EE::log( $site['sitename'] );
+			}
+		} else {
+			$result = array_map(
+				function ( $site ) {
+					$site['site']   = $site['sitename'];
+					$site['status'] = $site['is_enabled'] ? 'enabled' : 'disabled';
+
+					return $site;
+				}, $sites
+			);
+
+			$formatter = new \EE\Formatter( $assoc_args, [ 'site', 'status' ] );
+
+			$formatter->display_items( $result );
 		}
-
-		$result = array_map( function( $site ) {
-			$site['site']   = $site['sitename'] ;
-			$site['status'] = $site['is_enabled'] ? 'enabled' : 'disabled' ;
-			return $site;
-		 }, $sites );
-
-		$formatter = new \EE\Formatter( $assoc_args, ['site','status'] );
-		$formatter->display_items( $result );
 
 		\EE\Utils\delem_log( 'site list end' );
 	}
