@@ -386,8 +386,8 @@ class Site_Command extends EE_Command {
 			'user_id'       => $process_user['uid'],
 			'group_id'      => $process_user['gid'],
 		];
-		$env_content            = \EE\Utils\mustache_render( EE_CONFIG_TEMPLATE_ROOT . '/.env.mustache', $env_data );
-		$php_ini_content        = \EE\Utils\mustache_render( EE_CONFIG_TEMPLATE_ROOT . '/php-fpm/php.ini.mustache', [] );
+		$env_content            = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/.env.mustache', $env_data );
+		$php_ini_content        = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/php-fpm/php.ini.mustache', [] );
 
 		try {
 			if ( ! ( file_put_contents( $site_docker_yml, $docker_compose_content )
@@ -420,7 +420,7 @@ class Site_Command extends EE_Command {
 		$default_conf_data['include_wpsubdir_conf'] = $site_type === 'wpsubdir';
 		$default_conf_data['include_redis_conf']    = $cache_type === 'wpredis';
 
-		return \EE\Utils\mustache_render( EE_CONFIG_TEMPLATE_ROOT . '/nginx/default.conf.mustache', $default_conf_data );
+		return \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx/default.conf.mustache', $default_conf_data );
 	}
 
 	/**

@@ -154,7 +154,7 @@ class Site_Docker {
 			'network'  => true,
 		);
 
-		$docker_compose_yml = mustache_render( EE_ROOT . '/vendor/easyengine/site-command/templates/docker-compose.mustache', $binding );
+		$docker_compose_yml = mustache_render( SITE_TEMPLATE_ROOT . '/docker-compose.mustache', $binding );
 
 		return $docker_compose_yml;
 	}

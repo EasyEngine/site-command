@@ -1,6 +1,6 @@
 <?php
 
-define( 'EE_CONFIG_TEMPLATE_ROOT', EE_ROOT . '/vendor/easyengine/site-command/templates/config' );
+define( 'SITE_TEMPLATE_ROOT', __DIR__ . '/templates' );
 
 if ( ! class_exists( 'EE' ) ) {
 	return;
