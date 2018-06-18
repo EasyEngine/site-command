@@ -389,6 +389,8 @@ class Site_Command extends EE_Command {
 		$server_name             = ( 'wpsubdom' === $this->site_type ) ? "$this->site_name *.$this->site_name" : $this->site_name;
 		$process_user            = posix_getpwuid( posix_geteuid() );
 
+		$this->create_site_root();
+
 		EE::log( "Creating WordPress site $this->site_name." );
 		EE::log( 'Copying configuration files.' );
 
@@ -458,13 +460,14 @@ class Site_Command extends EE_Command {
 	private function create_site_root() {
 
 		if ( is_dir( $this->site_root ) ) {
-			return false;
+			EE::error( "Webroot directory for site $this->site_name already exists." );
+		}
+
+		if ( ! \EE\Utils\default_launch( "mkdir $this->site_root" ) ) {
+			EE::error( "Cannot create directory $this->site_root. Please check for " );
 		}
 
 		try {
-			if ( ! \EE\Utils\default_launch( "mkdir $this->site_root" ) ) {
-				return false;
-			}
 			$this->level = 1;
 			$whoami      = EE::launch( "whoami", false, true );
 
