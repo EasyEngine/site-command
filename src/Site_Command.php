@@ -31,8 +31,10 @@ class Site_Command extends EE_Command {
 	private $db_user;
 	private $db_root_pass;
 	private $db_pass;
+	private $db_host;
 	private $locale;
 	private $skip_install;
+	private $force;
 
 	public function __construct() {
 		$this->level = 0;
@@ -87,8 +89,14 @@ class Site_Command extends EE_Command {
 	 *
 	 * [--dbuser=<dbuser>]
 	 * : Set the database user.
+	 *
+	 * [--dbpass=<dbpass>]
+	 * : Set the database password.
+	 *
+	 * [--dbhost=<dbhost>]
+	 * : Set the database host. Pass value only when remote dbhost is required.
 	 * ---
-	 *  default: wordpress
+	 * default: db
 	 * ---
 	 *
 	 * [--dbprefix=<dbprefix>]
@@ -114,6 +122,9 @@ class Site_Command extends EE_Command {
 	 *
 	 * [--skip-install]
 	 * : Skips wp-core install.
+	 *
+	 * [--force]
+	 * : Resets the remote database if it is not empty.
 	 */
 	public function create( $args, $assoc_args ) {
 
@@ -137,14 +148,21 @@ class Site_Command extends EE_Command {
 		$this->site_title = \EE\Utils\get_flag_value( $assoc_args, 'title', $this->site_name );
 		$this->site_user  = \EE\Utils\get_flag_value( $assoc_args, 'admin_user', 'admin' );
 		$this->site_pass  = \EE\Utils\get_flag_value( $assoc_args, 'admin_pass', \EE\Utils\random_password() );
-		$this->db_name    = str_replace( '-', '_', str_replace( '.', '_', $this->site_name ) );
-		$this->db_user    = \EE\Utils\get_flag_value( $assoc_args, 'dbuser', 'wordpress' );
-		$this->db_pass    = \EE\Utils\get_flag_value( $assoc_args, 'dbpass', \EE\Utils\random_password() );
-		$this->locale     = \EE\Utils\get_flag_value( $assoc_args, 'locale', EE::get_config( 'locale' ) );
+		$this->db_name    = str_replace( [ '.', '-' ], '_', $this->site_name );
+		$this->db_host    = \EE\Utils\get_flag_value( $assoc_args, 'dbhost' );
+		if ( 'db' !== $this->db_host ) {
+			if ( ! isset( $assoc_args['dbuser'] ) || ! isset( $assoc_args['dbpass'] ) ) {
+				EE::error( '`--dbuser` and `--dbpass` are required for remote db host.' );
+			}
+		}
 
+		$this->db_user      = \EE\Utils\get_flag_value( $assoc_args, 'dbuser', 'wordpress' );
+		$this->db_pass      = \EE\Utils\get_flag_value( $assoc_args, 'dbpass', \EE\Utils\random_password() );
+		$this->locale       = \EE\Utils\get_flag_value( $assoc_args, 'locale', EE::get_config( 'locale' ) );
 		$this->db_root_pass = \EE\Utils\random_password();
 		$this->site_email   = \EE\Utils\get_flag_value( $assoc_args, 'admin_email', strtolower( 'mail@' . $this->site_name ) );
 		$this->skip_install = \EE\Utils\get_flag_value( $assoc_args, 'skip-install' );
+		$this->force        = \EE\Utils\get_flag_value( $assoc_args, 'force' );
 
 		$this->init_checks();
 
@@ -373,16 +391,22 @@ class Site_Command extends EE_Command {
 		$filter[]               = $this->site_type;
 		$filter[]               = $this->cache_type;
 		$filter[]               = $this->le;
+		$filter[]               = $this->db_host;
 		$site_docker            = new Site_Docker();
 		$docker_compose_content = $site_docker->generate_docker_compose_yml( $filter );
 		$default_conf_content   = $this->generate_default_conf( $this->site_type, $this->cache_type, $server_name );
+		$local                  = ( 'db' === $this->db_host ) ? true : false;
 		$env_data               = [
+			'local'         => $local,
 			'virtual_host'  => $this->site_name,
 			'root_password' => $this->db_root_pass,
 			'database_name' => $this->db_name,
-			'database_user' => 'wordpress',
+			'database_user' => $this->db_user,
 			'user_password' => $this->db_pass,
-			'wp_db_host'    => 'db',
+			'wp_db_host'    => $this->db_host,
+			'wp_db_user'    => $this->db_user,
+			'wp_db_name'    => $this->db_name,
+			'wp_db_pass'    => $this->db_pass,
 			'user_id'       => $process_user['uid'],
 			'group_id'      => $process_user['gid'],
 		];
@@ -498,6 +522,15 @@ class Site_Command extends EE_Command {
 	 */
 	private function delete_site() {
 
+		if ( 'db' !== $this->db_host && $this->level >= 4 ) {
+			$delete_db_command = 'docker-compose exec php bash -c \'mysql -h$WORDPRESS_DB_HOST -u$WORDPRESS_DB_USER -p$WORDPRESS_DB_PASSWORD -e "DROP DATABASE $WORDPRESS_DB_NAME;"\'';
+			if ( \EE\Utils\default_launch( $delete_db_command ) ) {
+				EE::log( 'Database deleted.' );
+			} else {
+				EE::warning( 'Could not remove the database.' );
+			}
+		}
+
 		if ( $this->level >= 3 ) {
 			if ( $this->docker::docker_compose_down( $this->site_root ) ) {
 				EE::log( "[$this->site_name] Docker Containers removed." );
@@ -526,6 +559,7 @@ class Site_Command extends EE_Command {
 			}
 			EE::log( "[$this->site_name] site root removed." );
 		}
+
 		if ( $this->level > 4 ) {
 			if ( $this->db::delete( array( 'sitename' => $this->site_name ) ) ) {
 				EE::log( 'Removing database entry.' );
@@ -627,16 +661,45 @@ class Site_Command extends EE_Command {
 		EE::log( 'Downloading and configuring WordPress.' );
 
 		$chown_command = "docker-compose exec php chown -R www-data: /var/www/";
-		EE::debug( 'COMMAND: ' . $chown_command );
-		EE::debug( 'STDOUT: ' . shell_exec( $chown_command ) );
+		\EE\Utils\default_launch( $chown_command );
 
 		$core_download_command = "docker-compose exec --user='www-data' php wp core download --locale='" . $this->locale . "' " . $core_download_arguments;
-		EE::debug( 'COMMAND: ' . $core_download_command );
-		EE::debug( 'STDOUT: ' . shell_exec( $core_download_command ) );
+		\EE\Utils\default_launch( $core_download_command );
 
-		$wp_config_create_command = "docker-compose exec --user='www-data' php wp config create --dbuser='" . $this->db_user . "' --dbname='" . $this->db_name . "' --dbpass='" . $this->db_pass . "' --dbhost='db' " . $config_arguments;
-		EE::debug( 'COMMAND: ' . $wp_config_create_command );
-		EE::debug( 'STDOUT: ' . shell_exec( $wp_config_create_command ) );
+		$wp_config_create_command = "docker-compose exec --user='www-data' php wp config create --dbuser='" . $this->db_user . "' --dbname='" . $this->db_name . "' --dbpass='" . $this->db_pass . "' --dbhost='" . $this->db_host . "' " . $config_arguments;
+
+		if ( ! \EE\Utils\default_launch( $wp_config_create_command ) ) {
+			throw new Exception( "Could'nt connect to $this->db_host or there was issue in `wp config create`. Please check logs." );
+		}
+
+		try {
+			if ( 'db' !== $this->db_host ) {
+				$name            = str_replace( '_', '\_', $this->db_name );
+				$check_db_exists = 'docker-compose exec php bash -c \'mysqlshow -u"' . $this->db_user . '" -p"' . $this->db_pass . '" -h"' . $this->db_host . '" "' . $name . '"\'';
+
+				if ( ! \EE\Utils\default_launch( $check_db_exists ) ) {
+					EE::log( "Database `$this->db_name` does not exist. Attempting to create it." );
+					$create_db_command = 'docker-compose exec php bash -c \'mysql -h$WORDPRESS_DB_HOST -u$WORDPRESS_DB_USER -p$WORDPRESS_DB_PASSWORD -e "CREATE DATABASE $WORDPRESS_DB_NAME;"\'';
+
+					if ( ! \EE\Utils\default_launch( $create_db_command ) ) {
+						throw new Exception( "Could not create database `$this->db_name` on `$this->db_host`. Please check if you have sufficient rights or create a database and pass it on to `--dbname` parameter." );
+					}
+					$this->level = 4;
+				} else {
+					if ( $this->force ) {
+						\EE\Utils\default_launch( "docker-compose exec --user='www-data' php wp db reset --yes" );
+					}
+					$check_tables = "docker-compose exec --user='www-data' php wp db tables";
+					if ( \EE\Utils\default_launch( $check_tables ) ) {
+						throw new Exception( "WordPress tables already seem to exist. Please backup and reset the database or use `--force` in the site create command to reset it." );
+					}
+				}
+
+			}
+		}
+		catch ( Exception $e ) {
+			$this->catch_clean( $e );
+		}
 
 	}
 
@@ -667,8 +730,10 @@ class Site_Command extends EE_Command {
 		chdir( $this->site_root );
 		$install_command = "docker-compose exec --user='www-data' php wp core install --url='" . $this->site_name . "' --title='" . $this->site_title . "' --admin_user='" . $this->site_user . "'" . ( ! $this->site_pass ? "" : " --admin_password='" . $this->site_pass . "'" ) . " --admin_email='" . $this->site_email . "'";
 
-		EE::debug( 'COMMAND: ' . $install_command );
-		EE::debug( 'STDOUT: ' . shell_exec( $install_command ) );
+		$core_install = \EE\Utils\default_launch( $install_command );
+		if ( ! $core_install ) {
+			EE::warning( 'WordPress install failed. Please check logs.' );
+		}
 
 		if ( 'wpsubdom' === $this->site_type || 'wpsubdir' === $this->site_type ) {
 			$type               = $this->site_type === 'wpsubdom' ? ' --subdomains' : '';
@@ -694,6 +759,7 @@ class Site_Command extends EE_Command {
 			'site_path'        => $this->site_root,
 			'db_name'          => $this->db_name,
 			'db_user'          => $this->db_user,
+			'db_host'          => $this->db_host,
 			'db_password'      => $this->db_pass,
 			'db_root_password' => $this->db_root_pass,
 			'email'            => $this->site_email,
@@ -726,7 +792,7 @@ class Site_Command extends EE_Command {
 
 		if ( $this->db::site_in_db( $this->site_name ) ) {
 
-			$data = array( 'site_type', 'site_title', 'proxy_type', 'cache_type', 'site_path', 'db_name', 'db_user', 'db_password', 'db_root_password', 'wp_user', 'wp_pass', 'email' );
+			$data = array( 'site_type', 'site_title', 'proxy_type', 'cache_type', 'site_path', 'db_name', 'db_user', 'db_host', 'db_password', 'db_root_password', 'wp_user', 'wp_pass', 'email' );
 
 			$db_select = $this->db::select( $data, array( 'sitename' => $this->site_name ) );
 
@@ -737,6 +803,7 @@ class Site_Command extends EE_Command {
 			$this->site_root    = $db_select[0]['site_path'];
 			$this->db_user      = $db_select[0]['db_user'];
 			$this->db_name      = $db_select[0]['db_name'];
+			$this->db_host      = $db_select[0]['db_host'];
 			$this->db_pass      = $db_select[0]['db_password'];
 			$this->db_root_pass = $db_select[0]['db_root_password'];
 			$this->site_user    = $db_select[0]['wp_user'];
