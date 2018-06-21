@@ -464,7 +464,7 @@ class Site_Command extends EE_Command {
 		}
 
 		if ( ! \EE\Utils\default_launch( "mkdir $this->site_root" ) ) {
-			EE::error( "Cannot create directory $this->site_root. Please check for " );
+			EE::error( "Cannot create directory $this->site_root. Please check that folder permission allows easyengine to create directory there." );
 		}
 
 		try {
