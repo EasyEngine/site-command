@@ -668,11 +668,10 @@ class Site_Command extends EE_Command {
 
 		$wp_config_create_command = "docker-compose exec --user='www-data' php wp config create --dbuser='" . $this->db_user . "' --dbname='" . $this->db_name . "' --dbpass='" . $this->db_pass . "' --dbhost='" . $this->db_host . "' " . $config_arguments;
 
-		if ( ! \EE\Utils\default_launch( $wp_config_create_command ) ) {
-			throw new Exception( "Could'nt connect to $this->db_host or there was issue in `wp config create`. Please check logs." );
-		}
-
 		try {
+			if ( ! \EE\Utils\default_launch( $wp_config_create_command ) ) {
+				throw new Exception( "Could'nt connect to $this->db_host or there was issue in `wp config create`. Please check logs." );
+			}
 			if ( 'db' !== $this->db_host ) {
 				$name            = str_replace( '_', '\_', $this->db_name );
 				$check_db_exists = 'docker-compose exec php bash -c \'mysqlshow -u"' . $this->db_user . '" -p"' . $this->db_pass . '" -h"' . $this->db_host . '" "' . $name . '"\'';
