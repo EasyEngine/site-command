@@ -666,6 +666,19 @@ class Site_Command extends EE_Command {
 		$core_download_command = "docker-compose exec --user='www-data' php wp core download --locale='" . $this->locale . "' " . $core_download_arguments;
 		\EE\Utils\default_launch( $core_download_command );
 
+		if ( 'db' === $this->db_host ) {
+			$mysql_unhealthy = true;
+			$health_chk      = "docker-compose exec --user='www-data' php mysql -u'root' -p'" . $this->db_root_pass . "' -h'db' -e exit";
+			$count           = 0;
+			while ( $mysql_unhealthy ) {
+				$mysql_unhealthy = ! \EE\Utils\default_launch( $health_chk );
+				if ( $count ++ > 30 ) {
+					break;
+				}
+				sleep( 1 );
+			}
+		}
+
 		$wp_config_create_command = "docker-compose exec --user='www-data' php wp config create --dbuser='" . $this->db_user . "' --dbname='" . $this->db_name . "' --dbpass='" . $this->db_pass . "' --dbhost='" . $this->db_host . "' " . $config_arguments;
 
 		try {
