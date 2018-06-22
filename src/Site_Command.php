@@ -335,6 +335,15 @@ class Site_Command extends EE_Command {
 	 *
 	 * [--phpmyadmin]
 	 * : Start phpmyadmin container of site.
+	 *
+	 * [--phpredisadmin]
+	 * : Start phpredisadmin container of site.
+	 *
+	 * [--adminer]
+	 * : Start adminer container of site.
+	 *
+	 * [--anemometer]
+	 * : Start anemometer container of site.
 	 */
 	public function start( $args, $assoc_args ) {
 		$this->site_docker_compose_execute( $args[0], 'start', $args, $assoc_args);
@@ -366,6 +375,15 @@ class Site_Command extends EE_Command {
 	 *
 	 * [--phpmyadmin]
 	 * : Stop phpmyadmin container of site.
+	 *
+	 * [--phpredisadmin]
+	 * : Stop phpredisadmin container of site.
+	 *
+	 * [--adminer]
+	 * : Stop adminer container of site.
+	 *
+	 * [--anemometer]
+	 * : Stop anemometer container of site.
 	 */
 	public function stop( $args, $assoc_args ) {
 		$this->site_docker_compose_execute( $args[0], 'stop', $args, $assoc_args);
@@ -397,6 +415,15 @@ class Site_Command extends EE_Command {
 	 *
 	 * [--phpmyadmin]
 	 * : Restart phpmyadmin container of site.
+	 *
+	 * [--phpredisadmin]
+	 * : Restart phpredisadmin container of site.
+	 *
+	 * [--adminer]
+	 * : Restart adminer container of site.
+	 *
+	 * [--anemometer]
+	 * : Restart anemometer container of site.
 	 */
 	public function restart( $args, $assoc_args ) {
 		$this->site_docker_compose_execute( $args[0], 'restart', $args, $assoc_args);
@@ -418,68 +445,73 @@ class Site_Command extends EE_Command {
 	 * : Start php service in container.
 	 */
 	public function reload( $args, $assoc_args ) {
-		$all         = \EE\Utils\get_flag_value( $assoc_args, 'all' );
-		$nginx       = \EE\Utils\get_flag_value( $assoc_args, 'nginx' );
-		$php         = \EE\Utils\get_flag_value( $assoc_args, 'php' );
+		$this->site_docker_compose_execute( $args[0], 'reload', $args, $assoc_args);
+	}
 
-		$no_service_specified = !( $all || $nginx || $php || $mysql || $redis || $mailcatcher );
+	private function site_docker_compose_execute( $site, $action, $args, $assoc_args ) {
+		$all = \EE\Utils\get_flag_value( $assoc_args, 'all' );
+		$no_service_specified = count( $assoc_args ) === 0 ;
 
 		$this->populate_site_info( $args );
 
 		chdir( $this->site_root );
 
 		if( $all || $no_service_specified ) {
-			shell_exec( "docker-compose exec nginx sh -c 'nginx -t && service openresty reload'" );
-			shell_exec( "docker-compose exec php kill -USR2 1" );
+			if( $action === 'reload' ) {
+				$this->reload_services( [ 'nginx', 'php' ] );
+				return;
+			}
+			$this->run_compose_command( $action, '', null, 'all services' );
 		}
 		else {
-			if ($nginx) {
-				shell_exec( "docker-compose exec nginx sh -c 'nginx -t && service openresty reload'" );
+			$services = array_map( [$this, 'map_args_to_service'], array_keys( $assoc_args ) );
+
+			if( $action === 'reload' ) {
+				$this->reload_services( $services );
+				return;
 			}
-			if ($php) {
-				shell_exec( "docker-compose exec php kill -USR2 1" );
+
+			foreach( $services as $service ) {
+				$this->run_compose_command( $action, $service );
 			}
 		}
 	}
 
-	private function site_docker_compose_execute( $site, $action, $args, $assoc_args ) {
-		$all         = \EE\Utils\get_flag_value( $assoc_args, 'all' );
-		$nginx       = \EE\Utils\get_flag_value( $assoc_args, 'nginx' );
-		$php         = \EE\Utils\get_flag_value( $assoc_args, 'php' );
-		$mysql       = \EE\Utils\get_flag_value( $assoc_args, 'mysql' );
-		$redis       = \EE\Utils\get_flag_value( $assoc_args, 'redis' );
-		$mailcatcher = \EE\Utils\get_flag_value( $assoc_args, 'mailcatcher' );
-		$phpmyadmin  = \EE\Utils\get_flag_value( $assoc_args, 'phpmyadmin' );
+	
+	/**
+	 * Generic function to run a docker compose command. Must be ran inside correct directory.
+	 */
+	private function run_compose_command ( $action, $container, $action_to_display = null, $service_to_display = null) {
+		$display_action = $action_to_display ? $action_to_display : $action;
+		$display_service = $service_to_display ? $service_to_display : $container;
+		
+		\EE::log( ucfirst( $display_action ) . 'ing ' . $display_service );
+		\EE\Utils\default_launch( "docker-compose $action $container" );
+	}
+	
+	/**
+	 * Executes reload commands. It needs seperate handling as commands to reload each service is different.
+	 */
+	private function reload_services( $services ) {
+		$reload_command = [
+			'nginx' => 'nginx sh -c \'nginx -t && service openresty reload\'',
+			'php' => 'php kill -USR2 1'
+		];
 
-		$no_service_specified = !( $all || $nginx || $php || $mysql || $redis || $mailcatcher );
-
-		$this->populate_site_info( $args );
-
-		chdir( $this->site_root );
-
-		if( $all || $no_service_specified ) {
-			shell_exec( "docker-compose $action" );
+		foreach( $services as $service ) {
+			$this->run_compose_command( 'exec', $reload_command[ $service ], 'reload', $service );
 		}
-		else {
-			if ($nginx) {
-				shell_exec( "docker-compose $action nginx" );
-			}
-			if ($php) {
-				shell_exec( "docker-compose $action php" );
-			}
-			if ($mysql) {
-				shell_exec( "docker-compose $action db" );
-			}
-			if ($redis) {
-				shell_exec( "docker-compose $action redis" );
-			}
-			if ($mailcatcher) {
-				shell_exec( "docker-compose $action mail" );
-			}
-			if ($phpmyadmin) {
-				shell_exec( "docker-compose $action phpmyadmin" );
-			}
-		}
+	}
+
+	/**
+	 * Maps argument passed from cli to docker-compose service name
+	 */
+	private function map_args_to_service( $arg ) {
+		$services_map = [
+			'mysql' => 'db',
+			'mailcatcher'  => 'mail'
+		];
+		return in_array( $arg, array_keys( $services_map ) ) ? $services_map[ $arg ] : $arg ;
 	}
 
 	/**
