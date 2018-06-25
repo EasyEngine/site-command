@@ -150,16 +150,24 @@ class Site_Command extends EE_Command {
 		$this->site_pass  = \EE\Utils\get_flag_value( $assoc_args, 'admin_pass', \EE\Utils\random_password() );
 		$this->db_name    = str_replace( [ '.', '-' ], '_', $this->site_name );
 		$this->db_host    = \EE\Utils\get_flag_value( $assoc_args, 'dbhost' );
-		if ( 'db' !== $this->db_host ) {
-			if ( ! isset( $assoc_args['dbuser'] ) || ! isset( $assoc_args['dbpass'] ) ) {
-				EE::error( '`--dbuser` and `--dbpass` are required for remote db host.' );
-			}
-		}
-
 		$this->db_user      = \EE\Utils\get_flag_value( $assoc_args, 'dbuser', 'wordpress' );
 		$this->db_pass      = \EE\Utils\get_flag_value( $assoc_args, 'dbpass', \EE\Utils\random_password() );
 		$this->locale       = \EE\Utils\get_flag_value( $assoc_args, 'locale', EE::get_config( 'locale' ) );
 		$this->db_root_pass = \EE\Utils\random_password();
+		
+		if ( 'db' !== $this->db_host ) {
+			if ( ! isset( $assoc_args['dbuser'] ) || ! isset( $assoc_args['dbpass'] ) ) {
+				EE::error( '`--dbuser` and `--dbpass` are required for remote db host.' );
+			}
+			
+			\EE::log( 'Verifying connection to remote database' );
+			
+			if(! \EE\Utils\default_launch( 'docker run -it --rm mysql sh -c \'mysql -h'. $this->db_host . ' -u'. $this->db_user . ' -p' .$this->db_pass . ' -e EXIT\'' ) ) {
+				\EE::error( 'Unable to connect to remote db' );
+			}
+			\EE::success( 'Connection to remote db verified' );
+		}
+
 		$this->site_email   = \EE\Utils\get_flag_value( $assoc_args, 'admin_email', strtolower( 'mail@' . $this->site_name ) );
 		$this->skip_install = \EE\Utils\get_flag_value( $assoc_args, 'skip-install' );
 		$this->force        = \EE\Utils\get_flag_value( $assoc_args, 'force' );
