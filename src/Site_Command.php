@@ -373,8 +373,8 @@ class Site_Command extends EE_Command {
 		$this->site_root = WEBROOT . $this->site_name;
 		if ( ! $this->create_site_root() ) {
 			EE::error( "Webroot directory for site $this->site_name already exists." );
-				}
-			}
+		}
+	}
 
 	/**
 	 * Function to configure site and copy all the required files.
@@ -598,7 +598,7 @@ class Site_Command extends EE_Command {
 				}
 				EE::log( "[$this->site_name] site root removed." );
 			}
-		
+
 		if ( $this->level > 4 ) {
 			if ( $this->db::delete( array( 'sitename' => $this->site_name ) ) ) {
 				EE::log( 'Removing database entry.' );
@@ -707,7 +707,7 @@ class Site_Command extends EE_Command {
 
 		if ( 'db' === $this->db_host ) {
 			$mysql_unhealthy = true;
-			$health_chk      = "docker-compose exec --user='www-data' php mysql -u'root' -p'" . $this->db_root_pass . "' -h'db' -e exit";
+			$health_chk      = "docker-compose exec --user='www-data' php mysql --user='root' --password='$this->db_root_pass' --host='db' -e exit";
 			$count           = 0;
 			while ( $mysql_unhealthy ) {
 				$mysql_unhealthy = ! \EE\Utils\default_launch( $health_chk );
@@ -778,7 +778,7 @@ class Site_Command extends EE_Command {
 	private function install_wp() {
 		EE::log( "\nInstalling WordPress site." );
 		chdir( $this->site_root );
-		$install_command = "docker-compose exec --user='www-data' php wp core install --url='" . $this->site_name . "' --title='" . $this->site_title . "' --admin_user='" . $this->site_user . "'" . ( ! $this->site_pass ? "" : " --admin_password='" . $this->site_pass . "'" ) . " --admin_email='" . $this->site_email . "'";
+		$install_command = "docker-compose exec --user='www-data' php wp core install --url='$this->site_name' --title='$this->site_title' --admin_user='$this->site_user'" . ( ! $this->site_pass ? "" : " --admin_password='$this->site_pass'" ) . " --admin_email='$this->site_email'";
 
 		$core_install = \EE\Utils\default_launch( $install_command );
 		if ( ! $core_install ) {
@@ -786,8 +786,8 @@ class Site_Command extends EE_Command {
 		}
 
 		if ( 'wpsubdom' === $this->site_type || 'wpsubdir' === $this->site_type ) {
-			$type               = $this->site_type === 'wpsubdom' ? ' --subdomains' : '';
-			$multi_type_command = "docker-compose exec --user='www-data' php wp core multisite-convert" . $type;
+			$type               = $this->site_type === 'wpsubdom' ? '--subdomains' : '';
+			$multi_type_command = "docker-compose exec --user='www-data' php wp core multisite-convert $type";
 			EE::debug( 'COMMAND: ' . $multi_type_command );
 			EE::debug( 'STDOUT: ' . shell_exec( $multi_type_command ) );
 		}
