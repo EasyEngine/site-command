@@ -592,12 +592,12 @@ class Site_Command extends EE_Command {
 			}
 		}
 
-			if ( is_dir( $this->site_root ) ) {
-				if ( ! \EE\Utils\default_launch( "sudo rm -rf $this->site_root" ) ) {
-					EE::error( 'Could not remove site root. Please check if you have sufficient rights.' );
-				}
-				EE::log( "[$this->site_name] site root removed." );
+		if ( is_dir( $this->site_root ) ) {
+			if ( ! \EE\Utils\default_launch( "sudo rm -rf $this->site_root" ) ) {
+				EE::error( 'Could not remove site root. Please check if you have sufficient rights.' );
 			}
+			EE::log( "[$this->site_name] site root removed." );
+		}
 
 		if ( $this->level > 4 ) {
 			if ( $this->db::delete( array( 'sitename' => $this->site_name ) ) ) {
