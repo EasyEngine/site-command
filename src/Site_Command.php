@@ -32,6 +32,7 @@ class Site_Command extends EE_Command {
 	private $db_root_pass;
 	private $db_pass;
 	private $db_host;
+	private $db_port;
 	private $locale;
 	private $skip_install;
 	private $force;
@@ -155,13 +156,14 @@ class Site_Command extends EE_Command {
 		$this->locale       = \EE\Utils\get_flag_value( $assoc_args, 'locale', EE::get_config( 'locale' ) );
 		$this->db_root_pass = \EE\Utils\random_password();
 		
-		$this->setup_site_network();
-
 		// If user wants to connect to remote database
 		if ( 'db' !== $this->db_host ) {
 			if ( ! isset( $assoc_args['dbuser'] ) || ! isset( $assoc_args['dbpass'] ) ) {
 				EE::error( '`--dbuser` and `--dbpass` are required for remote db host.' );
 			}
+			$arg_host_port = explode( ':', $this->db_host );
+			$this->db_host = $arg_host_port[0];
+			$this->db_port = empty( $arg_host_port[1] ) ? '3306' : $arg_host_port[1];
 		}
 
 		$this->site_email   = \EE\Utils\get_flag_value( $assoc_args, 'admin_email', strtolower( 'mail@' . $this->site_name ) );
@@ -172,7 +174,6 @@ class Site_Command extends EE_Command {
 
 		EE::log( 'Configuring project.' );
 
-		$this->configure_site();
 		$this->create_site( $assoc_args );
 		\EE\Utils\delem_log( 'site create end' );
 	}
@@ -369,41 +370,17 @@ class Site_Command extends EE_Command {
 			}
 		}
 
-		if( 'db' !== $this->db_host ) {
-			// Docker needs special handling if we want to connect to host machine.
-			// The since we're inside the container and we want to access host machine, 
-			// we would need to replace localhost with default gateway
-			
-			if( substr( $this->db_host, 0, 9 )  === '127.0.0.1' ||  substr( $this->db_host, 0, 9 ) === 'localhost' ) {
-				$launch = EE::launch( "docker network inspect $this->site_name --format='{{ (index .IPAM.Config 0).Gateway }}'", false, true );
-				\EE\Utils\default_debug( $launch );
-
-				if( ! $launch->return_code ) {
-					$this->db_host = trim( $launch->stdout, "\n" );
+		$this->site_root = WEBROOT . $this->site_name;
+		if ( ! $this->create_site_root() ) {
+			EE::error( "Webroot directory for site $this->site_name already exists." );
 				}
-				else {
-					EE::error( 'There was a problem inspecting network. Please check the logs' );
-				}
-
-				\EE::log( 'Verifying connection to remote database' );
-			
-				$host_port = explode( ':', $this->db_host );
-				$db_port = empty( $host_port[1] ) ? '3306' : $host_port[1];
-
-				if( ! \EE\Utils\default_launch( "docker run -it --rm --network=$this->site_name mysql sh -c 'mysql --host=$this->db_host --port=$db_port --user=$this->db_user --password=$this->db_pass -e EXIT'" ) ) {
-					\EE::error( 'Unable to connect to remote db' );
-				}
-				\EE::success( 'Connection to remote db verified' );
 			}
-		}
-	}
 
 	/**
 	 * Function to configure site and copy all the required files.
 	 */
 	private function configure_site() {
 
-		$this->site_root         = WEBROOT . $this->site_name;
 		$site_conf_dir           = $this->site_root . '/config';
 		$site_docker_yml         = $this->site_root . '/docker-compose.yml';
 		$site_conf_env           = $this->site_root . '/.env';
@@ -411,10 +388,6 @@ class Site_Command extends EE_Command {
 		$site_php_ini            = $site_conf_dir . '/php-fpm/php.ini';
 		$server_name             = ( 'wpsubdom' === $this->site_type ) ? "$this->site_name *.$this->site_name" : $this->site_name;
 		$process_user            = posix_getpwuid( posix_geteuid() );
-
-		if ( ! $this->create_site_root() ) {
-			EE::error( "Webroot directory for site $this->site_name already exists." );
-		}
 
 		EE::log( "Creating WordPress site $this->site_name." );
 		EE::log( 'Copying configuration files.' );
@@ -435,7 +408,7 @@ class Site_Command extends EE_Command {
 			'database_name' => $this->db_name,
 			'database_user' => $this->db_user,
 			'user_password' => $this->db_pass,
-			'wp_db_host'    => $this->db_host,
+			'wp_db_host'    => "$this->db_host:$this->db_port",
 			'wp_db_user'    => $this->db_user,
 			'wp_db_name'    => $this->db_name,
 			'wp_db_pass'    => $this->db_pass,
@@ -492,7 +465,7 @@ class Site_Command extends EE_Command {
 			if ( ! \EE\Utils\default_launch( "mkdir $this->site_root" ) ) {
 				return false;
 			}
-			$this->level = 2;
+			$this->level = 1;
 			$whoami      = EE::launch( "whoami", false, true );
 
 			$terminal_username = rtrim( $whoami->stdout );
@@ -508,14 +481,44 @@ class Site_Command extends EE_Command {
 		return true;
 	}
 
+	private function maybe_verify_remote_db_connection() {
+		if( 'db' !== $this->db_host ) {
+
+			// Docker needs special handling if we want to connect to host machine.
+			// The since we're inside the container and we want to access host machine,
+			// we would need to replace localhost with default gateway			
+			if( $this->db_host === '127.0.0.1' || $this->db_host === 'localhost' ) {
+				$launch = EE::launch( "docker network inspect $this->site_name --format='{{ (index .IPAM.Config 0).Gateway }}'", false, true );
+				\EE\Utils\default_debug( $launch );
+
+				if( ! $launch->return_code ) {
+					$this->db_host = trim( $launch->stdout, "\n" );
+				}
+				else {
+					throw new Exception( 'There was a problem inspecting network. Please check the logs' );
+				}
+
+				\EE::log( 'Verifying connection to remote database' );
+
+				if( ! \EE\Utils\default_launch( "docker run -it --rm --network='$this->site_name' mysql sh -c \"mysql --host='$this->db_host' --port='$this->db_port' --user='$this->db_user' --password='$this->db_pass' --execute='EXIT'\"" ) ) {
+					throw new Exception( 'Unable to connect to remote db' );
+				}
+
+				\EE::success( 'Connection to remote db verified' );
+			}
+		}
+	}
+
 
 	/**
 	 * Function to create the site.
 	 */
 	private function create_site( $assoc_args ) {
-
-		$this->level = 3;
+		$this->setup_site_network();
 		try {
+			$this->maybe_verify_remote_db_connection();
+			$this->configure_site();
+			$this->level = 3;
 			EE::log( 'Pulling latest images. This may take some time.' );
 			chdir( $this->site_root );
 			\EE\Utils\default_launch( 'docker-compose pull' );
@@ -553,14 +556,19 @@ class Site_Command extends EE_Command {
 	 */
 	private function delete_site() {
 
-		if ( 'db' !== $this->db_host && $this->level >= 4 ) {
-			$delete_db_command = 'docker-compose exec php bash -c \'mysql -h$WORDPRESS_DB_HOST -u$WORDPRESS_DB_USER -p$WORDPRESS_DB_PASSWORD -e "DROP DATABASE $WORDPRESS_DB_NAME;"\'';
-			if ( \EE\Utils\default_launch( $delete_db_command ) ) {
-				EE::log( 'Database deleted.' );
-			} else {
-				EE::warning( 'Could not remove the database.' );
-			}
-		}
+		// Commented below block intentionally as they need change in DB 
+		// which should be discussed with the team
+		// if ( 'db' !== $this->db_host && $this->level >= 4 ) {
+
+			// chdir( $this->site_root );
+			// $delete_db_command = "docker-compose exec php bash -c \'mysql --host=$this->db_host --port=$this->db_port --user=$this->db_user --password=$this->db_pass --execute='DROP DATABASE $this->db_name\'";
+			
+			// if ( \EE\Utils\default_launch( $delete_db_command ) ) {
+			// 	// EE::log( 'Database deleted.' );
+			// } else {
+			// 	EE::warning( 'Could not remove the database.' );
+			// }
+		// }
 
 		if ( $this->level >= 3 ) {
 			if ( $this->docker::docker_compose_down( $this->site_root ) ) {
@@ -575,22 +583,22 @@ class Site_Command extends EE_Command {
 		}
 
 		if ( $this->level >= 2 ) {
+			if ( $this->docker::rm_network( $this->site_name ) ) {
+				EE::log( "[$this->site_name] Docker container removed from network $this->proxy_type." );
+			} else {
+				if ( $this->level > 2 ) {
+					EE::warning( "Error in removing Docker container from network $this->proxy_type" );
+				}
+			}
+		}
+
 			if ( is_dir( $this->site_root ) ) {
 				if ( ! \EE\Utils\default_launch( "sudo rm -rf $this->site_root" ) ) {
 					EE::error( 'Could not remove site root. Please check if you have sufficient rights.' );
 				}
 				EE::log( "[$this->site_name] site root removed." );
 			}
-		}
 		
-		if ( $this->docker::rm_network( $this->site_name ) ) {
-			EE::log( "[$this->site_name] Docker container removed from network $this->proxy_type." );
-		} else {
-			if ( $this->level > 1 ) {
-				EE::warning( "Error in removing Docker container from network $this->proxy_type" );
-			}
-		}
-
 		if ( $this->level > 4 ) {
 			if ( $this->db::delete( array( 'sitename' => $this->site_name ) ) ) {
 				EE::log( 'Removing database entry.' );
@@ -641,7 +649,7 @@ class Site_Command extends EE_Command {
 	 */
 	private function setup_site_network() {
 
-		$this->level = 1;
+		$this->level = 2;
 
 		try {
 			if ( $this->docker::create_network( $this->site_name ) ) {
@@ -649,7 +657,7 @@ class Site_Command extends EE_Command {
 			} else {
 				throw new Exception( 'There was some error in starting the network.' );
 			}
-			$this->level = 2;
+			$this->level = 3;
 
 			$this->docker::connect_site_network_to( $this->site_name, $this->proxy_type );
 		}
@@ -710,22 +718,22 @@ class Site_Command extends EE_Command {
 			}
 		}
 
-		$wp_config_create_command = "docker-compose exec --user='www-data' php wp config create --dbuser='" . $this->db_user . "' --dbname='" . $this->db_name . "' --dbpass='" . $this->db_pass . "' --dbhost='" . $this->db_host . "' " . $config_arguments;
+		$wp_config_create_command = "docker-compose exec --user='www-data' php wp config create --dbuser='$this->db_user' --dbname='$this->db_name' --dbpass='$this->db_pass' --dbhost='$this->db_host:$this->db_port' $config_arguments";
 
 		try {
 			if ( ! \EE\Utils\default_launch( $wp_config_create_command ) ) {
-				throw new Exception( "Could'nt connect to $this->db_host or there was issue in `wp config create`. Please check logs." );
+				throw new Exception( "Couldn't connect to $this->db_host:$this->db_port or there was issue in `wp config create`. Please check logs." );
 			}
 			if ( 'db' !== $this->db_host ) {
 				$name            = str_replace( '_', '\_', $this->db_name );
-				$check_db_exists = 'docker-compose exec php bash -c \'mysqlshow -u"' . $this->db_user . '" -p"' . $this->db_pass . '" -h"' . $this->db_host . '" "' . $name . '"\'';
+				$check_db_exists = "docker-compose exec php bash -c \"mysqlshow --user='$this->db_user' --password='$this->db_pass' --host='$this->db_host' --port='$this->db_port' '$name'";
 
 				if ( ! \EE\Utils\default_launch( $check_db_exists ) ) {
 					EE::log( "Database `$this->db_name` does not exist. Attempting to create it." );
-					$create_db_command = 'docker-compose exec php bash -c \'mysql -h$WORDPRESS_DB_HOST -u$WORDPRESS_DB_USER -p$WORDPRESS_DB_PASSWORD -e "CREATE DATABASE $WORDPRESS_DB_NAME;"\'';
+					$create_db_command = "docker-compose exec php bash -c \"mysql --host=$this->db_host --port=$this->db_port --user=$this->db_user --password=$this->db_pass --execute='CREATE DATABASE $this->db_name;'\"";
 
 					if ( ! \EE\Utils\default_launch( $create_db_command ) ) {
-						throw new Exception( "Could not create database `$this->db_name` on `$this->db_host`. Please check if you have sufficient rights or create a database and pass it on to `--dbname` parameter." );
+						throw new Exception( "Could not create database `$this->db_name` on `$this->db_host:$this->db_port`. Please check if $this->db_user has rights to create database or manually create a database and pass with `--dbname` parameter." );
 					}
 					$this->level = 4;
 				} else {
@@ -737,7 +745,6 @@ class Site_Command extends EE_Command {
 						throw new Exception( "WordPress tables already seem to exist. Please backup and reset the database or use `--force` in the site create command to reset it." );
 					}
 				}
-
 			}
 		}
 		catch ( Exception $e ) {
