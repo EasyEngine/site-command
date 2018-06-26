@@ -142,30 +142,26 @@ class Site_Command extends EE_Command {
 			EE::error( "Site $this->site_name already exists. If you want to re-create it please delete the older one using:\n`ee site delete $this->site_name`" );
 		}
 
-		$this->proxy_type = 'ee_traefik';
-		$this->cache_type = ! empty( $assoc_args['wpredis'] ) ? 'wpredis' : 'none';
-		$this->le         = ! empty( $assoc_args['letsencrypt'] ) ? 'le' : false;
-		$this->site_title = \EE\Utils\get_flag_value( $assoc_args, 'title', $this->site_name );
-		$this->site_user  = \EE\Utils\get_flag_value( $assoc_args, 'admin_user', 'admin' );
-		$this->site_pass  = \EE\Utils\get_flag_value( $assoc_args, 'admin_pass', \EE\Utils\random_password() );
-		$this->db_name    = str_replace( [ '.', '-' ], '_', $this->site_name );
-		$this->db_host    = \EE\Utils\get_flag_value( $assoc_args, 'dbhost' );
+		$this->proxy_type   = 'ee_traefik';
+		$this->cache_type   = ! empty( $assoc_args['wpredis'] ) ? 'wpredis' : 'none';
+		$this->le           = ! empty( $assoc_args['letsencrypt'] ) ? 'le' : false;
+		$this->site_title   = \EE\Utils\get_flag_value( $assoc_args, 'title', $this->site_name );
+		$this->site_user    = \EE\Utils\get_flag_value( $assoc_args, 'admin_user', 'admin' );
+		$this->site_pass    = \EE\Utils\get_flag_value( $assoc_args, 'admin_pass', \EE\Utils\random_password() );
+		$this->db_name      = str_replace( [ '.', '-' ], '_', $this->site_name );
+		$this->db_host      = \EE\Utils\get_flag_value( $assoc_args, 'dbhost' );
 		$this->db_user      = \EE\Utils\get_flag_value( $assoc_args, 'dbuser', 'wordpress' );
 		$this->db_pass      = \EE\Utils\get_flag_value( $assoc_args, 'dbpass', \EE\Utils\random_password() );
 		$this->locale       = \EE\Utils\get_flag_value( $assoc_args, 'locale', EE::get_config( 'locale' ) );
 		$this->db_root_pass = \EE\Utils\random_password();
 		
+		$this->setup_site_network();
+
+		// If user wants to connect to remote database
 		if ( 'db' !== $this->db_host ) {
 			if ( ! isset( $assoc_args['dbuser'] ) || ! isset( $assoc_args['dbpass'] ) ) {
 				EE::error( '`--dbuser` and `--dbpass` are required for remote db host.' );
 			}
-			
-			\EE::log( 'Verifying connection to remote database' );
-			
-			if(! \EE\Utils\default_launch( 'docker run -it --rm mysql sh -c \'mysql -h'. $this->db_host . ' -u'. $this->db_user . ' -p' .$this->db_pass . ' -e EXIT\'' ) ) {
-				\EE::error( 'Unable to connect to remote db' );
-			}
-			\EE::success( 'Connection to remote db verified' );
 		}
 
 		$this->site_email   = \EE\Utils\get_flag_value( $assoc_args, 'admin_email', strtolower( 'mail@' . $this->site_name ) );
@@ -372,6 +368,34 @@ class Site_Command extends EE_Command {
 				}
 			}
 		}
+
+		if( 'db' !== $this->db_host ) {
+			// Docker needs special handling if we want to connect to host machine.
+			// The since we're inside the container and we want to access host machine, 
+			// we would need to replace localhost with default gateway
+			
+			if( substr( $this->db_host, 0, 9 )  === '127.0.0.1' ||  substr( $this->db_host, 0, 9 ) === 'localhost' ) {
+				$launch = EE::launch( "docker network inspect $this->site_name --format='{{ (index .IPAM.Config 0).Gateway }}'", false, true );
+				\EE\Utils\default_debug( $launch );
+
+				if( ! $launch->return_code ) {
+					$this->db_host = trim( $launch->stdout, "\n" );
+				}
+				else {
+					EE::error( 'There was a problem inspecting network. Please check the logs' );
+				}
+
+				\EE::log( 'Verifying connection to remote database' );
+			
+				$host_port = explode( ':', $this->db_host );
+				$db_port = empty( $host_port[1] ) ? '3306' : $host_port[1];
+
+				if( ! \EE\Utils\default_launch( "docker run -it --rm --network=$this->site_name mysql sh -c 'mysql --host=$this->db_host --port=$db_port --user=$this->db_user --password=$this->db_pass -e EXIT'" ) ) {
+					\EE::error( 'Unable to connect to remote db' );
+				}
+				\EE::success( 'Connection to remote db verified' );
+			}
+		}
 	}
 
 	/**
@@ -468,7 +492,7 @@ class Site_Command extends EE_Command {
 			if ( ! \EE\Utils\default_launch( "mkdir $this->site_root" ) ) {
 				return false;
 			}
-			$this->level = 1;
+			$this->level = 2;
 			$whoami      = EE::launch( "whoami", false, true );
 
 			$terminal_username = rtrim( $whoami->stdout );
@@ -490,7 +514,6 @@ class Site_Command extends EE_Command {
 	 */
 	private function create_site( $assoc_args ) {
 
-		$this->setup_site_network();
 		$this->level = 3;
 		try {
 			EE::log( 'Pulling latest images. This may take some time.' );
@@ -552,20 +575,20 @@ class Site_Command extends EE_Command {
 		}
 
 		if ( $this->level >= 2 ) {
-			if ( $this->docker::rm_network( $this->site_name ) ) {
-				EE::log( "[$this->site_name] Docker container removed from network $this->proxy_type." );
-			} else {
-				if ( $this->level > 2 ) {
-					EE::warning( "Error in removing Docker container from network $this->proxy_type" );
+			if ( is_dir( $this->site_root ) ) {
+				if ( ! \EE\Utils\default_launch( "sudo rm -rf $this->site_root" ) ) {
+					EE::error( 'Could not remove site root. Please check if you have sufficient rights.' );
 				}
+				EE::log( "[$this->site_name] site root removed." );
 			}
 		}
-
-		if ( is_dir( $this->site_root ) ) {
-			if ( ! \EE\Utils\default_launch( "sudo rm -rf $this->site_root" ) ) {
-				EE::error( 'Could not remove site root. Please check if you have sufficient rights.' );
+		
+		if ( $this->docker::rm_network( $this->site_name ) ) {
+			EE::log( "[$this->site_name] Docker container removed from network $this->proxy_type." );
+		} else {
+			if ( $this->level > 1 ) {
+				EE::warning( "Error in removing Docker container from network $this->proxy_type" );
 			}
-			EE::log( "[$this->site_name] site root removed." );
 		}
 
 		if ( $this->level > 4 ) {
@@ -618,7 +641,7 @@ class Site_Command extends EE_Command {
 	 */
 	private function setup_site_network() {
 
-		$this->level = 2;
+		$this->level = 1;
 
 		try {
 			if ( $this->docker::create_network( $this->site_name ) ) {
@@ -626,7 +649,7 @@ class Site_Command extends EE_Command {
 			} else {
 				throw new Exception( 'There was some error in starting the network.' );
 			}
-			$this->level = 3;
+			$this->level = 2;
 
 			$this->docker::connect_site_network_to( $this->site_name, $this->proxy_type );
 		}
