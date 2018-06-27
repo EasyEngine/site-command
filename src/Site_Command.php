@@ -584,9 +584,7 @@ class Site_Command extends EE_Command {
 		}
 
 		$this->site_root = WEBROOT . $this->site_name;
-		if ( ! $this->create_site_root() ) {
-			EE::error( "Webroot directory for site $this->site_name already exists." );
-		}
+		$this->create_site_root();
 	}
 
 	/**
@@ -666,7 +664,8 @@ class Site_Command extends EE_Command {
 	}
 
 	/**
-	 * Function to create site root directory.
+	 * Creates site root directory if does not exist.
+	 * Throws error if it does exist
 	 */
 	private function create_site_root() {
 
