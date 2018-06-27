@@ -28,7 +28,7 @@ class Site_Docker {
 		$db['restart']      = $restart_default;
 		$db['volumes']      = array( array( 'vol' => array( 'name' => './app/db:/var/lib/mysql' ) ) );
 
-		$db['healthcheck']  = array(
+		$db['healthcheck'] = array(
 			'health' => array(
 				array( 'name' => 'test: "/etc/init.d/mysql status"' ),
 				array( 'name' => 'interval: 1s' ),
@@ -49,24 +49,27 @@ class Site_Docker {
 		// PHP configuration.
 		$php['service_name'] = array( 'name' => 'php' );
 		$php['image']        = array( 'name' => 'easyengine/php' );
-		$php['depends_on']   = array( 'name' => 'db' );
-		$php['restart']      = $restart_default;
-		$php['volumes']      = array(
+		if ( in_array( 'db', $filters, true ) ) {
+			$php['depends_on'] = array( 'name' => 'db' );
+		}
+		$php['restart']     = $restart_default;
+		$php['volumes']     = array(
 			'vol' => array(
 				array( 'name' => './app/src:/var/www/html' ),
-				array( 'name' => './config/php-fpm/php.ini:/usr/local/etc/php/php.ini' )
-			)
+				array( 'name' => './config/php-fpm/php.ini:/usr/local/etc/php/php.ini' ),
+			),
 		);
-		$php['environment']  = array(
+		$php['environment'] = array(
 			'env' => array(
 				array( 'name' => 'WORDPRESS_DB_HOST' ),
-				array( 'name' => 'WORDPRESS_DB_USER=${MYSQL_USER}' ),
-				array( 'name' => 'WORDPRESS_DB_PASSWORD=${MYSQL_PASSWORD}' ),
+				array( 'name' => 'WORDPRESS_DB_NAME' ),
+				array( 'name' => 'WORDPRESS_DB_USER' ),
+				array( 'name' => 'WORDPRESS_DB_PASSWORD' ),
 				array( 'name' => 'USER_ID=${USER_ID}' ),
 				array( 'name' => 'GROUP_ID=${GROUP_ID}' ),
 			),
 		);
-		$php['networks']     = $network_default;
+		$php['networks']    = $network_default;
 
 
 		// nginx configuration..
@@ -143,7 +146,10 @@ class Site_Docker {
 			$base[] = $redis;
 		}
 
-		$base[] = $db;
+		if ( in_array( 'db', $filters, true ) ) {
+			$base[] = $db;
+		}
+
 		$base[] = $php;
 		$base[] = $nginx;
 		$base[] = $mail;
