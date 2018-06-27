@@ -602,8 +602,6 @@ class Site_Command extends EE_Command {
 		$server_name             = ( 'wpsubdom' === $this->site_type ) ? "$this->site_name *.$this->site_name" : $this->site_name;
 		$process_user            = posix_getpwuid( posix_geteuid() );
 
-		$this->create_site_root();
-
 		EE::log( "Creating WordPress site $this->site_name." );
 		EE::log( 'Copying configuration files.' );
 
