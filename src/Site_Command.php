@@ -593,7 +593,7 @@ class Site_Command extends EE_Command {
 		}
 
 		if ( is_dir( $this->site_root ) ) {
-			if ( ! \EE\Utils\default_launch( "sudo rm -rf $this->site_root" ) ) {
+			if ( ! \EE\Utils\default_launch( "rm -rf $this->site_root" ) ) {
 				EE::error( 'Could not remove site root. Please check if you have sufficient rights.' );
 			}
 			EE::log( "[$this->site_name] site root removed." );
@@ -761,7 +761,7 @@ class Site_Command extends EE_Command {
 		$host_line = LOCALHOST_IP . "\t$this->site_name";
 		$etc_hosts = file_get_contents( '/etc/hosts' );
 		if ( ! preg_match( "/\s+$this->site_name\$/m", $etc_hosts ) ) {
-			if ( \EE\Utils\default_launch( "sudo /bin/bash -c 'echo \"$host_line\" >> /etc/hosts'" ) ) {
+			if ( \EE\Utils\default_launch( "/bin/bash -c 'echo \"$host_line\" >> /etc/hosts'" ) ) {
 				EE::success( 'Host entry successfully added.' );
 			} else {
 				EE::warning( "Failed to add $this->site_name in host entry, Please do it manually!" );
