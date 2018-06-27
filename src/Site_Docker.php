@@ -118,11 +118,11 @@ class Site_Docker {
 		$phpmyadmin['networks'] = $network_default;
 
 		// mailhog configuration.
-		$mail['service_name'] = array( 'name' => 'mail' );
-		$mail['image']        = array( 'name' => 'easyengine/mail' );
-		$mail['restart']      = $restart_default;
-		$mail['command']      = array( 'name' => '["-invite-jim=false"]' );
-		$mail['labels']       = array(
+		$mailhog['service_name'] = array( 'name' => 'mailhog' );
+		$mailhog['image']        = array( 'name' => 'easyengine/mailhog' );
+		$mailhog['restart']      = $restart_default;
+		$mailhog['command']      = array( 'name' => '["-invite-jim=false"]' );
+		$mailhog['labels']       = array(
 			'label' => array(
 				array( 'name' => 'traefik.port=8025' ),
 				array( 'name' => 'traefik.enable=true' ),
@@ -132,7 +132,7 @@ class Site_Docker {
 			),
 		);
 
-		$mail['networks'] = $network_default;
+		$mailhog['networks'] = $network_default;
 
 		// redis configuration.
 		$redis['service_name'] = array( 'name' => 'redis' );
@@ -146,7 +146,7 @@ class Site_Docker {
 		$base[] = $db;
 		$base[] = $php;
 		$base[] = $nginx;
-		$base[] = $mail;
+		$base[] = $mailhog;
 		$base[] = $phpmyadmin;
 
 		$binding = array(

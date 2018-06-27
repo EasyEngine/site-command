@@ -289,7 +289,7 @@ class Site_Command extends EE_Command {
 		$prefix = ( $this->le ) ? 'https://' : 'http://';
 		$info   = array(
 			array( 'Access phpMyAdmin', $prefix . $this->site_name . '/ee-admin/pma/' ),
-			array( 'Access mail', $prefix . $this->site_name . '/ee-admin/mailhog/' ),
+			array( 'Access mailhog', $prefix . $this->site_name . '/ee-admin/mailhog/' ),
 			array( 'Site Title', $this->site_title ),
 			array( 'DB Root Password', $this->db_root_pass ),
 			array( 'DB Name', $this->db_name ),
@@ -330,8 +330,8 @@ class Site_Command extends EE_Command {
 	 * [--redis]
 	 * : Start redis container of site.
 	 *
-	 * [--mailcatcher]
-	 * : Start mailcatcher container of site.
+	 * [--mailhog]
+	 * : Start mailhog container of site.
 	 *
 	 * [--phpmyadmin]
 	 * : Start phpmyadmin container of site.
@@ -370,8 +370,8 @@ class Site_Command extends EE_Command {
 	 * [--redis]
 	 * : Stop redis container of site.
 	 *
-	 * [--mailcatcher]
-	 * : Stop mailcatcher container of site.
+	 * [--mailhog]
+	 * : Stop mailhog container of site.
 	 *
 	 * [--phpmyadmin]
 	 * : Stop phpmyadmin container of site.
@@ -410,8 +410,8 @@ class Site_Command extends EE_Command {
 	 * [--redis]
 	 * : Restart redis container of site.
 	 *
-	 * [--mailcatcher]
-	 * : Restart mailcatcher container of site.
+	 * [--mailhog]
+	 * : Restart mailhog container of site.
 	 *
 	 * [--phpmyadmin]
 	 * : Restart phpmyadmin container of site.
@@ -509,7 +509,6 @@ class Site_Command extends EE_Command {
 	private function map_args_to_service( $arg ) {
 		$services_map = [
 			'mysql' => 'db',
-			'mailcatcher'  => 'mail'
 		];
 		return in_array( $arg, array_keys( $services_map ) ) ? $services_map[ $arg ] : $arg ;
 	}
