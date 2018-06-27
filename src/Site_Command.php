@@ -665,7 +665,7 @@ class Site_Command extends EE_Command {
 
 	/**
 	 * Creates site root directory if does not exist.
-	 * Throws error if it does exist
+	 * Throws error if it does exist.
 	 */
 	private function create_site_root() {
 
