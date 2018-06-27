@@ -584,9 +584,7 @@ class Site_Command extends EE_Command {
 		}
 
 		$this->site_root = WEBROOT . $this->site_name;
-		if ( ! $this->create_site_root() ) {
-			EE::error( "Webroot directory for site $this->site_name already exists." );
-		}
+		$this->create_site_root();
 	}
 
 	/**
@@ -601,8 +599,6 @@ class Site_Command extends EE_Command {
 		$site_php_ini            = $site_conf_dir . '/php-fpm/php.ini';
 		$server_name             = ( 'wpsubdom' === $this->site_type ) ? "$this->site_name *.$this->site_name" : $this->site_name;
 		$process_user            = posix_getpwuid( posix_geteuid() );
-
-		$this->create_site_root();
 
 		EE::log( "Creating WordPress site $this->site_name." );
 		EE::log( 'Copying configuration files.' );
@@ -668,7 +664,8 @@ class Site_Command extends EE_Command {
 	}
 
 	/**
-	 * Function to create site root directory.
+	 * Creates site root directory if does not exist.
+	 * Throws error if it does exist.
 	 */
 	private function create_site_root() {
 
