@@ -991,18 +991,21 @@ class Site_Command extends EE_Command {
 	private function install_wp() {
 		EE::log( "\nInstalling WordPress site." );
 		chdir( $this->site_root );
-		$install_command = "docker-compose exec --user='www-data' php wp core install --url='$this->site_name' --title='$this->site_title' --admin_user='$this->site_user'" . ( ! $this->site_pass ? "" : " --admin_password='$this->site_pass'" ) . " --admin_email='$this->site_email'";
 
-		$core_install = \EE\Utils\default_launch( $install_command );
-		if ( ! $core_install ) {
-			EE::warning( 'WordPress install failed. Please check logs.' );
+		$wp_install_command = 'install';
+		$maybe_multisite_type    = '';
+		
+		if ( 'wpsubdom' === $this->site_type || 'wpsubdir' === $this->site_type ) {
+			$wp_install_command = 'multisite-install';
+			$maybe_multisite_type  = $this->site_type === 'wpsubdom' ? '--subdomains' : '';
 		}
 
-		if ( 'wpsubdom' === $this->site_type || 'wpsubdir' === $this->site_type ) {
-			$type               = $this->site_type === 'wpsubdom' ? '--subdomains' : '';
-			$multi_type_command = "docker-compose exec --user='www-data' php wp core multisite-convert $type";
-			EE::debug( 'COMMAND: ' . $multi_type_command );
-			EE::debug( 'STDOUT: ' . shell_exec( $multi_type_command ) );
+		$install_command = "docker-compose exec --user='www-data' php wp core $wp_install_command --url='$this->site_name' --title='$this->site_title' --admin_user='$this->site_user'" . ( $this->site_pass ? " --admin_password='$this->site_pass'" : '' ) . " --admin_email='$this->site_email' $maybe_multisite_type";
+
+		$core_install = \EE\Utils\default_launch( $install_command );
+
+		if ( ! $core_install ) {
+			EE::warning( 'WordPress install failed. Please check logs.' );
 		}
 
 		$prefix = ( $this->le ) ? 'https://' : 'http://';
