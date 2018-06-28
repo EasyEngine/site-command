@@ -37,7 +37,12 @@ class Site_Docker {
 			),
 		);
 		$db['networks']    = $network_default;
-
+		$db['labels']      = array(
+			'label' => array(
+			array( 'name' => 'created_by=EasyEngine' ),
+			array( 'name' => 'site_name=${VIRTUAL_HOST}' )
+			),
+		);
 		// PHP configuration.
 		$php['service_name'] = array( 'name' => 'php' );
 		$php['image']        = array( 'name' => 'easyengine/php' );
@@ -49,6 +54,12 @@ class Site_Docker {
 			'vol' => array(
 				array( 'name' => './app/src:/var/www/html' ),
 				array( 'name' => './config/php-fpm/php.ini:/usr/local/etc/php/php.ini' ),
+			),
+		);
+		$php['labels']        = array(
+			'label' => array(
+				array( 'name' => 'created_by=EasyEngine' ),
+				array( 'name' => 'site_name=${VIRTUAL_HOST}' )
 			),
 		);
 		$php['environment'] = array(
@@ -79,6 +90,8 @@ class Site_Docker {
 				array( 'name' => 'traefik.docker.network=site-network' ),
 				array( 'name' => "traefik.frontend.entryPoints=$frontend_entrypoints" ),
 				array( 'name' => "traefik.frontend.rule=$v_host" ),
+				array( 'name' => 'created_by=EasyEngine' ),
+				array( 'name' => 'site_name=${VIRTUAL_HOST}' )
 			),
 		);
 		$nginx['volumes'] = array(
@@ -107,6 +120,8 @@ class Site_Docker {
 				array( 'name' => 'traefik.protocol=http' ),
 				array( 'name' => "traefik.frontend.entryPoints=$frontend_entrypoints" ),
 				array( 'name' => 'traefik.frontend.rule=Host:${VIRTUAL_HOST};PathPrefixStrip:/ee-admin/pma/' ),
+				array( 'name' => 'created_by=EasyEngine' ),
+				array( 'name' => 'site_name=${VIRTUAL_HOST}' )
 			),
 		);
 
@@ -124,6 +139,8 @@ class Site_Docker {
 				array( 'name' => 'traefik.protocol=http' ),
 				array( 'name' => "traefik.frontend.entryPoints=$frontend_entrypoints" ),
 				array( 'name' => 'traefik.frontend.rule=Host:${VIRTUAL_HOST};PathPrefixStrip:/ee-admin/mailhog/' ),
+				array( 'name' => 'created_by=EasyEngine' ),
+				array( 'name' => 'site_name=${VIRTUAL_HOST}' )
 			),
 		);
 
