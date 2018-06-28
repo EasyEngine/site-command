@@ -343,6 +343,7 @@ class Site_Command extends EE_Command {
 
 	/**
 	 * Starts containers associated with site.
+	 * When no service(--nginx etc.) is specified, all containers will be restarted.
 	 *
 	 * <site-name>
 	 * : Name of the site.
@@ -383,6 +384,7 @@ class Site_Command extends EE_Command {
 
 	/**
 	 * Stops containers associated with site.
+	 * When no service(--nginx etc.) is specified, all containers will be stopped.
 	 *
 	 * <site-name>
 	 * : Name of the site.
@@ -423,6 +425,7 @@ class Site_Command extends EE_Command {
 
 	/**
 	 * Restarts containers associated with site.
+	 * When no service(--nginx etc.) is specified, all containers will be restarted.
 	 *
 	 * <site-name>
 	 * : Name of the site.
@@ -463,6 +466,7 @@ class Site_Command extends EE_Command {
 
 	/**
 	 * Reload services in containers without restarting container(s) associated with site.
+	 * When no service(--nginx etc.) is specified, all services will be reloaded.
 	 *
 	 * <site-name>
 	 * : Name of the site.
@@ -513,7 +517,7 @@ class Site_Command extends EE_Command {
 	/**
 	 * Generic function to run a docker compose command. Must be ran inside correct directory.
 	 */
-	private function run_compose_command ( $action, $container, $action_to_display = null, $service_to_display = null) {
+	private function run_compose_command( $action, $container, $action_to_display = null, $service_to_display = null) {
 		$display_action = $action_to_display ? $action_to_display : $action;
 		$display_service = $service_to_display ? $service_to_display : $container;
 		
@@ -695,7 +699,9 @@ class Site_Command extends EE_Command {
 	}
 
 	private function maybe_verify_remote_db_connection() {
-		if( 'db' !== $this->db_host ) {
+		if( 'db' === $this->db_host ) {
+			return;
+		}
 
 			// Docker needs special handling if we want to connect to host machine.
 			// The since we're inside the container and we want to access host machine,
@@ -710,7 +716,7 @@ class Site_Command extends EE_Command {
 				else {
 					throw new Exception( 'There was a problem inspecting network. Please check the logs' );
 				}
-
+		}
 				\EE::log( 'Verifying connection to remote database' );
 
 				if( ! \EE\Utils\default_launch( "docker run -it --rm --network='$this->site_name' mysql sh -c \"mysql --host='$this->db_host' --port='$this->db_port' --user='$this->db_user' --password='$this->db_pass' --execute='EXIT'\"" ) ) {
@@ -719,9 +725,6 @@ class Site_Command extends EE_Command {
 
 				\EE::success( 'Connection to remote db verified' );
 			}
-		}
-	}
-
 
 	/**
 	 * Function to create the site.
@@ -918,6 +921,7 @@ class Site_Command extends EE_Command {
 		$core_download_command = "docker-compose exec --user='www-data' php wp core download --locale='" . $this->locale . "' " . $core_download_arguments;
 		\EE\Utils\default_launch( $core_download_command );
 
+		// TODO: Look for better way to handle mysql healthcheck
 		if ( 'db' === $this->db_host ) {
 			$mysql_unhealthy = true;
 			$health_chk      = "docker-compose exec --user='www-data' php mysql --user='root' --password='$this->db_root_pass' --host='db' -e exit";
