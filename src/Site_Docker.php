@@ -37,28 +37,42 @@ class Site_Docker {
 			),
 		);
 		$db['networks']    = $network_default;
-
+		$db['labels']      = array(
+			'label' => array(
+			array( 'name' => 'created_by=EasyEngine' ),
+			array( 'name' => 'site_name=${VIRTUAL_HOST}' )
+			),
+		);
 		// PHP configuration.
 		$php['service_name'] = array( 'name' => 'php' );
 		$php['image']        = array( 'name' => 'easyengine/php' );
-		$php['depends_on']   = array( 'name' => 'db' );
-		$php['restart']      = $restart_default;
-		$php['volumes']      = array(
+		if ( in_array( 'db', $filters, true ) ) {
+			$php['depends_on'] = array( 'name' => 'db' );
+		}
+		$php['restart']     = $restart_default;
+		$php['volumes']     = array(
 			'vol' => array(
 				array( 'name' => './app/src:/var/www/html' ),
-				array( 'name' => './config/php-fpm/php.ini:/usr/local/etc/php/php.ini' )
-			)
+				array( 'name' => './config/php-fpm/php.ini:/usr/local/etc/php/php.ini' ),
+			),
 		);
-		$php['environment']  = array(
+		$php['labels']        = array(
+			'label' => array(
+				array( 'name' => 'created_by=EasyEngine' ),
+				array( 'name' => 'site_name=${VIRTUAL_HOST}' )
+			),
+		);
+		$php['environment'] = array(
 			'env' => array(
 				array( 'name' => 'WORDPRESS_DB_HOST' ),
-				array( 'name' => 'WORDPRESS_DB_USER=${MYSQL_USER}' ),
-				array( 'name' => 'WORDPRESS_DB_PASSWORD=${MYSQL_PASSWORD}' ),
+				array( 'name' => 'WORDPRESS_DB_NAME' ),
+				array( 'name' => 'WORDPRESS_DB_USER' ),
+				array( 'name' => 'WORDPRESS_DB_PASSWORD' ),
 				array( 'name' => 'USER_ID=${USER_ID}' ),
 				array( 'name' => 'GROUP_ID=${GROUP_ID}' ),
 			),
 		);
-		$php['networks']     = $network_default;
+		$php['networks']    = $network_default;
 
 
 		// nginx configuration..
@@ -76,6 +90,8 @@ class Site_Docker {
 				array( 'name' => 'traefik.docker.network=site-network' ),
 				array( 'name' => "traefik.frontend.entryPoints=$frontend_entrypoints" ),
 				array( 'name' => "traefik.frontend.rule=$v_host" ),
+				array( 'name' => 'created_by=EasyEngine' ),
+				array( 'name' => 'site_name=${VIRTUAL_HOST}' )
 			),
 		);
 		$nginx['volumes'] = array(
@@ -104,27 +120,31 @@ class Site_Docker {
 				array( 'name' => 'traefik.protocol=http' ),
 				array( 'name' => "traefik.frontend.entryPoints=$frontend_entrypoints" ),
 				array( 'name' => 'traefik.frontend.rule=Host:${VIRTUAL_HOST};PathPrefixStrip:/ee-admin/pma/' ),
+				array( 'name' => 'created_by=EasyEngine' ),
+				array( 'name' => 'site_name=${VIRTUAL_HOST}' )
 			),
 		);
 
 		$phpmyadmin['networks'] = $network_default;
 
 		// mailhog configuration.
-		$mail['service_name'] = array( 'name' => 'mail' );
-		$mail['image']        = array( 'name' => 'easyengine/mail' );
-		$mail['restart']      = $restart_default;
-		$mail['command']      = array( 'name' => '["-invite-jim=false"]' );
-		$mail['labels']       = array(
+		$mailhog['service_name'] = array( 'name' => 'mailhog' );
+		$mailhog['image']        = array( 'name' => 'easyengine/mailhog' );
+		$mailhog['restart']      = $restart_default;
+		$mailhog['command']      = array( 'name' => '["-invite-jim=false"]' );
+		$mailhog['labels']       = array(
 			'label' => array(
 				array( 'name' => 'traefik.port=8025' ),
 				array( 'name' => 'traefik.enable=true' ),
 				array( 'name' => 'traefik.protocol=http' ),
 				array( 'name' => "traefik.frontend.entryPoints=$frontend_entrypoints" ),
 				array( 'name' => 'traefik.frontend.rule=Host:${VIRTUAL_HOST};PathPrefixStrip:/ee-admin/mailhog/' ),
+				array( 'name' => 'created_by=EasyEngine' ),
+				array( 'name' => 'site_name=${VIRTUAL_HOST}' )
 			),
 		);
 
-		$mail['networks'] = $network_default;
+		$mailhog['networks'] = $network_default;
 
 		// redis configuration.
 		$redis['service_name'] = array( 'name' => 'redis' );
@@ -135,10 +155,13 @@ class Site_Docker {
 			$base[] = $redis;
 		}
 
-		$base[] = $db;
+		if ( in_array( 'db', $filters, true ) ) {
+			$base[] = $db;
+		}
+
 		$base[] = $php;
 		$base[] = $nginx;
-		$base[] = $mail;
+		$base[] = $mailhog;
 		$base[] = $phpmyadmin;
 
 		$binding = array(
@@ -146,7 +169,7 @@ class Site_Docker {
 			'network'  => true,
 		);
 
-		$docker_compose_yml = mustache_render( EE_ROOT . '/vendor/easyengine/site-command/templates/docker-compose.mustache', $binding );
+		$docker_compose_yml = mustache_render( SITE_TEMPLATE_ROOT . '/docker-compose.mustache', $binding );
 
 		return $docker_compose_yml;
 	}
