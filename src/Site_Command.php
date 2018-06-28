@@ -774,17 +774,17 @@ class Site_Command extends EE_Command {
 
 		// Commented below block intentionally as they need change in DB 
 		// which should be discussed with the team
-		// if ( 'db' !== $this->db_host && $this->level >= 4 ) {
+		if ( 'db' !== $this->db_host && $this->level >= 4 ) {
 
-			// chdir( $this->site_root );
-			// $delete_db_command = "docker-compose exec php bash -c \'mysql --host=$this->db_host --port=$this->db_port --user=$this->db_user --password=$this->db_pass --execute='DROP DATABASE $this->db_name\'";
+			chdir( $this->site_root );
+			$delete_db_command = "docker-compose exec php bash -c \"mysql --host=$this->db_host --port=$this->db_port --user=$this->db_user --password=$this->db_pass --execute='DROP DATABASE $this->db_name'\"";
 			
-			// if ( \EE\Utils\default_launch( $delete_db_command ) ) {
-			// 	// EE::log( 'Database deleted.' );
-			// } else {
-			// 	EE::warning( 'Could not remove the database.' );
-			// }
-		// }
+			if ( \EE\Utils\default_launch( $delete_db_command ) ) {
+				EE::log( 'Database deleted.' );
+			} else {
+				EE::warning( 'Could not remove the database.' );
+			}
+		}
 
 		if ( $this->level >= 3 ) {
 			if ( $this->docker::docker_compose_down( $this->site_root ) ) {
@@ -1031,6 +1031,7 @@ class Site_Command extends EE_Command {
 			'db_name'          => $this->db_name,
 			'db_user'          => $this->db_user,
 			'db_host'          => $this->db_host,
+			'db_port'          => $this->db_port,
 			'db_password'      => $this->db_pass,
 			'db_root_password' => $this->db_root_pass,
 			'email'            => $this->site_email,
@@ -1063,7 +1064,7 @@ class Site_Command extends EE_Command {
 
 		if ( $this->db::site_in_db( $this->site_name ) ) {
 
-			$data = array( 'site_type', 'site_title', 'proxy_type', 'cache_type', 'site_path', 'db_name', 'db_user', 'db_host', 'db_password', 'db_root_password', 'wp_user', 'wp_pass', 'email' );
+			$data = array( 'site_type', 'site_title', 'proxy_type', 'cache_type', 'site_path', 'db_name', 'db_user', 'db_host', 'db_port', 'db_password', 'db_root_password', 'wp_user', 'wp_pass', 'email' );
 
 			$db_select = $this->db::select( $data, array( 'sitename' => $this->site_name ) );
 
@@ -1075,6 +1076,7 @@ class Site_Command extends EE_Command {
 			$this->db_user      = $db_select[0]['db_user'];
 			$this->db_name      = $db_select[0]['db_name'];
 			$this->db_host      = $db_select[0]['db_host'];
+			$this->db_port      = $db_select[0]['db_port'];
 			$this->db_pass      = $db_select[0]['db_password'];
 			$this->db_root_pass = $db_select[0]['db_root_password'];
 			$this->site_user    = $db_select[0]['wp_user'];
