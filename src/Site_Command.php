@@ -143,7 +143,7 @@ class Site_Command extends EE_Command {
 			EE::error( "Site $this->site_name already exists. If you want to re-create it please delete the older one using:\n`ee site delete $this->site_name`" );
 		}
 
-		$this->proxy_type   = 'ee_traefik';
+		$this->proxy_type   = 'ee-nginx-proxy';
 		$this->cache_type   = ! empty( $assoc_args['wpredis'] ) ? 'wpredis' : 'none';
 		$this->le           = ! empty( $assoc_args['letsencrypt'] ) ? 'le' : false;
 		$this->site_title   = \EE\Utils\get_flag_value( $assoc_args, 'title', $this->site_name );
@@ -155,7 +155,7 @@ class Site_Command extends EE_Command {
 		$this->db_pass      = \EE\Utils\get_flag_value( $assoc_args, 'dbpass', \EE\Utils\random_password() );
 		$this->locale       = \EE\Utils\get_flag_value( $assoc_args, 'locale', EE::get_config( 'locale' ) );
 		$this->db_root_pass = \EE\Utils\random_password();
-		
+
 		// If user wants to connect to remote database
 		if ( 'db' !== $this->db_host ) {
 			if ( ! isset( $assoc_args['dbuser'] ) || ! isset( $assoc_args['dbpass'] ) ) {
@@ -221,8 +221,8 @@ class Site_Command extends EE_Command {
 
 		if ( ! $sites ) {
 			EE::error( 'No sites found!' );
-		} 
-		
+		}
+
 		if ( 'text' === $format ) {
 			foreach ( $sites as $site ) {
 				EE::log( $site['sitename'] );
@@ -513,18 +513,18 @@ class Site_Command extends EE_Command {
 		}
 	}
 
-	
+
 	/**
 	 * Generic function to run a docker compose command. Must be ran inside correct directory.
 	 */
 	private function run_compose_command( $action, $container, $action_to_display = null, $service_to_display = null) {
 		$display_action = $action_to_display ? $action_to_display : $action;
 		$display_service = $service_to_display ? $service_to_display : $container;
-		
+
 		\EE::log( ucfirst( $display_action ) . 'ing ' . $display_service );
 		\EE\Utils\default_launch( "docker-compose $action $container" );
 	}
-	
+
 	/**
 	 * Executes reload commands. It needs seperate handling as commands to reload each service is different.
 	 */
@@ -566,20 +566,11 @@ class Site_Command extends EE_Command {
 			if ( ! ( $port_80_exit_status && $port_443_exit_status ) ) {
 				EE::error( 'Cannot create/start proxy container. Please make sure port 80 and 443 are free.' );
 			} else {
+				$EE_CONF_ROOT     = EE_CONF_ROOT;
+				$ee_proxy_command = "docker run --name $this->proxy_type -e LOCAL_USER_ID=`id -u` -e LOCAL_GROUP_ID=`id -g` --restart=always -d -p 80:80 -p 443:443 -v $EE_CONF_ROOT/nginx/certs:/etc/nginx/certs -v $EE_CONF_ROOT/nginx/dhparam:/etc/nginx/dhparam -v $EE_CONF_ROOT/nginx/conf.d:/etc/nginx/conf.d -v $EE_CONF_ROOT/nginx/htpasswd:/etc/nginx/htpasswd -v $EE_CONF_ROOT/nginx/vhost.d:/etc/nginx/vhost.d -v /var/run/docker.sock:/tmp/docker.sock:ro -v $EE_CONF_ROOT:/app/ee4 -v /usr/share/nginx/html easyengine/nginx-proxy";
 
-				if ( ! is_dir( EE_CONF_ROOT . '/traefik' ) ) {
-					EE::debug( 'Creating traefik folder and config files.' );
-					mkdir( EE_CONF_ROOT . '/traefik' );
-				}
 
-				touch( EE_CONF_ROOT . '/traefik/acme.json' );
-				chmod( EE_CONF_ROOT . '/traefik/acme.json', 600 );
-				$traefik_toml = new Site_Docker();
-				file_put_contents( EE_CONF_ROOT . '/traefik/traefik.toml', $traefik_toml->generate_traefik_toml() );
-
-				$ee_traefik_command = 'docker run -d -p 8080:8080 -p 80:80 -p 443:443 -l "traefik.enable=false" -l "created_by=EasyEngine" -v /var/run/docker.sock:/var/run/docker.sock -v ' . EE_CONF_ROOT . '/traefik/traefik.toml:/etc/traefik/traefik.toml -v ' . EE_CONF_ROOT . '/traefik/acme.json:/etc/traefik/acme.json -v ' . EE_CONF_ROOT . '/traefik/endpoints:/etc/traefik/endpoints -v ' . EE_CONF_ROOT . '/traefik/certs:/etc/traefik/certs -v ' . EE_CONF_ROOT . '/traefik/log:/var/log --name ee_traefik easyengine/traefik';
-
-				if ( $this->docker::boot_container( $this->proxy_type, $ee_traefik_command ) ) {
+				if ( $this->docker::boot_container( $this->proxy_type, $ee_proxy_command ) ) {
 					EE::success( "$this->proxy_type container is up." );
 				} else {
 					EE::error( "There was some error in starting $this->proxy_type container. Please check logs." );
@@ -705,7 +696,7 @@ class Site_Command extends EE_Command {
 
 			// Docker needs special handling if we want to connect to host machine.
 			// The since we're inside the container and we want to access host machine,
-			// we would need to replace localhost with default gateway			
+			// we would need to replace localhost with default gateway
 			if( $this->db_host === '127.0.0.1' || $this->db_host === 'localhost' ) {
 				$launch = EE::launch( "docker network inspect $this->site_name --format='{{ (index .IPAM.Config 0).Gateway }}'", false, true );
 				\EE\Utils\default_debug( $launch );
@@ -772,13 +763,13 @@ class Site_Command extends EE_Command {
 	 */
 	private function delete_site() {
 
-		// Commented below block intentionally as they need change in DB 
+		// Commented below block intentionally as they need change in DB
 		// which should be discussed with the team
 		if ( 'db' !== $this->db_host && $this->level >= 4 ) {
 
 			chdir( $this->site_root );
 			$delete_db_command = "docker-compose exec php bash -c \"mysql --host=$this->db_host --port=$this->db_port --user=$this->db_user --password=$this->db_pass --execute='DROP DATABASE $this->db_name'\"";
-			
+
 			if ( \EE\Utils\default_launch( $delete_db_command ) ) {
 				EE::log( 'Database deleted.' );
 			} else {
@@ -999,7 +990,7 @@ class Site_Command extends EE_Command {
 
 		$wp_install_command = 'install';
 		$maybe_multisite_type    = '';
-		
+
 		if ( 'wpsubdom' === $this->site_type || 'wpsubdir' === $this->site_type ) {
 			$wp_install_command = 'multisite-install';
 			$maybe_multisite_type  = $this->site_type === 'wpsubdom' ? '--subdomains' : '';
