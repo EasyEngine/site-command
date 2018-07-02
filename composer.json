@@ -9,7 +9,11 @@
     "prefer-stable": true,
     "autoload": {
         "psr-4": {
-            "": "src/"
+            "": "src/",
+            "AcmePhp\\Core\\": "AcmePhp/Core",
+            "AcmePhp\\Ssl\\": "AcmePhp/Ssl",
+            "AcmePhp\\Cli\\": "AcmePhp/Cli"
+            
         },
         "files": [ "site-command.php" ]
     },
@@ -24,5 +28,11 @@
             "site list",
             "site delete"
         ]
+    },
+    "require": {
+        "ext-openssl": "*",
+        "webmozart/assert": "^1.0",
+        "guzzlehttp/guzzle": "^6.0",
+        "symfony/serializer": "^3.0"
     }
 }
