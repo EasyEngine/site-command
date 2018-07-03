@@ -19,7 +19,6 @@ use League\Flysystem\Filesystem;
 use League\Flysystem\Adapter\Local;
 use League\Flysystem\Adapter\NullAdapter;
 use GuzzleHttp\Client;
-use GuzzleHttp\HandlerStack;
 
 
 class Site_Letsencrypt {
@@ -29,6 +28,10 @@ class Site_Letsencrypt {
 	private $keyParser;
 	private $dataSigner;
 	private $serverErrorHandler;
+	private $serializer;
+	private $master;
+	private $backup;
+
 
 	public function getSecureHttpClient( KeyPair $accountKeyPair ) {
 		$this->httpClient         ?? $this->httpClient         = new Client();
@@ -47,16 +50,20 @@ class Site_Letsencrypt {
 		);
 	}
 
-	public function getAcmeClient() {
-
-		$serializer = new Serializer(
+	public function getRepository( $enable_backup = false ) {
+		$this->serializer ?? $this->serializer = new Serializer(
 			[ new PemNormalizer(), new GetSetMethodNormalizer() ],
 			[ new PemEncoder(), new JsonEncoder() ]
 		);
+		$this->master ?? $this->master = new Filesystem( new Local( EE_CONF_ROOT . '/le-client-keys' ) );
+		$this->backup ?? $this->backup = new Filesystem( new NullAdapter() );
 
-		$master     = new Filesystem( new Local( EE_CONF_ROOT . '/master' ) );
-		$backup     = new Filesystem( new NullAdapter() );
-		$repository = new Repository( $serializer, $master, $backup, false );
+		return new Repository( $this->serializer, $this->master, $this->backup, $enable_backup );
+	}
+
+	public function getAcmeClient() {
+
+		$repository = $this->getRepository();
 
 		if ( ! $repository->hasAccountKeyPair() ) {
 			EE::debug( 'No account key pair was found, generating one...' );
