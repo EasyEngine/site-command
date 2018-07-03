@@ -12,9 +12,11 @@ use AcmePhp\Core\Http\SecureHttpClient;
 use AcmePhp\Core\Http\Base64SafeEncoder;
 use AcmePhp\Core\Http\ServerErrorHandler;
 use AcmePhp\Ssl\Parser\KeyParser;
+use AcmePhp\Ssl\Parser\CertificateParser;
 use AcmePhp\Ssl\Generator\KeyPairGenerator;
 use AcmePhp\Ssl\Signer\CertificateRequestSigner;
 use AcmePhp\Ssl\Signer\DataSigner;
+use Symfony\Component\Console\Helper\Table;
 use Symfony\Component\Serializer\Encoder\JsonEncoder;
 use Symfony\Component\Serializer\Normalizer\GetSetMethodNormalizer;
 use Symfony\Component\Serializer\Serializer;
@@ -163,6 +165,52 @@ class Site_Letsencrypt {
 			}
 		}
 
+	}
+
+	public function status() {
+		$repository = $this->getRepository();
+		$this->master ?? $this->master = new Filesystem( new Local( EE_CONF_ROOT . '/le-client-keys' ) );
+
+		$certificateParser = new CertificateParser();
+
+		$table = new Table( $output );
+		$table->setHeaders( [ 'Domain', 'Issuer', 'Valid from', 'Valid to', 'Needs renewal?' ] );
+
+		$directories = $master->listContents( 'certs' );
+
+		foreach ( $directories as $directory ) {
+			if ( 'dir' !== $directory['type'] ) {
+				continue;
+			}
+
+			$parsedCertificate = $certificateParser->parse( $repository->loadDomainCertificate( $directory['basename'] ) );
+			if ( ! $input->getOption( 'all' ) && $parsedCertificate->isExpired() ) {
+				continue;
+			}
+			$domainString = $parsedCertificate->getSubject();
+
+			$alternativeNames = array_diff( $parsedCertificate->getSubjectAlternativeNames(), [ $parsedCertificate->getSubject() ] );
+			if ( count( $alternativeNames ) ) {
+				sort( $alternativeNames );
+				$last = array_pop( $alternativeNames );
+				foreach ( $alternativeNames as $alternativeName ) {
+					$domainString .= "\n ├── " . $alternativeName;
+				}
+				$domainString .= "\n └── " . $last;
+			}
+
+			$table->addRow(
+				[
+					$domainString,
+					$parsedCertificate->getIssuer(),
+					$parsedCertificate->getValidFrom()->format( 'Y-m-d H:i:s' ),
+					$parsedCertificate->getValidTo()->format( 'Y-m-d H:i:s' ),
+					( $parsedCertificate->getValidTo()->format( 'U' ) - time() < 604800 ) ? '<comment>Yes</comment>' : 'No',
+				]
+			);
+		}
+
+		$table->render();
 	}
 
 }
