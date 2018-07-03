@@ -68,4 +68,10 @@ class Site_Letsencrypt {
 
 	}
 
+	public function register( $email ) {
+		$client = $this->getAcmeClient();
+		$client->registerAccount( null, $email );
+		EE::log( "Account with email id: $email registered successfully!" );
+	}
+
 }
