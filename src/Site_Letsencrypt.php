@@ -11,7 +11,6 @@ use AcmePhp\Ssl\Parser\KeyParser;
 use AcmePhp\Ssl\Generator\KeyPairGenerator;
 use AcmePhp\Ssl\Signer\CertificateRequestSigner;
 use AcmePhp\Ssl\Signer\DataSigner;
-use AcmePhp\Ssl\KeyPair;
 use Symfony\Component\Serializer\Encoder\JsonEncoder;
 use Symfony\Component\Serializer\Normalizer\GetSetMethodNormalizer;
 use Symfony\Component\Serializer\Serializer;
@@ -23,6 +22,7 @@ use GuzzleHttp\Client;
 
 class Site_Letsencrypt {
 
+	private $accountKeyPair;
 	private $httpClient;
 	private $base64SafeEncoder;
 	private $keyParser;
@@ -33,7 +33,7 @@ class Site_Letsencrypt {
 	private $backup;
 
 
-	public function getSecureHttpClient( KeyPair $accountKeyPair ) {
+	public function getSecureHttpClient() {
 		$this->httpClient         ?? $this->httpClient         = new Client();
 		$this->base64SafeEncoder  ?? $this->base64SafeEncoder  = new Base64SafeEncoder();
 		$this->keyParser          ?? $this->keyParser          = new KeyParser();
@@ -41,7 +41,7 @@ class Site_Letsencrypt {
 		$this->serverErrorHandler ?? $this->serverErrorHandler = new ServerErrorHandler();
 
 		return new SecureHttpClient(
-			$accountKeyPair,
+			$this->accountKeyPair,
 			$this->httpClient,
 			$this->base64SafeEncoder,
 			$this->keyParser,
@@ -78,7 +78,9 @@ class Site_Letsencrypt {
 			$accountKeyPair = $repository->loadAccountKeyPair();
 		}
 
-		$secureHttpClient = $this->getSecureHttpClient( $accountKeyPair );
+		$this->accountKeyPair ?? $this->accountKeyPair = $accountKeyPair;
+
+		$secureHttpClient = $this->getSecureHttpClient();
 		$csrSigner        = new CertificateRequestSigner();
 
 		return new AcmeClient( $secureHttpClient, 'https://acme-v02.api.letsencrypt.org/directory', $csrSigner );
