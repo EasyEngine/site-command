@@ -4,6 +4,10 @@ use AcmePhp\Cli\Repository\Repository;
 use AcmePhp\Cli\Serializer\PemEncoder;
 use AcmePhp\Cli\Serializer\PemNormalizer;
 use AcmePhp\Core\AcmeClient;
+use AcmePhp\Core\Challenge\ChainValidator;
+use AcmePhp\Core\Challenge\Http\SimpleHttpSolver;
+use AcmePhp\Core\Challenge\Dns\SimpleDnsSolver;
+use AcmePhp\Core\Exception\Protocol\ChallengeNotSupportedException;
 use AcmePhp\Core\Http\SecureHttpClient;
 use AcmePhp\Core\Http\Base64SafeEncoder;
 use AcmePhp\Core\Http\ServerErrorHandler;
@@ -91,6 +95,74 @@ class Site_Letsencrypt {
 		$client = $this->getAcmeClient();
 		$client->registerAccount( null, $email );
 		EE::log( "Account with email id: $email registered successfully!" );
+	}
+
+	public function check( Array $domains, $wildcard = false ) {
+		$repository = $this->getRepository();
+		$client     = $this->getAcmeClient();
+		EE::debug( 'Starting check with solver ' . $wildcard ? 'dns' : 'http' );
+		$solver    = $wildcard ? new SimpleDnsSolver() : new SimpleHttpSolver();
+		$validator = new ChainValidator();
+
+		$order = null;
+		if ( $this->getRepository()->hasCertificateOrder( $domains ) ) {
+			$order = $this->getRepository()->loadCertificateOrder( $domains );
+			EE::debug( sprintf( 'Loading the authorization token for domains %s ...', implode( ', ', $domains ) ) );
+		}
+
+		$authorizationChallengeToCleanup = [];
+		foreach ( $domains as $domain ) {
+			if ( $order ) {
+				$authorizationChallenge  = null;
+				$authorizationChallenges = $order->getAuthorizationChallenges( $domain );
+				foreach ( $authorizationChallenges as $challenge ) {
+					if ( $solver->supports( $challenge ) ) {
+						$authorizationChallenge = $challenge;
+						break;
+					}
+				}
+				if ( null === $authorizationChallenge ) {
+					throw new ChallengeNotSupportedException();
+				}
+			} else {
+				if ( ! $repository->hasDomainAuthorizationChallenge( $domain ) ) {
+					EE::error( "Domain: $domain not yet authorized." );
+				}
+				$authorizationChallenge = $repository->loadDomainAuthorizationChallenge( $domain );
+				if ( ! $solver->supports( $authorizationChallenge ) ) {
+					throw new ChallengeNotSupportedException();
+				}
+			}
+			EE::debug( 'Challenge loaded.' );
+
+			$authorizationChallenge = $client->reloadAuthorization( $authorizationChallenge );
+			if ( $authorizationChallenge->isValid() ) {
+				EE::warning( sprintf( 'The challenge is alread validated for domain %s ...', $domain ) );
+			} else {
+				if ( ! $input->getOption( 'no-test' ) ) {
+					EE::log( sprintf( 'Testing the challenge for domain %s...', $domain ) );
+					if ( ! $validator->isValid( $authorizationChallenge ) ) {
+						EE::warning( sprintf( 'Can not valid challenge for domain %s ...', $domain ) );
+					}
+				}
+
+				EE::log( sprintf( 'Requesting authorization check for domain %s ...', $domain ) );
+				$client->challengeAuthorization( $authorizationChallenge );
+				$authorizationChallengeToCleanup[] = $authorizationChallenge;
+			}
+		}
+
+		EE::log( 'The authorization check was successful!' );
+
+		if ( $solver instanceof MultipleChallengesSolverInterface ) {
+			$solver->cleanupAll( $authorizationChallengeToCleanup );
+		} else {
+			/** @var AuthorizationChallenge $authorizationChallenge */
+			foreach ( $authorizationChallengeToCleanup as $authorizationChallenge ) {
+				$solver->cleanup( $authorizationChallenge );
+			}
+		}
+
 	}
 
 }
