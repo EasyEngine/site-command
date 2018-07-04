@@ -269,7 +269,29 @@ class Site_Letsencrypt {
 		$this->repository->storeDomainCertificate( $domain, $response->getCertificate() );
 		EE::debug( 'Certificate stored' );
 
-		// TODO: Post-generate actions
+		// Post-generate actions
+		$this->moveCertsToNginxProxy();
+	}
+
+	private function moveCertsToNginxProxy( CertificateResponse $response ) {
+        $domain = $response->getCertificateRequest()->getDistinguishedName()->getCommonName();
+        $privateKey = $response->getCertificateRequest()->getKeyPair()->getPrivateKey();
+        $certificate = $response->getCertificate();
+
+        // To handle wildcard certs
+        $domain = ltrim($domain, '*.');
+
+        $this->repository->save('../nginx/certs/'.$domain.'.key', $privateKey->getPEM());
+
+        // Issuer chain
+        $issuerChain = array_map(function (Certificate $certificate) {
+            return $certificate->getPEM();
+        }, $certificate->getIssuerChain());
+
+        // Full chain
+        $fullChainPem = $certificate->getPEM()."\n".implode("\n", $issuerChain);
+
+        $this->repository->save('../nginx/certs/'.$domain.'.crt', $fullChainPem);
 	}
 
 	/**
@@ -337,8 +359,8 @@ class Site_Letsencrypt {
 			$this->repository->storeDomainCertificate( $domain, $response->getCertificate() );
 			$this->debug( 'Certificate stored' );
 
-			// TODO: Post-generate actions
-
+			// Post-generate actions
+			$this->moveCertsToNginxProxy();
 			EE::log( 'Certificate renewed successfully!' );
 
 		}
