@@ -14,7 +14,9 @@ use AcmePhp\Core\Exception\Protocol\ChallengeNotSupportedException;
 use AcmePhp\Core\Http\SecureHttpClient;
 use AcmePhp\Core\Http\Base64SafeEncoder;
 use AcmePhp\Core\Http\ServerErrorHandler;
+use AcmePhp\Ssl\Certificate;
 use AcmePhp\Ssl\CertificateRequest;
+use AcmePhp\Ssl\CertificateResponse;
 use AcmePhp\Ssl\DistinguishedName;
 use AcmePhp\Ssl\Parser\KeyParser;
 use AcmePhp\Ssl\Parser\CertificateParser;
@@ -270,28 +272,28 @@ class Site_Letsencrypt {
 		EE::debug( 'Certificate stored' );
 
 		// Post-generate actions
-		$this->moveCertsToNginxProxy();
+		$this->moveCertsToNginxProxy( $response );
 	}
 
 	private function moveCertsToNginxProxy( CertificateResponse $response ) {
-        $domain = $response->getCertificateRequest()->getDistinguishedName()->getCommonName();
-        $privateKey = $response->getCertificateRequest()->getKeyPair()->getPrivateKey();
-        $certificate = $response->getCertificate();
+		$domain = $response->getCertificateRequest()->getDistinguishedName()->getCommonName();
+		$privateKey = $response->getCertificateRequest()->getKeyPair()->getPrivateKey();
+		$certificate = $response->getCertificate();
 
-        // To handle wildcard certs
-        $domain = ltrim($domain, '*.');
+		// To handle wildcard certs
+		$domain = ltrim($domain, '*.');
 
-        $this->repository->save('../nginx/certs/'.$domain.'.key', $privateKey->getPEM());
+		file_put_contents( EE_CONF_ROOT . '/nginx/certs/' . $domain . '.key', $privateKey->getPEM() );
 
-        // Issuer chain
-        $issuerChain = array_map(function (Certificate $certificate) {
-            return $certificate->getPEM();
-        }, $certificate->getIssuerChain());
+		// Issuer chain
+		$issuerChain = array_map(function (Certificate $certificate) {
+			return $certificate->getPEM();
+		}, $certificate->getIssuerChain());
 
-        // Full chain
-        $fullChainPem = $certificate->getPEM()."\n".implode("\n", $issuerChain);
-
-        $this->repository->save('../nginx/certs/'.$domain.'.crt', $fullChainPem);
+		// Full chain
+		$fullChainPem = $certificate->getPEM()."\n".implode("\n", $issuerChain);
+		
+		file_put_contents( EE_CONF_ROOT . '/nginx/certs/' . $domain . '.crt', $fullChainPem );
 	}
 
 	/**
@@ -360,7 +362,7 @@ class Site_Letsencrypt {
 			$this->debug( 'Certificate stored' );
 
 			// Post-generate actions
-			$this->moveCertsToNginxProxy();
+			$this->moveCertsToNginxProxy( $response );
 			EE::log( 'Certificate renewed successfully!' );
 
 		}
