@@ -14,6 +14,7 @@ use AcmePhp\Core\Exception\Protocol\ChallengeNotSupportedException;
 use AcmePhp\Core\Http\SecureHttpClient;
 use AcmePhp\Core\Http\Base64SafeEncoder;
 use AcmePhp\Core\Http\ServerErrorHandler;
+use AcmePhp\Ssl\CertificateRequest;
 use AcmePhp\Ssl\Parser\KeyParser;
 use AcmePhp\Ssl\Parser\CertificateParser;
 use AcmePhp\Ssl\Generator\KeyPairGenerator;
@@ -210,6 +211,220 @@ class Site_Letsencrypt {
 
 		$this->repository->storeCertificateOrder( $domains, $order );
 	}
+
+	public function request( $domain, $altNames = [] ) {
+		$alternativeNames = array_unique( $altNames );
+		sort( $alternativeNames );
+
+		// Certificate renewal
+		if ( $this->hasValidCertificate( $domain, $alternativeNames ) ) {
+			EE::debug( "Certificate found for $domain, executing renewal" );
+
+			// TODO: take force from --force flag
+			$force = false;
+
+			return $this->executeRenewal( $domain, $alternativeNames, $force );
+		}
+
+		$this->debug(
+			'No certificate found, executing first request', [
+				'domain'            => $domain,
+				'alternative_names' => $alternativeNames,
+			]
+		);
+
+		// Certificate first request
+		return $this->executeFirstRequest( $domain, $alternativeNames );
+	}
+
+	/**
+	 * Request a first certificate for the given domain.
+	 *
+	 * @param string $domain
+	 * @param array  $alternativeNames
+	 */
+	private function executeFirstRequest( $domain, array $alternativeNames ) {
+		EE::log( 'Executing first request.' );
+
+		// Generate domain key pair
+		$keygen        = new KeyPairGenerator();
+		$domainKeyPair = $keygen->generateKeyPair();
+		$this->repository->storeDomainKeyPair( $domain, $domainKeyPair );
+
+		EE::debug( "$domain Domain key pair generated and stored" );
+
+		$distinguishedName = $this->getOrCreateDistinguishedName( $domain, $alternativeNames );
+		// TODO: ask them ;)
+		EE::log( 'Distinguished name informations have been stored locally for this domain (they won\'t be asked on renewal).' );
+
+		// Order
+		$domains = array_merge( [ $domain ], $alternativeNames );
+		EE::debug( sprintf( 'Loading the order related to the domains %s .', implode( ', ', $domains ) ) );
+		if ( ! $this->getRepository()->hasCertificateOrder( $domains ) ) {
+			EE::error( "$domain has not yet been authorized." );
+		}
+		$order = $this->getRepository()->loadCertificateOrder( $domains );
+
+		// Request
+		EE::log( sprintf( 'Requesting first certificate for domain %s.', $domain ) );
+		$csr      = new CertificateRequest( $distinguishedName, $domainKeyPair );
+		$response = $this->client->finalizeOrder( $order, $csr );
+		EE::debug( 'Certificate received' );
+
+		// Store
+		$this->repository->storeDomainCertificate( $domain, $response->getCertificate() );
+		EE::debug( 'Certificate stored' );
+
+		// TODO: Post-generate actions
+	}
+
+	/**
+	 * Renew a given domain certificate.
+	 *
+	 * @param string $domain
+	 * @param array  $alternativeNames
+	 * @param bool   $force
+	 */
+	private function executeRenewal( $domain, array $alternativeNames, $force = false ) {
+		try {
+			// Check expiration date to avoid too much renewal
+			EE::log( "Loading current certificate for $domain" );
+
+			$certificate = $this->repository->loadDomainCertificate( $domain );
+
+			if ( ! $force ) {
+				$certificateParser = new CertificateParser();
+				$parsedCertificate = $certificateParser->parse( $certificate );
+
+				if ( $parsedCertificate->getValidTo()->format( 'U' ) - time() >= 604800 ) {
+
+					EE::log(
+						sprintf(
+							'Current certificate is valid until %s, renewal is not necessary. Use --force to force renewal.',
+							$parsedCertificate->getValidTo()->format( 'Y-m-d H:i:s' )
+						)
+					);
+
+					return;
+				}
+
+				EE::log(
+					sprintf(
+						'Current certificate will expire in less than a week (%s), renewal is required.',
+						$parsedCertificate->getValidTo()->format( 'Y-m-d H:i:s' )
+					)
+				);
+			} else {
+				EE::log( 'Forced renewal.' );
+			}
+
+			// Key pair
+			EE::log( 'Loading domain key pair...' );
+			$domainKeyPair = $this->repository->loadDomainKeyPair( $domain );
+
+			// Distinguished name
+			EE::log( 'Loading domain distinguished name...' );
+			$distinguishedName = $this->getOrCreateDistinguishedName( $domain, $alternativeNames );
+
+			// Order
+			$domains = array_merge( [ $domain ], $alternativeNames );
+			EE::debug( sprintf( 'Loading the order related to the domains %s.', implode( ', ', $domains ) ) );
+			if ( ! $this->getRepository()->hasCertificateOrder( $domains ) ) {
+				EE::error( "$domain has not yet been authorized." );
+			}
+			$order = $this->getRepository()->loadCertificateOrder( $domains );
+
+			// Renewal
+			EE::log( sprintf( 'Renewing certificate for domain %s.', $domain ) );
+			$csr      = new CertificateRequest( $distinguishedName, $domainKeyPair );
+			$response = $this->client->finalizeOrder( $order, $csr );
+			EE::debug( 'Certificate received' );
+
+			$this->repository->storeDomainCertificate( $domain, $response->getCertificate() );
+			$this->debug( 'Certificate stored' );
+
+			// TODO: Post-generate actions
+
+			EE::log( 'Certificate renewed successfully!' );
+
+		}
+		catch ( \Exception $e ) {
+			EE::warning( 'A critical error occured during certificate renewal' );
+			EE::debug( print_r( $e, true ) );
+
+			throw $e;
+		}
+		catch ( \Throwable $e ) {
+			EE::warning( 'A critical error occured during certificate renewal' );
+			EE::debug( print_r( $e, true ) );
+
+			throw $e;
+		}
+	}
+
+	private function hasValidCertificate( $domain, array $alternativeNames ) {
+		if ( ! $this->repository->hasDomainCertificate( $domain ) ) {
+			return false;
+		}
+
+		if ( ! $this->repository->hasDomainKeyPair( $domain ) ) {
+			return false;
+		}
+
+		if ( ! $this->repository->hasDomainDistinguishedName( $domain ) ) {
+			return false;
+		}
+
+		if ( $this->repository->loadDomainDistinguishedName( $domain )->getSubjectAlternativeNames() !== $alternativeNames ) {
+			return false;
+		}
+
+		return true;
+	}
+
+	/**
+	 * Retrieve the stored distinguishedName or create a new one if needed.
+	 *
+	 * @param string $domain
+	 * @param array  $alternativeNames
+	 *
+	 * @return DistinguishedName
+	 */
+	private function getOrCreateDistinguishedName( $domain, array $alternativeNames ) {
+		if ( $this->repository->hasDomainDistinguishedName( $domain ) ) {
+			$original = $this->repository->loadDomainDistinguishedName( $domain );
+
+			$distinguishedName = new DistinguishedName(
+				$domain,
+				$original->getCountryName(),
+				$original->getStateOrProvinceName(),
+				$original->getLocalityName(),
+				$original->getOrganizationName(),
+				$original->getOrganizationalUnitName(),
+				$original->getEmailAddress(),
+				$alternativeNames
+			);
+		} else {
+			// Ask DistinguishedName
+			$distinguishedName = new DistinguishedName(
+				$domain,
+                // TODO: Ask and fill these values properly
+				'IN',
+				'',
+				'',
+				'',
+				'',
+				'',
+				$alternativeNames
+			);
+
+		}
+
+		$this->repository->storeDomainDistinguishedName( $domain, $distinguishedName );
+
+		return $distinguishedName;
+	}
+
 
 	public function status() {
 		$this->master ?? $this->master = new Filesystem( new Local( EE_CONF_ROOT . '/le-client-keys' ) );
