@@ -5,8 +5,11 @@ use AcmePhp\Cli\Serializer\PemEncoder;
 use AcmePhp\Cli\Serializer\PemNormalizer;
 use AcmePhp\Core\AcmeClient;
 use AcmePhp\Core\Challenge\ChainValidator;
+use AcmePhp\Core\Challenge\WaitingValidator;
 use AcmePhp\Core\Challenge\Http\SimpleHttpSolver;
+use AcmePhp\Core\Challenge\Http\HttpValidator;
 use AcmePhp\Core\Challenge\Dns\SimpleDnsSolver;
+use AcmePhp\Core\Challenge\Dns\DnsValidator;
 use AcmePhp\Core\Exception\Protocol\ChallengeNotSupportedException;
 use AcmePhp\Core\Http\SecureHttpClient;
 use AcmePhp\Core\Http\Base64SafeEncoder;
@@ -106,7 +109,10 @@ class Site_Letsencrypt {
 	public function check( Array $domains, $wildcard = false ) {
 		EE::debug( 'Starting check with solver ' . $wildcard ? 'dns' : 'http' );
 		$solver    = $wildcard ? new SimpleDnsSolver() : new SimpleHttpSolver();
-		$validator = new ChainValidator();
+		$validator = new ChainValidator([
+			new WaitingValidator( new HttpValidator() ),
+			new WaitingValidator( new DnsValidator() )
+		]);
 
 		$order = null;
 		if ( $this->repository->hasCertificateOrder( $domains ) ) {
