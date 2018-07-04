@@ -15,6 +15,7 @@ use AcmePhp\Core\Http\SecureHttpClient;
 use AcmePhp\Core\Http\Base64SafeEncoder;
 use AcmePhp\Core\Http\ServerErrorHandler;
 use AcmePhp\Ssl\CertificateRequest;
+use AcmePhp\Ssl\DistinguishedName;
 use AcmePhp\Ssl\Parser\KeyParser;
 use AcmePhp\Ssl\Parser\CertificateParser;
 use AcmePhp\Ssl\Generator\KeyPairGenerator;
@@ -128,7 +129,7 @@ class Site_Letsencrypt {
 			if ( null === $authorizationChallenge ) {
 				throw new ChallengeNotSupportedException();
 			}
-			EE::debug( 'Storing authorization challenge. Domain: ' . $domainKey . ' Challenge: ' . print_r( $authorizationChallenge->toArray(), true ) );
+			EE::debug( 'Storing authorization challenge. Domain: ' . $domainKey . ' Challenge: ' . print_r( $authorizationChallenge->toArray(), true) );
 
 			$this->repository->storeDomainAuthorizationChallenge( $domainKey, $authorizationChallenge );
 			$authorizationChallengesToSolve[] = $authorizationChallenge;
@@ -136,7 +137,7 @@ class Site_Letsencrypt {
 
 		/** @var AuthorizationChallenge $authorizationChallenge */
 		foreach ( $authorizationChallengesToSolve as $authorizationChallenge ) {
-			EE::debug( 'Solving authorization challenge: Domain: ' . $authorizationChallenge->getDomain() . ' Challenge: ' . print_r( $authorizationChallenge->toArray(), true ) );
+			EE::debug( 'Solving authorization challenge: Domain: ' . $authorizationChallenge->getDomain() . '' . print_r( $authorizationChallenge->toArray(), true) );
 			$solver->solve( $authorizationChallenge );
 		}
 
@@ -184,16 +185,14 @@ class Site_Letsencrypt {
 
 			$authorizationChallenge = $this->client->reloadAuthorization( $authorizationChallenge );
 			if ( $authorizationChallenge->isValid() ) {
-				EE::warning( sprintf( 'The challenge is alread validated for domain %s ...', $domain ) );
+				EE::warning( sprintf( 'The challenge is alread validated for domain %s.', $domain ) );
 			} else {
-				if ( ! $input->getOption( 'no-test' ) ) {
-					EE::log( sprintf( 'Testing the challenge for domain %s...', $domain ) );
-					if ( ! $validator->isValid( $authorizationChallenge ) ) {
-						EE::warning( sprintf( 'Can not valid challenge for domain %s ...', $domain ) );
-					}
+				EE::log( sprintf( 'Testing the challenge for domain %s', $domain ) );
+				if ( ! $validator->isValid( $authorizationChallenge ) ) {
+					EE::warning( sprintf( 'Can not valid challenge for domain %s', $domain ) );
 				}
 
-				EE::log( sprintf( 'Requesting authorization check for domain %s ...', $domain ) );
+				EE::log( sprintf( 'Requesting authorization check for domain %s', $domain ) );
 				$this->client->challengeAuthorization( $authorizationChallenge );
 				$authorizationChallengeToCleanup[] = $authorizationChallenge;
 			}
@@ -226,12 +225,7 @@ class Site_Letsencrypt {
 			return $this->executeRenewal( $domain, $alternativeNames, $force );
 		}
 
-		$this->debug(
-			'No certificate found, executing first request', [
-				'domain'            => $domain,
-				'alternative_names' => $alternativeNames,
-			]
-		);
+		EE::debug("No certificate found, executing first request for $domain");
 
 		// Certificate first request
 		return $this->executeFirstRequest( $domain, $alternativeNames );
@@ -260,10 +254,10 @@ class Site_Letsencrypt {
 		// Order
 		$domains = array_merge( [ $domain ], $alternativeNames );
 		EE::debug( sprintf( 'Loading the order related to the domains %s .', implode( ', ', $domains ) ) );
-		if ( ! $this->getRepository()->hasCertificateOrder( $domains ) ) {
+		if ( ! $this->repository->hasCertificateOrder( $domains ) ) {
 			EE::error( "$domain has not yet been authorized." );
 		}
-		$order = $this->getRepository()->loadCertificateOrder( $domains );
+		$order = $this->repository->loadCertificateOrder( $domains );
 
 		// Request
 		EE::log( sprintf( 'Requesting first certificate for domain %s.', $domain ) );
@@ -329,10 +323,10 @@ class Site_Letsencrypt {
 			// Order
 			$domains = array_merge( [ $domain ], $alternativeNames );
 			EE::debug( sprintf( 'Loading the order related to the domains %s.', implode( ', ', $domains ) ) );
-			if ( ! $this->getRepository()->hasCertificateOrder( $domains ) ) {
+			if ( ! $this->repository->hasCertificateOrder( $domains ) ) {
 				EE::error( "$domain has not yet been authorized." );
 			}
-			$order = $this->getRepository()->loadCertificateOrder( $domains );
+			$order = $this->repository->loadCertificateOrder( $domains );
 
 			// Renewal
 			EE::log( sprintf( 'Renewing certificate for domain %s.', $domain ) );
