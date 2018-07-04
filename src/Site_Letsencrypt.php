@@ -111,7 +111,7 @@ class Site_Letsencrypt {
 		$http_client = $this->getSecureHttpClient();
 		$solver      = $wildcard ? new SimpleDnsSolver() : new SimpleHttpSolver();
 		$solverName  = $wildcard ? 'dns-01' : 'http-01';
-		$order       = $http_client->requestOrder( $domains );
+		$order       = $this->client->requestOrder( $domains );
 
 		$authorizationChallengesToSolve = [];
 		foreach ( $order->getAuthorizationsChallenges() as $domainKey => $authorizationChallenges ) {
