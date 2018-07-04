@@ -107,7 +107,7 @@ class Site_Letsencrypt {
 		EE::log( "Account with email id: $email registered successfully!" );
 	}
 
-	public function authorize( $domains, $wildcard = false ) {
+	public function authorize( Array $domains, $wildcard = false ) {
 		$http_client = $this->getSecureHttpClient();
 		$solver      = $wildcard ? new SimpleDnsSolver() : new SimpleHttpSolver();
 		$solverName  = $wildcard ? 'dns-01' : 'http-01';
@@ -128,7 +128,7 @@ class Site_Letsencrypt {
 			if ( null === $authorizationChallenge ) {
 				throw new ChallengeNotSupportedException();
 			}
-			EE::debug( 'Storing authorization challenge. Domain: ' . $domainKey . ' Challenge: ' . $authorizationChallenge->toArray() );
+			EE::debug( 'Storing authorization challenge. Domain: ' . $domainKey . ' Challenge: ' . print_r( $authorizationChallenge->toArray(), true ) );
 
 			$this->repository->storeDomainAuthorizationChallenge( $domainKey, $authorizationChallenge );
 			$authorizationChallengesToSolve[] = $authorizationChallenge;
@@ -136,7 +136,7 @@ class Site_Letsencrypt {
 
 		/** @var AuthorizationChallenge $authorizationChallenge */
 		foreach ( $authorizationChallengesToSolve as $authorizationChallenge ) {
-			EE::debug( 'Solving authorization challenge: Domain: ' . $authorizationChallenge->getDomain() . '' . $authorizationChallenge->toArray() );
+			EE::debug( 'Solving authorization challenge: Domain: ' . $authorizationChallenge->getDomain() . ' Challenge: ' . print_r( $authorizationChallenge->toArray(), true ) );
 			$solver->solve( $authorizationChallenge );
 		}
 
