@@ -102,18 +102,18 @@ class Site_Docker {
 		$phpmyadmin['networks']     = $network_default;
 
 		// mailhog configuration.
-		$mail['service_name'] = array( 'name' => 'mail' );
-		$mail['image']        = array( 'name' => 'easyengine/mailhog' );
-		$mail['restart']      = $restart_default;
-		$mail['command']      = array( 'name' => '["-invite-jim=false"]' );
-		$mail['environment']  = array(
+		$mailhog['service_name'] = array( 'name' => 'mailhog' );
+		$mailhog['image']        = array( 'name' => 'easyengine/mailhog' );
+		$mailhog['restart']      = $restart_default;
+		$mailhog['command']      = array( 'name' => '["-invite-jim=false"]' );
+		$mailhog['environment']  = array(
 			'env' => array(
 				array( 'name' => $v_host ),
 				array( 'name' => 'VIRTUAL_PATH=/ee-admin/mailhog/' ),
 				array( 'name' => 'VIRTUAL_PORT=8025' ),
 			),
 		);
-		$mail['networks']     = $network_default;
+		$mailhog['networks']     = $network_default;
 
 		// redis configuration.
 		$redis['service_name'] = array( 'name' => 'redis' );
@@ -126,7 +126,7 @@ class Site_Docker {
 
 		$base[] = $php;
 		$base[] = $nginx;
-		$base[] = $mail;
+		$base[] = $mailhog;
 		$base[] = $phpmyadmin;
 
 		if ( in_array( 'wpredis', $filters, true ) ) {
