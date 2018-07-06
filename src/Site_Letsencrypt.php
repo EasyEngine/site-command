@@ -47,10 +47,12 @@ class Site_Letsencrypt {
 	private $backup;
 	private $client;
 	private $repository;
+	private $conf_dir;
 
 	function __construct() {
 		$this->setRepository();
 		$this->setAcmeClient();
+		$this->conf_dir = EE_CONF_ROOT . '/acme-conf';
 	}
 
 	private function setAcmeClient() {
@@ -82,7 +84,7 @@ class Site_Letsencrypt {
 			[ new PemNormalizer(), new GetSetMethodNormalizer() ],
 			[ new PemEncoder(), new JsonEncoder() ]
 		);
-		$this->master ?? $this->master = new Filesystem( new Local( EE_CONF_ROOT . '/le-client-keys' ) );
+		$this->master ?? $this->master = new Filesystem( new Local( $this->conf_dir ) );
 		$this->backup ?? $this->backup = new Filesystem( new NullAdapter() );
 
 		$this->repository = new Repository( $this->serializer, $this->master, $this->backup, $enable_backup );
@@ -458,7 +460,7 @@ class Site_Letsencrypt {
 
 
 	public function status() {
-		$this->master ?? $this->master = new Filesystem( new Local( EE_CONF_ROOT . '/le-client-keys' ) );
+		$this->master ?? $this->master = new Filesystem( new Local( $this->conf_dir ) );
 
 		$certificateParser = new CertificateParser();
 
