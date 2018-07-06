@@ -24,6 +24,7 @@ use AcmePhp\Ssl\Generator\KeyPairGenerator;
 use AcmePhp\Ssl\Signer\CertificateRequestSigner;
 use AcmePhp\Ssl\Signer\DataSigner;
 use Symfony\Component\Console\Helper\Table;
+use Symfony\Component\Console\Output\ConsoleOutput;
 use Symfony\Component\Serializer\Encoder\JsonEncoder;
 use Symfony\Component\Serializer\Normalizer\GetSetMethodNormalizer;
 use Symfony\Component\Serializer\Serializer;
@@ -55,15 +56,15 @@ class Site_Letsencrypt {
 	private function setAcmeClient() {
 
 		if ( ! $this->repository->hasAccountKeyPair() ) {
-			EE::debug( 'No account key pair was found, generating one...' );
-			EE::debug( 'Generating a key pair' );
+			EE::log( 'No account key pair was found, generating one.' );
+			EE::log( 'Generating a key pair' );
 
 			$keygen         = new KeyPairGenerator();
 			$accountKeyPair = $keygen->generateKeyPair();
-			EE::debug( 'Key pair generated, storing' );
+			EE::log( 'Key pair generated, storing' );
 			$this->repository->storeAccountKeyPair( $accountKeyPair );
 		} else {
-			EE::debug( 'Loading account keypair' );
+			EE::log( 'Loading account keypair' );
 			$accountKeyPair = $this->repository->loadAccountKeyPair();
 		}
 
@@ -110,9 +111,8 @@ class Site_Letsencrypt {
 		EE::log( "Account with email id: $email registered successfully!" );
 	}
 
-	public function authorize( Array $domains, $wildcard = false ) {
-		$http_client = $this->getSecureHttpClient();
-		$solver      = $wildcard ? new SimpleDnsSolver() : new SimpleHttpSolver();
+	public function authorize( Array $domains, $site_root, $wildcard = false ) {
+		$solver      = $wildcard ? new SimpleDnsSolver( null, new ConsoleOutput() ) : new SimpleHttpSolver();
 		$solverName  = $wildcard ? 'dns-01' : 'http-01';
 		$order       = $this->client->requestOrder( $domains );
 
@@ -126,12 +126,12 @@ class Site_Letsencrypt {
 					break;
 				}
 				// Should not get here as we are handling it.
-				EE::error( 'Authorization challenge supported by solver. Solver: ' . $solverName . ' Challenge: ' . $candidate->getType() );
+				EE::debug( 'Authorization challenge not supported by solver. Solver: ' . $solverName . ' Challenge: ' . $candidate->getType() );
 			}
 			if ( null === $authorizationChallenge ) {
 				throw new ChallengeNotSupportedException();
 			}
-			EE::debug( 'Storing authorization challenge. Domain: ' . $domainKey . ' Challenge: ' . print_r( $authorizationChallenge->toArray(), true) );
+			EE::debug( 'Storing authorization challenge. Domain: ' . $domainKey . ' Challenge: ' . print_r( $authorizationChallenge->toArray(), true ) );
 
 			$this->repository->storeDomainAuthorizationChallenge( $domainKey, $authorizationChallenge );
 			$authorizationChallengesToSolve[] = $authorizationChallenge;
@@ -139,20 +139,31 @@ class Site_Letsencrypt {
 
 		/** @var AuthorizationChallenge $authorizationChallenge */
 		foreach ( $authorizationChallengesToSolve as $authorizationChallenge ) {
-			EE::debug( 'Solving authorization challenge: Domain: ' . $authorizationChallenge->getDomain() . '' . print_r( $authorizationChallenge->toArray(), true) );
+			EE::debug( 'Solving authorization challenge: Domain: ' . $authorizationChallenge->getDomain() . ' Challenge: ' . print_r( $authorizationChallenge->toArray(), true ) );
 			$solver->solve( $authorizationChallenge );
 		}
 
 		$this->repository->storeCertificateOrder( $domains, $order );
+
+		if ( ! $wildcard ) {
+			$token   = $authorizationChallenge->toArray()['token'];
+			$payload = $authorizationChallenge->toArray()['payload'];
+			EE::launch( "mkdir -p $site_root/app/src/.well-known/acme-challenge/" );
+			EE::debug( "Creating challange file $site_root/app/src/.well-known/acme-challenge/$token" );
+			file_put_contents( "$site_root/app/src/.well-known/acme-challenge/$token", $payload );
+			EE::launch( "chown www-data: $site_root/app/src/.well-known/acme-challenge/$token" );
+		}
 	}
 
 	public function check( Array $domains, $wildcard = false ) {
 		EE::debug( 'Starting check with solver ' . $wildcard ? 'dns' : 'http' );
-		$solver    = $wildcard ? new SimpleDnsSolver() : new SimpleHttpSolver();
-		$validator = new ChainValidator([
-			new WaitingValidator( new HttpValidator() ),
-			new WaitingValidator( new DnsValidator() )
-		]);
+		$solver    = $wildcard ? new SimpleDnsSolver( null, new ConsoleOutput() ) : new SimpleHttpSolver();
+		$validator = new ChainValidator(
+			[
+				new WaitingValidator( new HttpValidator() ),
+				new WaitingValidator( new DnsValidator() )
+			]
+		);
 
 		$order = null;
 		if ( $this->repository->hasCertificateOrder( $domains ) ) {
@@ -213,7 +224,7 @@ class Site_Letsencrypt {
 
 	}
 
-	public function request( $domain, $altNames = [] ) {
+	public function request( $domain, $altNames = [], $email ) {
 		$alternativeNames = array_unique( $altNames );
 		sort( $alternativeNames );
 
@@ -227,10 +238,10 @@ class Site_Letsencrypt {
 			return $this->executeRenewal( $domain, $alternativeNames, $force );
 		}
 
-		EE::debug("No certificate found, executing first request for $domain");
+		EE::debug( "No certificate found, executing first request for $domain" );
 
 		// Certificate first request
-		return $this->executeFirstRequest( $domain, $alternativeNames );
+		return $this->executeFirstRequest( $domain, $alternativeNames, $email );
 	}
 
 	/**
@@ -239,7 +250,7 @@ class Site_Letsencrypt {
 	 * @param string $domain
 	 * @param array  $alternativeNames
 	 */
-	private function executeFirstRequest( $domain, array $alternativeNames ) {
+	private function executeFirstRequest( $domain, array $alternativeNames, $email ) {
 		EE::log( 'Executing first request.' );
 
 		// Generate domain key pair
@@ -249,7 +260,7 @@ class Site_Letsencrypt {
 
 		EE::debug( "$domain Domain key pair generated and stored" );
 
-		$distinguishedName = $this->getOrCreateDistinguishedName( $domain, $alternativeNames );
+		$distinguishedName = $this->getOrCreateDistinguishedName( $domain, $alternativeNames, $email );
 		// TODO: ask them ;)
 		EE::log( 'Distinguished name informations have been stored locally for this domain (they won\'t be asked on renewal).' );
 
@@ -276,23 +287,25 @@ class Site_Letsencrypt {
 	}
 
 	private function moveCertsToNginxProxy( CertificateResponse $response ) {
-		$domain = $response->getCertificateRequest()->getDistinguishedName()->getCommonName();
-		$privateKey = $response->getCertificateRequest()->getKeyPair()->getPrivateKey();
+		$domain      = $response->getCertificateRequest()->getDistinguishedName()->getCommonName();
+		$privateKey  = $response->getCertificateRequest()->getKeyPair()->getPrivateKey();
 		$certificate = $response->getCertificate();
 
 		// To handle wildcard certs
-		$domain = ltrim($domain, '*.');
+		$domain = ltrim( $domain, '*.' );
 
 		file_put_contents( EE_CONF_ROOT . '/nginx/certs/' . $domain . '.key', $privateKey->getPEM() );
 
 		// Issuer chain
-		$issuerChain = array_map(function (Certificate $certificate) {
-			return $certificate->getPEM();
-		}, $certificate->getIssuerChain());
+		$issuerChain = array_map(
+			function ( Certificate $certificate ) {
+				return $certificate->getPEM();
+			}, $certificate->getIssuerChain()
+		);
 
 		// Full chain
-		$fullChainPem = $certificate->getPEM()."\n".implode("\n", $issuerChain);
-		
+		$fullChainPem = $certificate->getPEM() . "\n" . implode( "\n", $issuerChain );
+
 		file_put_contents( EE_CONF_ROOT . '/nginx/certs/' . $domain . '.crt', $fullChainPem );
 	}
 
@@ -318,7 +331,7 @@ class Site_Letsencrypt {
 
 					EE::log(
 						sprintf(
-							'Current certificate is valid until %s, renewal is not necessary. Use --force to force renewal.',
+							'Current certificate is valid until %s, renewal is not necessary.',
 							$parsedCertificate->getValidTo()->format( 'Y-m-d H:i:s' )
 						)
 					);
@@ -408,7 +421,7 @@ class Site_Letsencrypt {
 	 *
 	 * @return DistinguishedName
 	 */
-	private function getOrCreateDistinguishedName( $domain, array $alternativeNames ) {
+	private function getOrCreateDistinguishedName( $domain, array $alternativeNames, $email ) {
 		if ( $this->repository->hasDomainDistinguishedName( $domain ) ) {
 			$original = $this->repository->loadDomainDistinguishedName( $domain );
 
@@ -426,13 +439,13 @@ class Site_Letsencrypt {
 			// Ask DistinguishedName
 			$distinguishedName = new DistinguishedName(
 				$domain,
-                // TODO: Ask and fill these values properly
-				'IN',
-				'',
-				'',
-				'',
-				'',
-				'',
+				// TODO: Ask and fill these values properly
+				'US',
+				'CA',
+				'Mountain View',
+				'Let\'s Encrypt',
+				'Let\'s Encrypt Authority X3',
+				$email,
 				$alternativeNames
 			);
 
@@ -487,5 +500,13 @@ class Site_Letsencrypt {
 		}
 
 		$table->render();
+	}
+
+	public function cleanup(  $site_root ) {
+		$challange_dir = "$site_root/app/src/.well-known";
+		if ( is_file( "$site_root/app/src/.well-known" ) ) {
+			EE::debug( 'Cleaning up webroot files.' );
+			EE\Utils\delete_dir( $challange_dir );
+		}
 	}
 }
