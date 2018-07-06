@@ -282,7 +282,7 @@ class Site_Command extends EE_Command {
 		$domains  = $wildcard ? [ "*.$this->site_name", $this->site_name ] : [ $this->site_name ];
 		$client->authorize( $domains, $this->site_root, $wildcard );
 		if ( $wildcard ) {
-			EE::log( "Run `ee site le $this->site_name` once the dns changes have propogated to complete the certification generation and installation." );
+			EE::log( "Run `ee site le $this->site_name`\nonce the dns changes have propogated to complete the certification generation and installation." );
 		} else {
 			$this->le();
 		}
