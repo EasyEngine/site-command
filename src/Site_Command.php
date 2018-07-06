@@ -35,7 +35,9 @@ class Site_Command extends EE_Command {
 	private $db_port;
 	private $locale;
 	private $skip_install;
+	private $skip_chk;
 	private $force;
+	private $le_mail;
 
 	public function __construct() {
 		$this->level = 0;
@@ -124,6 +126,12 @@ class Site_Command extends EE_Command {
 	 * [--skip-install]
 	 * : Skips wp-core install.
 	 *
+	 * [--skip-status-check]
+	 * : Skips site status check.
+
+	 * [--letsencrypt]
+	 * : Enables ssl via letsencrypt certificate.
+	 *
 	 * [--force]
 	 * : Resets the remote database if it is not empty.
 	 */
@@ -145,7 +153,7 @@ class Site_Command extends EE_Command {
 
 		$this->proxy_type   = 'ee-nginx-proxy';
 		$this->cache_type   = ! empty( $assoc_args['wpredis'] ) ? 'wpredis' : 'none';
-		$this->le           = ! empty( $assoc_args['letsencrypt'] ) ? 'le' : false;
+		$this->le           = \EE\Utils\get_flag_value( $assoc_args, 'letsencrypt' );
 		$this->site_title   = \EE\Utils\get_flag_value( $assoc_args, 'title', $this->site_name );
 		$this->site_user    = \EE\Utils\get_flag_value( $assoc_args, 'admin_user', 'admin' );
 		$this->site_pass    = \EE\Utils\get_flag_value( $assoc_args, 'admin_pass', \EE\Utils\random_password() );
@@ -168,6 +176,7 @@ class Site_Command extends EE_Command {
 
 		$this->site_email   = \EE\Utils\get_flag_value( $assoc_args, 'admin_email', strtolower( 'mail@' . $this->site_name ) );
 		$this->skip_install = \EE\Utils\get_flag_value( $assoc_args, 'skip-install' );
+		$this->skip_chk     = \EE\Utils\get_flag_value( $assoc_args, 'skip-status-check' );
 		$this->force        = \EE\Utils\get_flag_value( $assoc_args, 'force' );
 
 		$this->init_checks();
@@ -259,6 +268,57 @@ class Site_Command extends EE_Command {
 		$this->level = 5;
 		$this->delete_site();
 		\EE\Utils\delem_log( 'site delete end' );
+	}
+
+
+	/**
+	 * Runs the acme le registration and authorization.
+	 */
+	private function init_le() {
+		$client        = new Site_Letsencrypt();
+		$this->le_mail = EE::get_config( 'le-mail' ) ?? EE::input( 'Enter your mail id: ' );
+		$client->register( $this->le_mail );
+		$wildcard = 'wpsubdom' === $this->site_type ? true : false;
+		$domains  = $wildcard ? [ "*.$this->site_name", $this->site_name ] : [ $this->site_name ];
+		$client->authorize( $domains, $this->site_root, $wildcard );
+		if ( $wildcard ) {
+			EE::log( "Run `ee site le $this->site_name` once the dns changes have propogated to complete the certification generation and installation." );
+		} else {
+			$this->le();
+		}
+	}
+
+
+	/**
+	 * Runs the acme le.
+	 *
+	 * ## OPTIONS
+	 *
+	 * <site-name>
+	 * : Name of website.
+	 *
+	 * [--force]
+	 * : Force renewal.
+	 */
+	public function le( $args = [], $assoc_args = [] ) {
+		if ( ! isset( $this->site_name ) ) {
+			$this->populate_site_info( $args );
+		}
+		if ( ! isset( $this->le_mail ) ) {
+			$this->le_mail = EE::get_config( 'le-mail' ) ?? EE::input( 'Enter your mail id: ' );
+		}
+		$force    = \EE\Utils\get_flag_value( $assoc_args, 'force' );
+		$wildcard = 'wpsubdom' === $this->site_type ? true : false;
+		$domains  = $wildcard ? [ "*.$this->site_name", $this->site_name ] : [ $this->site_name ];
+		$client   = new Site_Letsencrypt();
+		$client->check( $domains, $wildcard );
+		if ( $wildcard ) {
+			$client->request( "*.$this->site_name", [ $this->site_name ], $this->le_mail, $force );
+		} else {
+			$client->request( $this->site_name, [], $this->le_mail, $force );
+			$client->cleanup( $this->site_root );
+		}
+		EE::launch( 'docker exec ee-nginx-proxy sh -c "/app/docker-entrypoint.sh /usr/local/bin/docker-gen /app/nginx.tmpl /etc/nginx/conf.d/default.conf; /usr/sbin/nginx -s reload"' );
 	}
 
 	/**
@@ -742,8 +802,13 @@ class Site_Command extends EE_Command {
 
 		if ( ! $this->skip_install ) {
 			$this->create_etc_hosts_entry();
-			$this->site_status_check();
+			if ( ! $this->skip_chk ) {
+				$this->site_status_check();
+			}
 			$this->install_wp();
+		}
+		if ( $this->le ) {
+			$this->init_le();
 		}
 		$this->info( array( $this->site_name ) );
 		$this->create_site_db_entry();
@@ -927,7 +992,8 @@ class Site_Command extends EE_Command {
 			}
 		}
 
-		$wp_config_create_command = "docker-compose exec --user='www-data' php wp config create --dbuser='$this->db_user' --dbname='$this->db_name' --dbpass='$this->db_pass' --dbhost='$this->db_host:$this->db_port' $config_arguments";
+		$db_host                  = is_null( $this->db_port ) ? $this->db_host : "$this->db_host:$this->db_port";
+		$wp_config_create_command = "docker-compose exec --user='www-data' php wp config create --dbuser='$this->db_user' --dbname='$this->db_name' --dbpass='$this->db_pass' --dbhost='$db_host' $config_arguments " . '--extra-php="if ( isset( \$_SERVER[\'HTTP_X_FORWARDED_PROTO\'] ) && \$_SERVER[\'HTTP_X_FORWARDED_PROTO\'] == \'https\'){\$_SERVER[\'HTTPS\']=\'on\';}"';
 
 		try {
 			if ( ! \EE\Utils\default_launch( $wp_config_create_command ) ) {
