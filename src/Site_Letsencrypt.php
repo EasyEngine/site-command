@@ -224,16 +224,13 @@ class Site_Letsencrypt {
 
 	}
 
-	public function request( $domain, $altNames = [], $email ) {
+	public function request( $domain, $altNames = [], $email, $force=false ) {
 		$alternativeNames = array_unique( $altNames );
 		sort( $alternativeNames );
 
 		// Certificate renewal
 		if ( $this->hasValidCertificate( $domain, $alternativeNames ) ) {
 			EE::debug( "Certificate found for $domain, executing renewal" );
-
-			// TODO: take force from --force flag
-			$force = false;
 
 			return $this->executeRenewal( $domain, $alternativeNames, $force );
 		}
