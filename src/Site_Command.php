@@ -377,9 +377,11 @@ class Site_Command extends EE_Command {
 			$args = \EE\Utils\set_site_arg( $args, 'site info' );
 			$this->populate_site_info( $args );
 		}
+		$ssl = $this->le ? 'Enabled' : 'Not Enabled';
 		EE::log( "Details for site $this->site_name:" );
 		$prefix = ( $this->le ) ? 'https://' : 'http://';
 		$info   = array(
+			array( 'Site', $prefix . $this->site_name ),
 			array( 'Access phpMyAdmin', $prefix . $this->site_name . '/ee-admin/pma/' ),
 			array( 'Access mailhog', $prefix . $this->site_name . '/ee-admin/mailhog/' ),
 			array( 'Site Title', $this->site_title ),
@@ -389,6 +391,7 @@ class Site_Command extends EE_Command {
 			array( 'DB Password', $this->db_pass ),
 			array( 'E-Mail', $this->site_email ),
 			array( 'Cache Type', $this->cache_type ),
+			array( 'SSL', $ssl ),
 		);
 
 		if ( ! empty( $this->site_user ) && ! $this->skip_install ) {
@@ -1078,6 +1081,7 @@ class Site_Command extends EE_Command {
 	 * Function to save the site configuration entry into database.
 	 */
 	private function create_site_db_entry() {
+		$ssl = $this->le ? 1 : 0;
 		$data = array(
 			'sitename'         => $this->site_name,
 			'site_type'        => $this->site_type,
@@ -1092,6 +1096,7 @@ class Site_Command extends EE_Command {
 			'db_password'      => $this->db_pass,
 			'db_root_password' => $this->db_root_pass,
 			'email'            => $this->site_email,
+			'is_ssl'           => $ssl,
 			'created_on'       => date( 'Y-m-d H:i:s', time() ),
 		);
 
@@ -1121,7 +1126,7 @@ class Site_Command extends EE_Command {
 
 		if ( $this->db::site_in_db( $this->site_name ) ) {
 
-			$data = array( 'site_type', 'site_title', 'proxy_type', 'cache_type', 'site_path', 'db_name', 'db_user', 'db_host', 'db_port', 'db_password', 'db_root_password', 'wp_user', 'wp_pass', 'email' );
+			$data = array( 'site_type', 'site_title', 'proxy_type', 'cache_type', 'site_path', 'db_name', 'db_user', 'db_host', 'db_port', 'db_password', 'db_root_password', 'wp_user', 'wp_pass', 'email', 'is_ssl' );
 
 			$db_select = $this->db::select( $data, array( 'sitename' => $this->site_name ) );
 
@@ -1139,6 +1144,7 @@ class Site_Command extends EE_Command {
 			$this->site_user    = $db_select[0]['wp_user'];
 			$this->site_pass    = $db_select[0]['wp_pass'];
 			$this->site_email   = $db_select[0]['email'];
+			$this->le           = $db_select[0]['is_ssl'];
 
 		} else {
 			EE::error( "Site $this->site_name does not exist." );
