@@ -1,7 +1,6 @@
 <?php
 
 use function \EE\Utils\mustache_render;
-use Yosymfony\Toml\TomlBuilder;
 
 class Site_Docker {
 
@@ -76,6 +75,7 @@ class Site_Docker {
 		$nginx['environment'] = array(
 			'env' => array(
 				array( 'name' => $v_host ),
+				array( 'name' => 'VIRTUAL_PATH=/' ),
 			),
 		);
 		$nginx['volumes']     = array(
@@ -95,6 +95,8 @@ class Site_Docker {
 		$phpmyadmin['environment']  = array(
 			'env' => array(
 				array( 'name' => 'PMA_ABSOLUTE_URI=http://${VIRTUAL_HOST}/ee-admin/pma/' ),
+				array( 'name' => $v_host ),
+				array( 'name' => 'VIRTUAL_PATH=/ee-admin/pma/' ),
 			),
 		);
 		$phpmyadmin['networks']     = $network_default;
@@ -106,7 +108,8 @@ class Site_Docker {
 		$mail['command']      = array( 'name' => '["-invite-jim=false"]' );
 		$mail['environment']  = array(
 			'env' => array(
-				array( 'name' => 'VIRTUAL_HOST=${VIRTUAL_HOST}/ee-admin/mailhog' ),
+				array( 'name' => $v_host ),
+				array( 'name' => 'VIRTUAL_PATH=/ee-admin/mailhog/' ),
 				array( 'name' => 'VIRTUAL_PORT=8025' ),
 			),
 		);
