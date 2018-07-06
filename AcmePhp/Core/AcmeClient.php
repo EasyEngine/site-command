@@ -223,7 +223,7 @@ class AcmeClient implements AcmeClientV2Interface
 
         $endTime = time() + $timeout;
         $response = $this->getHttpClient()->signedKidRequest('GET', $order->getOrderEndpoint(), $this->getResourceAccount());
-        if ('pending' === $response['status']) {
+        if ('pending' === $response['status'] || 'ready' === $response['status']) {
             $humanText = ['-----BEGIN CERTIFICATE REQUEST-----', '-----END CERTIFICATE REQUEST-----'];
 
             $csrContent = $this->csrSigner->signCertificateRequest($csr);
