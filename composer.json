@@ -24,8 +24,5 @@
             "site list",
             "site delete"
         ]
-    },
-    "require": {
-        "yosymfony/toml": "^1.0"
     }
 }
