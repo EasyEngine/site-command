@@ -60,6 +60,7 @@ class Site_Docker {
 				array( 'name' => 'WORDPRESS_DB_PASSWORD' ),
 				array( 'name' => 'USER_ID=${USER_ID}' ),
 				array( 'name' => 'GROUP_ID=${GROUP_ID}' ),
+				array( 'name' => 'VIRTUAL_HOST=${VIRTUAL_HOST}' ),
 			),
 		);
 		$php['networks']     = $network_default;
