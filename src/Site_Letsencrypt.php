@@ -50,23 +50,23 @@ class Site_Letsencrypt {
 	private $conf_dir;
 
 	function __construct() {
+		$this->conf_dir = EE_CONF_ROOT . '/acme-conf';
 		$this->setRepository();
 		$this->setAcmeClient();
-		$this->conf_dir = EE_CONF_ROOT . '/acme-conf';
 	}
 
 	private function setAcmeClient() {
 
 		if ( ! $this->repository->hasAccountKeyPair() ) {
-			EE::log( 'No account key pair was found, generating one.' );
-			EE::log( 'Generating a key pair' );
+			EE::debug( 'No account key pair was found, generating one.' );
+			EE::debug( 'Generating a key pair' );
 
 			$keygen         = new KeyPairGenerator();
 			$accountKeyPair = $keygen->generateKeyPair();
-			EE::log( 'Key pair generated, storing' );
+			EE::debug( 'Key pair generated, storing' );
 			$this->repository->storeAccountKeyPair( $accountKeyPair );
 		} else {
-			EE::log( 'Loading account keypair' );
+			EE::debug( 'Loading account keypair' );
 			$accountKeyPair = $this->repository->loadAccountKeyPair();
 		}
 
@@ -189,7 +189,7 @@ class Site_Letsencrypt {
 				}
 			} else {
 				if ( ! $this->repository->hasDomainAuthorizationChallenge( $domain ) ) {
-					EE::error( "Domain: $domain not yet authorized." );
+					EE::error( "Domain: $domain not yet authorized/has not been started of with EasyEngine letsencrypt site creation." );
 				}
 				$authorizationChallenge = $this->repository->loadDomainAuthorizationChallenge( $domain );
 				if ( ! $solver->supports( $authorizationChallenge ) ) {
@@ -199,15 +199,13 @@ class Site_Letsencrypt {
 			EE::debug( 'Challenge loaded.' );
 
 			$authorizationChallenge = $this->client->reloadAuthorization( $authorizationChallenge );
-			if ( $authorizationChallenge->isValid() ) {
-				EE::warning( sprintf( 'The challenge is alread validated for domain %s.', $domain ) );
-			} else {
-				EE::log( sprintf( 'Testing the challenge for domain %s', $domain ) );
+			if ( ! $authorizationChallenge->isValid() ) {
+				EE::debug( sprintf( 'Testing the challenge for domain %s', $domain ) );
 				if ( ! $validator->isValid( $authorizationChallenge ) ) {
 					EE::warning( sprintf( 'Can not valid challenge for domain %s', $domain ) );
 				}
 
-				EE::log( sprintf( 'Requesting authorization check for domain %s', $domain ) );
+				EE::debug( sprintf( 'Requesting authorization check for domain %s', $domain ) );
 				$this->client->challengeAuthorization( $authorizationChallenge );
 				$authorizationChallengeToCleanup[] = $authorizationChallenge;
 			}
@@ -264,7 +262,7 @@ class Site_Letsencrypt {
 
 		$distinguishedName = $this->getOrCreateDistinguishedName( $domain, $alternativeNames, $email );
 		// TODO: ask them ;)
-		EE::log( 'Distinguished name informations have been stored locally for this domain (they won\'t be asked on renewal).' );
+		EE::debug( 'Distinguished name informations have been stored locally for this domain (they won\'t be asked on renewal).' );
 
 		// Order
 		$domains = array_merge( [ $domain ], $alternativeNames );
@@ -278,11 +276,11 @@ class Site_Letsencrypt {
 		EE::log( sprintf( 'Requesting first certificate for domain %s.', $domain ) );
 		$csr      = new CertificateRequest( $distinguishedName, $domainKeyPair );
 		$response = $this->client->finalizeOrder( $order, $csr );
-		EE::debug( 'Certificate received' );
+		EE::log( 'Certificate received' );
 
 		// Store
 		$this->repository->storeDomainCertificate( $domain, $response->getCertificate() );
-		EE::debug( 'Certificate stored' );
+		EE::log( 'Certificate stored' );
 
 		// Post-generate actions
 		$this->moveCertsToNginxProxy( $response );
@@ -352,11 +350,11 @@ class Site_Letsencrypt {
 			}
 
 			// Key pair
-			EE::log( 'Loading domain key pair...' );
+			EE::debug( 'Loading domain key pair...' );
 			$domainKeyPair = $this->repository->loadDomainKeyPair( $domain );
 
 			// Distinguished name
-			EE::log( 'Loading domain distinguished name...' );
+			EE::debug( 'Loading domain distinguished name...' );
 			$distinguishedName = $this->getOrCreateDistinguishedName( $domain, $alternativeNames );
 
 			// Order
@@ -371,10 +369,10 @@ class Site_Letsencrypt {
 			EE::log( sprintf( 'Renewing certificate for domain %s.', $domain ) );
 			$csr      = new CertificateRequest( $distinguishedName, $domainKeyPair );
 			$response = $this->client->finalizeOrder( $order, $csr );
-			EE::debug( 'Certificate received' );
+			EE::log( 'Certificate received' );
 
 			$this->repository->storeDomainCertificate( $domain, $response->getCertificate() );
-			$this->debug( 'Certificate stored' );
+			$this->log( 'Certificate stored' );
 
 			// Post-generate actions
 			$this->moveCertsToNginxProxy( $response );
@@ -506,7 +504,7 @@ class Site_Letsencrypt {
 
 	public function cleanup(  $site_root ) {
 		$challange_dir = "$site_root/app/src/.well-known";
-		if ( is_file( "$site_root/app/src/.well-known" ) ) {
+		if ( file_exists( "$site_root/app/src/.well-known" ) ) {
 			EE::debug( 'Cleaning up webroot files.' );
 			EE\Utils\delete_dir( $challange_dir );
 		}
