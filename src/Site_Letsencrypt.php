@@ -119,6 +119,7 @@ class Site_Letsencrypt {
 			return false;
 		}
 		EE::debug( "Account with email id: $email registered successfully!" );
+		return true;
 	}
 
 	public function authorize( Array $domains, $site_root, $wildcard = false ) {
@@ -171,6 +172,7 @@ class Site_Letsencrypt {
 			file_put_contents( "$site_root/app/src/.well-known/acme-challenge/$token", $payload );
 			EE::launch( "chown www-data: $site_root/app/src/.well-known/acme-challenge/$token" );
 		}
+		return true;
 	}
 
 	public function check( Array $domains, $wildcard = false ) {
@@ -228,7 +230,8 @@ class Site_Letsencrypt {
 				catch ( Exception $e ) {
 					EE::debug( $e->getMessage() );
 					EE::warning( 'Challange Authorization failed. Check logs and check if your domain is pointed correctly to this server.' );
-					EE::log( "Re-run `ee site le $this->site_name` after fixing the issue." );
+					$site_name = isset( $domains[1] ) ? $domains[1] : $domains[0];
+					EE::log( "Re-run `ee site le $site_name` after fixing the issue." );
 
 					return false;
 				}
@@ -246,7 +249,7 @@ class Site_Letsencrypt {
 				$solver->cleanup( $authorizationChallenge );
 			}
 		}
-
+		return true;
 	}
 
 	public function request( $domain, $altNames = [], $email, $force=false ) {
