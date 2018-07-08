@@ -284,7 +284,11 @@ class Site_Command extends EE_Command {
 		}
 		$wildcard = 'wpsubdom' === $this->site_type ? true : false;
 		$domains  = $wildcard ? [ "*.$this->site_name", $this->site_name ] : [ $this->site_name ];
-		$client->authorize( $domains, $this->site_root, $wildcard );
+		if ( ! $client->authorize( $domains, $this->site_root, $wildcard ) ) {
+			$this->le = false;
+
+			return;
+		}
 		if ( $wildcard ) {
 			EE::log( "Run `ee site le $this->site_name`\nonce the dns changes have propogated to complete the certification generation and installation." );
 		} else {

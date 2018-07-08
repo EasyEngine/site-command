@@ -122,9 +122,17 @@ class Site_Letsencrypt {
 	}
 
 	public function authorize( Array $domains, $site_root, $wildcard = false ) {
-		$solver      = $wildcard ? new SimpleDnsSolver( null, new ConsoleOutput() ) : new SimpleHttpSolver();
-		$solverName  = $wildcard ? 'dns-01' : 'http-01';
-		$order       = $this->client->requestOrder( $domains );
+		$solver     = $wildcard ? new SimpleDnsSolver( null, new ConsoleOutput() ) : new SimpleHttpSolver();
+		$solverName = $wildcard ? 'dns-01' : 'http-01';
+		try {
+			$order = $this->client->requestOrder( $domains );
+		}
+		catch ( Exception $e ) {
+			EE::warning( $e->getMessage() );
+			EE::warning( 'It seems you\'re in local environment or using non-public domain, please check logs. Skipping letsencrypt.' );
+
+			return false;
+		}
 
 		$authorizationChallengesToSolve = [];
 		foreach ( $order->getAuthorizationsChallenges() as $domainKey => $authorizationChallenges ) {
