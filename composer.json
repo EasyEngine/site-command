@@ -10,8 +10,6 @@
     "autoload": {
         "psr-4": {
             "": "src/",
-            "AcmePhp\\Core\\": "AcmePhp/Core",
-            "AcmePhp\\Ssl\\": "AcmePhp/Ssl",
             "AcmePhp\\Cli\\": "AcmePhp/Cli"
         },
         "files": [ "site-command.php" ]
@@ -29,10 +27,11 @@
         ]
     },
     "require": {
+        "acmephp/core": "dev-master",
         "ext-openssl": "*",
-        "webmozart/assert": "^1.0",
         "guzzlehttp/guzzle": "^6.0",
+        "league/flysystem": "^1.0.19",
         "symfony/serializer": "^3.0",
-        "league/flysystem": "^1.0.19"
+        "webmozart/assert": "^1.0"
     }
 }

@@ -150,11 +150,7 @@ server {
 	location /.well-known {
 		allow all;
 	}
-	location ~ /\. {
-		deny all;
-		access_log off;
-		log_not_found off;
-	}
+	
 	# Deny backup extensions & log files
 	location ~* ^.+\.(bak|log|old|orig|original|php#|php~|php_bak|save|swo|swp|sql)$ {
 		deny all;
