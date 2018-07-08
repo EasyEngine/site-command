@@ -109,8 +109,16 @@ class Site_Letsencrypt {
 
 
 	public function register( $email ) {
-		$this->client->registerAccount( null, $email );
-		EE::log( "Account with email id: $email registered successfully!" );
+		try {
+			$this->client->registerAccount( null, $email );
+		}
+		catch ( Exception $e ) {
+			EE::warning( $e->getMessage() );
+			EE::warning( 'It seems you\'re in local environment or there is some issue with network, please check logs. Skipping letsencrypt.' );
+
+			return false;
+		}
+		EE::debug( "Account with email id: $email registered successfully!" );
 	}
 
 	public function authorize( Array $domains, $site_root, $wildcard = false ) {

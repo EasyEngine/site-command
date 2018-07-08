@@ -277,7 +277,11 @@ class Site_Command extends EE_Command {
 	private function init_le() {
 		$client        = new Site_Letsencrypt();
 		$this->le_mail = EE::get_config( 'le-mail' ) ?? EE::input( 'Enter your mail id: ' );
-		$client->register( $this->le_mail );
+		if ( ! $client->register( $this->le_mail ) ) {
+			$this->le = false;
+
+			return;
+		}
 		$wildcard = 'wpsubdom' === $this->site_type ? true : false;
 		$domains  = $wildcard ? [ "*.$this->site_name", $this->site_name ] : [ $this->site_name ];
 		$client->authorize( $domains, $this->site_root, $wildcard );
