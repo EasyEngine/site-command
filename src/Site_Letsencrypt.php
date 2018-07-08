@@ -222,7 +222,16 @@ class Site_Letsencrypt {
 				}
 
 				EE::debug( sprintf( 'Requesting authorization check for domain %s', $domain ) );
-				$this->client->challengeAuthorization( $authorizationChallenge );
+				try {
+					$this->client->challengeAuthorization( $authorizationChallenge );
+				}
+				catch ( Exception $e ) {
+					EE::debug( $e->getMessage() );
+					EE::warning( 'Challange Authorization failed. Check logs and check if your domain is pointed correctly to this server.' );
+					EE::log( "Re-run `ee site le $this->site_name` after fixing the issue." );
+
+					return false;
+				}
 				$authorizationChallengeToCleanup[] = $authorizationChallenge;
 			}
 		}

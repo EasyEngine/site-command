@@ -319,7 +319,11 @@ class Site_Command extends EE_Command {
 		$wildcard = 'wpsubdom' === $this->site_type ? true : false;
 		$domains  = $wildcard ? [ "*.$this->site_name", $this->site_name ] : [ $this->site_name ];
 		$client   = new Site_Letsencrypt();
-		$client->check( $domains, $wildcard );
+		if ( ! $client->check( $domains, $wildcard ) ) {
+			$this->le = false;
+
+			return;
+		}
 		if ( $wildcard ) {
 			$client->request( "*.$this->site_name", [ $this->site_name ], $this->le_mail, $force );
 		} else {
