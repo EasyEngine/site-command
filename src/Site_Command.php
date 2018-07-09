@@ -252,10 +252,14 @@ class Site_Command extends EE_Command {
 	 *
 	 * <site-name>
 	 * : Name of website to be deleted.
+	 *
+	 * [--yes]
+	 * : Do not prompt for confirmation.
 	 */
-	public function delete( $args ) {
+	public function delete( $args, $assoc_args ) {
 		\EE\Utils\delem_log( 'site delete start' );
 		$this->populate_site_info( $args );
+		EE::confirm( "Are you sure you want to delete $this->site_name?", $assoc_args );
 		$this->level = 5;
 		$this->delete_site();
 		\EE\Utils\delem_log( 'site delete end' );
