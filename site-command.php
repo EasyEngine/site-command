@@ -1,6 +1,8 @@
 <?php
 
-define( 'SITE_TEMPLATE_ROOT', __DIR__ . '/templates' );
+if ( ! defined ( 'SITE_TEMPLATE_ROOT' ) ) {
+	define( 'SITE_TEMPLATE_ROOT', __DIR__ . '/templates' );
+}
 
 if ( ! class_exists( 'EE' ) ) {
 	return;
