@@ -21,7 +21,7 @@ class Site_Docker {
 
 		// db configuration.
 		$db['service_name'] = array( 'name' => 'db' );
-		$db['image']        = array( 'name' => 'easyengine/mariadb:' . EE_VERSION );
+		$db['image']        = array( 'name' => 'easyengine/mariadb:v' . EE_VERSION );
 		$db['restart']      = $restart_default;
 		$db['volumes']      = array(
 			array(
@@ -41,7 +41,7 @@ class Site_Docker {
 		$db['networks']     = $network_default;
 		// PHP configuration.
 		$php['service_name'] = array( 'name' => 'php' );
-		$php['image']        = array( 'name' => 'easyengine/php:' . EE_VERSION );
+		$php['image']        = array( 'name' => 'easyengine/php:v' . EE_VERSION );
 		$php['depends_on']   = array( 'name' => 'db' );
 		$php['restart']      = $restart_default;
 		$php['volumes']      = array(
@@ -67,7 +67,7 @@ class Site_Docker {
 
 		// nginx configuration.
 		$nginx['service_name'] = array( 'name' => 'nginx' );
-		$nginx['image']        = array( 'name' => 'easyengine/nginx:' . EE_VERSION );
+		$nginx['image']        = array( 'name' => 'easyengine/nginx:v' . EE_VERSION );
 		$nginx['depends_on']   = array( 'name' => 'php' );
 		$nginx['restart']      = $restart_default;
 
@@ -91,7 +91,7 @@ class Site_Docker {
 
 		// PhpMyAdmin configuration.
 		$phpmyadmin['service_name'] = array( 'name' => 'phpmyadmin' );
-		$phpmyadmin['image']        = array( 'name' => 'easyengine/phpmyadmin:' . EE_VERSION );
+		$phpmyadmin['image']        = array( 'name' => 'easyengine/phpmyadmin:v' . EE_VERSION );
 		$phpmyadmin['restart']      = $restart_default;
 		$phpmyadmin['environment']  = array(
 			'env' => array(
@@ -104,7 +104,7 @@ class Site_Docker {
 
 		// mailhog configuration.
 		$mailhog['service_name'] = array( 'name' => 'mailhog' );
-		$mailhog['image']        = array( 'name' => 'easyengine/mailhog:' . EE_VERSION );
+		$mailhog['image']        = array( 'name' => 'easyengine/mailhog:v' . EE_VERSION );
 		$mailhog['restart']      = $restart_default;
 		$mailhog['command']      = array( 'name' => '["-invite-jim=false"]' );
 		$mailhog['environment']  = array(
@@ -118,7 +118,7 @@ class Site_Docker {
 
 		// redis configuration.
 		$redis['service_name'] = array( 'name' => 'redis' );
-		$redis['image']        = array( 'name' => 'easyengine/redis:' . EE_VERSION );
+		$redis['image']        = array( 'name' => 'easyengine/redis:v' . EE_VERSION );
 		$redis['networks']     = $network_default;
 
 		if ( in_array( 'db', $filters, true ) ) {
