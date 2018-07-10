@@ -35,7 +35,9 @@ class Site_Command extends EE_Command {
 	private $db_port;
 	private $locale;
 	private $skip_install;
+	private $skip_chk;
 	private $force;
+	private $le_mail;
 
 	public function __construct() {
 		$this->level = 0;
@@ -124,6 +126,12 @@ class Site_Command extends EE_Command {
 	 * [--skip-install]
 	 * : Skips wp-core install.
 	 *
+	 * [--skip-status-check]
+	 * : Skips site status check.
+
+	 * [--letsencrypt]
+	 * : Enables ssl via letsencrypt certificate.
+	 *
 	 * [--force]
 	 * : Resets the remote database if it is not empty.
 	 */
@@ -143,9 +151,9 @@ class Site_Command extends EE_Command {
 			EE::error( "Site $this->site_name already exists. If you want to re-create it please delete the older one using:\n`ee site delete $this->site_name`" );
 		}
 
-		$this->proxy_type   = 'ee_traefik';
+		$this->proxy_type   = 'ee-nginx-proxy';
 		$this->cache_type   = ! empty( $assoc_args['wpredis'] ) ? 'wpredis' : 'none';
-		$this->le           = ! empty( $assoc_args['letsencrypt'] ) ? 'le' : false;
+		$this->le           = \EE\Utils\get_flag_value( $assoc_args, 'letsencrypt' );
 		$this->site_title   = \EE\Utils\get_flag_value( $assoc_args, 'title', $this->site_name );
 		$this->site_user    = \EE\Utils\get_flag_value( $assoc_args, 'admin_user', 'admin' );
 		$this->site_pass    = \EE\Utils\get_flag_value( $assoc_args, 'admin_pass', \EE\Utils\random_password() );
@@ -155,7 +163,7 @@ class Site_Command extends EE_Command {
 		$this->db_pass      = \EE\Utils\get_flag_value( $assoc_args, 'dbpass', \EE\Utils\random_password() );
 		$this->locale       = \EE\Utils\get_flag_value( $assoc_args, 'locale', EE::get_config( 'locale' ) );
 		$this->db_root_pass = \EE\Utils\random_password();
-		
+
 		// If user wants to connect to remote database
 		if ( 'db' !== $this->db_host ) {
 			if ( ! isset( $assoc_args['dbuser'] ) || ! isset( $assoc_args['dbpass'] ) ) {
@@ -168,6 +176,7 @@ class Site_Command extends EE_Command {
 
 		$this->site_email   = \EE\Utils\get_flag_value( $assoc_args, 'admin_email', strtolower( 'mail@' . $this->site_name ) );
 		$this->skip_install = \EE\Utils\get_flag_value( $assoc_args, 'skip-install' );
+		$this->skip_chk     = \EE\Utils\get_flag_value( $assoc_args, 'skip-status-check' );
 		$this->force        = \EE\Utils\get_flag_value( $assoc_args, 'force' );
 
 		$this->init_checks();
@@ -221,8 +230,8 @@ class Site_Command extends EE_Command {
 
 		if ( ! $sites ) {
 			EE::error( 'No sites found!' );
-		} 
-		
+		}
+
 		if ( 'text' === $format ) {
 			foreach ( $sites as $site ) {
 				EE::log( $site['sitename'] );
@@ -252,13 +261,81 @@ class Site_Command extends EE_Command {
 	 *
 	 * <site-name>
 	 * : Name of website to be deleted.
+	 *
+	 * [--yes]
+	 * : Do not prompt for confirmation.
 	 */
-	public function delete( $args ) {
+	public function delete( $args, $assoc_args ) {
 		\EE\Utils\delem_log( 'site delete start' );
 		$this->populate_site_info( $args );
+		EE::confirm( "Are you sure you want to delete $this->site_name?", $assoc_args );
 		$this->level = 5;
 		$this->delete_site();
 		\EE\Utils\delem_log( 'site delete end' );
+	}
+
+
+	/**
+	 * Runs the acme le registration and authorization.
+	 */
+	private function init_le() {
+		$client        = new Site_Letsencrypt();
+		$this->le_mail = EE::get_runner()->config[ 'le-mail' ] ?? EE::input( 'Enter your mail id: ' );
+		EE::get_runner()->ensure_present_in_config( 'le-mail', $this->le_mail );
+		if ( ! $client->register( $this->le_mail ) ) {
+			$this->le = false;
+
+			return;
+		}
+		$wildcard = 'wpsubdom' === $this->site_type ? true : false;
+		$domains  = $wildcard ? [ "*.$this->site_name", $this->site_name ] : [ $this->site_name ];
+		if ( ! $client->authorize( $domains, $this->site_root, $wildcard ) ) {
+			$this->le = false;
+
+			return;
+		}
+		if ( $wildcard ) {
+			echo \cli\Colors::colorize( "%YIMPORTANT:%n Run `ee site le $this->site_name` once the dns changes have propogated to complete the certification generation and installation.", null );
+		} else {
+			$this->le();
+		}
+	}
+
+
+	/**
+	 * Runs the acme le.
+	 *
+	 * ## OPTIONS
+	 *
+	 * <site-name>
+	 * : Name of website.
+	 *
+	 * [--force]
+	 * : Force renewal.
+	 */
+	public function le( $args = [], $assoc_args = [] ) {
+		if ( ! isset( $this->site_name ) ) {
+			$this->populate_site_info( $args );
+		}
+		if ( ! isset( $this->le_mail ) ) {
+			$this->le_mail = EE::get_config( 'le-mail' ) ?? EE::input( 'Enter your mail id: ' );
+		}
+		$force    = \EE\Utils\get_flag_value( $assoc_args, 'force' );
+		$wildcard = 'wpsubdom' === $this->site_type ? true : false;
+		$domains  = $wildcard ? [ "*.$this->site_name", $this->site_name ] : [ $this->site_name ];
+		$client   = new Site_Letsencrypt();
+		if ( ! $client->check( $domains, $wildcard ) ) {
+			$this->le = false;
+
+			return;
+		}
+		if ( $wildcard ) {
+			$client->request( "*.$this->site_name", [ $this->site_name ], $this->le_mail, $force );
+		} else {
+			$client->request( $this->site_name, [], $this->le_mail, $force );
+			$client->cleanup( $this->site_root );
+		}
+		EE::launch( 'docker exec ee-nginx-proxy sh -c "/app/docker-entrypoint.sh /usr/local/bin/docker-gen /app/nginx.tmpl /etc/nginx/conf.d/default.conf; /usr/sbin/nginx -s reload"' );
 	}
 
 	/**
@@ -317,9 +394,11 @@ class Site_Command extends EE_Command {
 			$args = \EE\Utils\set_site_arg( $args, 'site info' );
 			$this->populate_site_info( $args );
 		}
+		$ssl = $this->le ? 'Enabled' : 'Not Enabled';
 		EE::log( "Details for site $this->site_name:" );
 		$prefix = ( $this->le ) ? 'https://' : 'http://';
 		$info   = array(
+			array( 'Site', $prefix . $this->site_name ),
 			array( 'Access phpMyAdmin', $prefix . $this->site_name . '/ee-admin/pma/' ),
 			array( 'Access mailhog', $prefix . $this->site_name . '/ee-admin/mailhog/' ),
 			array( 'Site Title', $this->site_title ),
@@ -329,6 +408,7 @@ class Site_Command extends EE_Command {
 			array( 'DB Password', $this->db_pass ),
 			array( 'E-Mail', $this->site_email ),
 			array( 'Cache Type', $this->cache_type ),
+			array( 'SSL', $ssl ),
 		);
 
 		if ( ! empty( $this->site_user ) && ! $this->skip_install ) {
@@ -513,18 +593,18 @@ class Site_Command extends EE_Command {
 		}
 	}
 
-	
+
 	/**
 	 * Generic function to run a docker compose command. Must be ran inside correct directory.
 	 */
 	private function run_compose_command( $action, $container, $action_to_display = null, $service_to_display = null) {
 		$display_action = $action_to_display ? $action_to_display : $action;
 		$display_service = $service_to_display ? $service_to_display : $container;
-		
+
 		\EE::log( ucfirst( $display_action ) . 'ing ' . $display_service );
 		\EE\Utils\default_launch( "docker-compose $action $container" );
 	}
-	
+
 	/**
 	 * Executes reload commands. It needs seperate handling as commands to reload each service is different.
 	 */
@@ -566,20 +646,11 @@ class Site_Command extends EE_Command {
 			if ( ! ( $port_80_exit_status && $port_443_exit_status ) ) {
 				EE::error( 'Cannot create/start proxy container. Please make sure port 80 and 443 are free.' );
 			} else {
+				$EE_CONF_ROOT     = EE_CONF_ROOT;
+				$ee_proxy_command = "docker run --name $this->proxy_type -e LOCAL_USER_ID=`id -u` -e LOCAL_GROUP_ID=`id -g` --restart=always -d -p 80:80 -p 443:443 -v $EE_CONF_ROOT/nginx/certs:/etc/nginx/certs -v $EE_CONF_ROOT/nginx/dhparam:/etc/nginx/dhparam -v $EE_CONF_ROOT/nginx/conf.d:/etc/nginx/conf.d -v $EE_CONF_ROOT/nginx/htpasswd:/etc/nginx/htpasswd -v $EE_CONF_ROOT/nginx/vhost.d:/etc/nginx/vhost.d -v /var/run/docker.sock:/tmp/docker.sock:ro -v $EE_CONF_ROOT:/app/ee4 -v /usr/share/nginx/html easyengine/nginx-proxy:v" . EE_VERSION;
 
-				if ( ! is_dir( EE_CONF_ROOT . '/traefik' ) ) {
-					EE::debug( 'Creating traefik folder and config files.' );
-					mkdir( EE_CONF_ROOT . '/traefik' );
-				}
 
-				touch( EE_CONF_ROOT . '/traefik/acme.json' );
-				chmod( EE_CONF_ROOT . '/traefik/acme.json', 600 );
-				$traefik_toml = new Site_Docker();
-				file_put_contents( EE_CONF_ROOT . '/traefik/traefik.toml', $traefik_toml->generate_traefik_toml() );
-
-				$ee_traefik_command = 'docker run -d -p 8080:8080 -p 80:80 -p 443:443 -l "traefik.enable=false" -l "created_by=EasyEngine" -v /var/run/docker.sock:/var/run/docker.sock -v ' . EE_CONF_ROOT . '/traefik/traefik.toml:/etc/traefik/traefik.toml -v ' . EE_CONF_ROOT . '/traefik/acme.json:/etc/traefik/acme.json -v ' . EE_CONF_ROOT . '/traefik/endpoints:/etc/traefik/endpoints -v ' . EE_CONF_ROOT . '/traefik/certs:/etc/traefik/certs -v ' . EE_CONF_ROOT . '/traefik/log:/var/log --name ee_traefik easyengine/traefik';
-
-				if ( $this->docker::boot_container( $this->proxy_type, $ee_traefik_command ) ) {
+				if ( $this->docker::boot_container( $this->proxy_type, $ee_proxy_command ) ) {
 					EE::success( "$this->proxy_type container is up." );
 				} else {
 					EE::error( "There was some error in starting $this->proxy_type container. Please check logs." );
@@ -705,7 +776,7 @@ class Site_Command extends EE_Command {
 
 			// Docker needs special handling if we want to connect to host machine.
 			// The since we're inside the container and we want to access host machine,
-			// we would need to replace localhost with default gateway			
+			// we would need to replace localhost with default gateway
 			if( $this->db_host === '127.0.0.1' || $this->db_host === 'localhost' ) {
 				$launch = EE::launch( "docker network inspect $this->site_name --format='{{ (index .IPAM.Config 0).Gateway }}'", false, true );
 				\EE\Utils\default_debug( $launch );
@@ -751,8 +822,13 @@ class Site_Command extends EE_Command {
 
 		if ( ! $this->skip_install ) {
 			$this->create_etc_hosts_entry();
-			$this->site_status_check();
+			if ( ! $this->skip_chk ) {
+				$this->site_status_check();
+			}
 			$this->install_wp();
+		}
+		if ( $this->le ) {
+			$this->init_le();
 		}
 		$this->info( array( $this->site_name ) );
 		$this->create_site_db_entry();
@@ -772,13 +848,13 @@ class Site_Command extends EE_Command {
 	 */
 	private function delete_site() {
 
-		// Commented below block intentionally as they need change in DB 
+		// Commented below block intentionally as they need change in DB
 		// which should be discussed with the team
 		if ( 'db' !== $this->db_host && $this->level >= 4 ) {
 
 			chdir( $this->site_root );
 			$delete_db_command = "docker-compose exec php bash -c \"mysql --host=$this->db_host --port=$this->db_port --user=$this->db_user --password=$this->db_pass --execute='DROP DATABASE $this->db_name'\"";
-			
+
 			if ( \EE\Utils\default_launch( $delete_db_command ) ) {
 				EE::log( 'Database deleted.' );
 			} else {
@@ -817,6 +893,17 @@ class Site_Command extends EE_Command {
 		}
 
 		if ( $this->level > 4 ) {
+			if ( $this->le ) {
+				EE::log( 'Removing ssl certs.' );
+				$crt_file = EE_CONF_ROOT . "/nginx/certs/$this->site_name.crt";
+				$key_file = EE_CONF_ROOT . "/nginx/certs/$this->site_name.key";
+				if ( file_exists( $crt_file ) ) {
+					unlink( $crt_file );
+				}
+				if ( file_exists( $key_file ) ) {
+					unlink( $key_file );
+				}
+			}
 			if ( $this->db::delete( array( 'sitename' => $this->site_name ) ) ) {
 				EE::log( 'Removing database entry.' );
 			} else {
@@ -936,7 +1023,8 @@ class Site_Command extends EE_Command {
 			}
 		}
 
-		$wp_config_create_command = "docker-compose exec --user='www-data' php wp config create --dbuser='$this->db_user' --dbname='$this->db_name' --dbpass='$this->db_pass' --dbhost='$this->db_host:$this->db_port' $config_arguments";
+		$db_host                  = is_null( $this->db_port ) ? $this->db_host : "$this->db_host:$this->db_port";
+		$wp_config_create_command = "docker-compose exec --user='www-data' php wp config create --dbuser='$this->db_user' --dbname='$this->db_name' --dbpass='$this->db_pass' --dbhost='$db_host' $config_arguments " . '--extra-php="if ( isset( \$_SERVER[\'HTTP_X_FORWARDED_PROTO\'] ) && \$_SERVER[\'HTTP_X_FORWARDED_PROTO\'] == \'https\'){\$_SERVER[\'HTTPS\']=\'on\';}"';
 
 		try {
 			if ( ! \EE\Utils\default_launch( $wp_config_create_command ) ) {
@@ -999,7 +1087,7 @@ class Site_Command extends EE_Command {
 
 		$wp_install_command = 'install';
 		$maybe_multisite_type    = '';
-		
+
 		if ( 'wpsubdom' === $this->site_type || 'wpsubdir' === $this->site_type ) {
 			$wp_install_command = 'multisite-install';
 			$maybe_multisite_type  = $this->site_type === 'wpsubdom' ? '--subdomains' : '';
@@ -1021,6 +1109,7 @@ class Site_Command extends EE_Command {
 	 * Function to save the site configuration entry into database.
 	 */
 	private function create_site_db_entry() {
+		$ssl = $this->le ? 1 : 0;
 		$data = array(
 			'sitename'         => $this->site_name,
 			'site_type'        => $this->site_type,
@@ -1035,6 +1124,7 @@ class Site_Command extends EE_Command {
 			'db_password'      => $this->db_pass,
 			'db_root_password' => $this->db_root_pass,
 			'email'            => $this->site_email,
+			'is_ssl'           => $ssl,
 			'created_on'       => date( 'Y-m-d H:i:s', time() ),
 		);
 
@@ -1064,7 +1154,7 @@ class Site_Command extends EE_Command {
 
 		if ( $this->db::site_in_db( $this->site_name ) ) {
 
-			$data = array( 'site_type', 'site_title', 'proxy_type', 'cache_type', 'site_path', 'db_name', 'db_user', 'db_host', 'db_port', 'db_password', 'db_root_password', 'wp_user', 'wp_pass', 'email' );
+			$data = array( 'site_type', 'site_title', 'proxy_type', 'cache_type', 'site_path', 'db_name', 'db_user', 'db_host', 'db_port', 'db_password', 'db_root_password', 'wp_user', 'wp_pass', 'email', 'is_ssl' );
 
 			$db_select = $this->db::select( $data, array( 'sitename' => $this->site_name ) );
 
@@ -1082,6 +1172,7 @@ class Site_Command extends EE_Command {
 			$this->site_user    = $db_select[0]['wp_user'];
 			$this->site_pass    = $db_select[0]['wp_pass'];
 			$this->site_email   = $db_select[0]['email'];
+			$this->le           = $db_select[0]['is_ssl'];
 
 		} else {
 			EE::error( "Site $this->site_name does not exist." );

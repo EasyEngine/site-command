@@ -18,6 +18,7 @@ Performs basic site functions in easyengine.
 Runs the site creation.
 
 ```bash
+ee site create example.com                      # install wordpress without any page caching (default)
 ee site create example.com --wp                 # install wordpress without any page caching
 ee site create example.com --wpredis            # install wordpress with page caching
 ee site create example.com --wpsubir            # install wpmu-subdirectory without any page caching
@@ -26,13 +27,21 @@ ee site create example.com --wpsubdom           # install wpmu-subdomain without
 ee site create example.com --wpsubdom --wpredis # install wpmu-subdomain with page cache
 ```
 
+Let's Encrypt SSL
+```bash
+# Enable SSL using Let’s Encrypt (You can add --letsencrypt along with any other flag.)
+ee site create example.com [--letsencrypt|--le]
+ee site create example.com --le                 # install wordpress without any page caching + letsencrypt ssl
+ee site create example.com --wpredis --le       # install wordpress with page caching + letsencrypt ssl
+ee site create example.com --wpsubdom --le      # install wordpress wpmu-subdomain + wildcard letsencrypt ssl
+```
+
 #### ee site delete
 Deletes an existing EasyEngine site including the webroot and the database.
 
-_Warning: Doesn't ask for confirmation_
-
 ```bash
-ee site delete example.com
+ee site delete example.com          # Asks for confirmation.
+ee site delete example.com --yes    # Skips the confirmation prompt.
 ```
 
 #### ee site disable
@@ -60,9 +69,10 @@ ee site info example.com
 Lists the created websites.
 
 ```bash
-ee site list
-ee site list --enabled
-ee site list --enabled --format=csv
+ee site list                                           # Lists all sites (default: tabular format) 
+ee site list --format=[count|csv|json|table|text|yaml] # Lists all sites in a particular format
+ee site list --enabled                                 # List enabled sites 
+ee site list --disabled                                # List disabled sites 
 ```
 
 #### ee site start
