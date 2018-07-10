@@ -63,9 +63,10 @@ ee site info example.com
 Lists the created websites.
 
 ```bash
-ee site list
-ee site list --enabled
-ee site list --enabled --format=[count|csv|json|table|text|yaml]
+ee site list                                           # Lists all sites (default: tabular format) 
+ee site list --format=[count|csv|json|table|text|yaml] # Lists all sites in a particular format
+ee site list --enabled                                 # List enabled sites 
+ee site list --disabled                                # List disabled sites 
 ```
 
 #### ee site start
