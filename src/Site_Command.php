@@ -908,8 +908,10 @@ class Site_Command extends EE_Command {
 	private function site_status_check() {
 		$this->level = 4;
 		EE::log( 'Checking and verifying site-up status. This may take some time.' );
-		$httpcode = '000';
-		$ch       = curl_init( $this->site_name );
+		$httpcode        = 000;
+		$curl_url        = $this->site_name;
+		$ch              = curl_init( $curl_url );
+		$follow_redirect = false;
 		curl_setopt( $ch, CURLOPT_HEADER, true );
 		curl_setopt( $ch, CURLOPT_NOBODY, true );
 		curl_setopt( $ch, CURLOPT_RETURNTRANSFER, 1 );
@@ -919,7 +921,20 @@ class Site_Command extends EE_Command {
 		try {
 			while ( 200 !== $httpcode && 302 !== $httpcode ) {
 				curl_exec( $ch );
+				if ( $follow_redirect ) {
+					$redirectURL = curl_getinfo( $ch, CURLINFO_EFFECTIVE_URL );
+					EE::debug( "Redirect url: $redirectURL" );
+					if ( "https://$this->site_name/wp-admin/install.php" === $redirectURL ) {
+						EE::log( "SSL certs found for $this->site_name" );
+						$this->le = true;
+					}
+				}
 				$httpcode = curl_getinfo( $ch, CURLINFO_HTTP_CODE );
+				if ( 301 === $httpcode ) {
+					EE::debug( 'Redirect found.' );
+					$follow_redirect = true;
+					curl_setopt( $ch, CURLOPT_FOLLOWLOCATION, true );
+				}
 				echo '.';
 				sleep( 2 );
 				if ( $i ++ > 60 ) {
