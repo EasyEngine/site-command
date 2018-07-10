@@ -25,9 +25,15 @@ ee site create example.com --wpsubir            # install wpmu-subdirectory with
 ee site create example.com --wpsubir --wpredis  # install wpmu-subdirectory with page caching
 ee site create example.com --wpsubdom           # install wpmu-subdomain without any page caching
 ee site create example.com --wpsubdom --wpredis # install wpmu-subdomain with page cache
+```
 
+Let's Encrypt SSL
+```bash
 # Enable SSL using Let’s Encrypt (You can add --letsencrypt along with any other flag.)
-ee site create example.com --letsencrypt
+ee site create example.com [--letsencrypt|--le]
+ee site create example.com --le                 # install wordpress without any page caching + letsencrypt ssl
+ee site create example.com --wpredis --le       # install wordpress with page caching + letsencrypt ssl
+ee site create example.com --wpsubdom --le      # install wordpress wpmu-subdomain + wildcard letsencrypt ssl
 ```
 
 #### ee site delete
