@@ -892,6 +892,17 @@ class Site_Command extends EE_Command {
 		}
 
 		if ( $this->level > 4 ) {
+			if ( $this->le ) {
+				EE::log( 'Removing ssl certs.' );
+				$crt_file = EE_CONF_ROOT . "/nginx/certs/$this->site_name.crt";
+				$key_file = EE_CONF_ROOT . "/nginx/certs/$this->site_name.key";
+				if ( file_exists( $crt_file ) ) {
+					unlink( $crt_file );
+				}
+				if ( file_exists( $key_file ) ) {
+					unlink( $key_file );
+				}
+			}
 			if ( $this->db::delete( array( 'sitename' => $this->site_name ) ) ) {
 				EE::log( 'Removing database entry.' );
 			} else {
