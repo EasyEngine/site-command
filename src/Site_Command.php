@@ -295,7 +295,7 @@ class Site_Command extends EE_Command {
 			return;
 		}
 		if ( $wildcard ) {
-			EE::log( "Run `ee site le $this->site_name`\nonce the dns changes have propogated to complete the certification generation and installation." );
+			echo \cli\Colors::colorize( "%YIMPORTANT:%n Run `ee site le $this->site_name` once the dns changes have propogated to complete the certification generation and installation.", null );
 		} else {
 			$this->le();
 		}
