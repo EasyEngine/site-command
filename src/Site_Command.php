@@ -281,6 +281,7 @@ class Site_Command extends EE_Command {
 	private function init_le() {
 		$client        = new Site_Letsencrypt();
 		$this->le_mail = EE::get_runner()->config[ 'le-mail' ] ?? EE::input( 'Enter your mail id: ' );
+		EE::get_runner()->ensure_present_in_config( 'le-mail', $this->le_mail );
 		if ( ! $client->register( $this->le_mail ) ) {
 			$this->le = false;
 
