@@ -146,9 +146,18 @@ server {
 		expires max;
 	}
 	# Security settings for better privacy
-	# Deny hidden files
-	location /.well-known {
+	# Allow LetsEncrypt HTTP challenge URL
+	location ^~ /.well-known/acme-challenge/ {
+		auth_basic off;
 		allow all;
+		try_files $uri =404;
+		break;
+	}
+	# Deny hidden files
+	location ~ /\. {
+		deny all;
+		access_log off;
+		log_not_found off;
 	}
 	
 	# Deny backup extensions & log files
