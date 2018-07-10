@@ -18,21 +18,24 @@ Performs basic site functions in easyengine.
 Runs the site creation.
 
 ```bash
+ee site create example.com                      # install wordpress without any page caching (default)
 ee site create example.com --wp                 # install wordpress without any page caching
 ee site create example.com --wpredis            # install wordpress with page caching
 ee site create example.com --wpsubir            # install wpmu-subdirectory without any page caching
 ee site create example.com --wpsubir --wpredis  # install wpmu-subdirectory with page caching
 ee site create example.com --wpsubdom           # install wpmu-subdomain without any page caching
 ee site create example.com --wpsubdom --wpredis # install wpmu-subdomain with page cache
+
+# Enable SSL using Let’s Encrypt (You can add --letsencrypt along with any other flag.)
+ee site create example.com --letsencrypt
 ```
 
 #### ee site delete
 Deletes an existing EasyEngine site including the webroot and the database.
 
-_Warning: Doesn't ask for confirmation_
-
 ```bash
-ee site delete example.com
+ee site delete example.com          # Asks for confirmation.
+ee site delete example.com --yes    # Skips the confirmation prompt.
 ```
 
 #### ee site disable
@@ -62,7 +65,7 @@ Lists the created websites.
 ```bash
 ee site list
 ee site list --enabled
-ee site list --enabled --format=csv
+ee site list --enabled --format=[count|csv|json|table|text|yaml]
 ```
 
 #### ee site start
