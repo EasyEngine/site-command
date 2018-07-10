@@ -77,6 +77,7 @@ class Site_Docker {
 			'env' => array(
 				array( 'name' => $v_host ),
 				array( 'name' => 'VIRTUAL_PATH=/' ),
+				array( 'name' => 'HSTS=off' ),
 			),
 		);
 		$nginx['volumes']     = array(
