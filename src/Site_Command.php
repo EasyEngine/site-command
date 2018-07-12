@@ -704,6 +704,8 @@ class Site_Command extends EE_Command {
 		$env_content            = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/.env.mustache', $env_data );
 		$php_ini_content        = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/php-fpm/php.ini.mustache', [] );
 
+		$this->add_site_redirects();
+
 		try {
 			if ( ! ( file_put_contents( $site_docker_yml, $docker_compose_content )
 				&& file_put_contents( $site_conf_env, $env_content )
@@ -719,6 +721,63 @@ class Site_Command extends EE_Command {
 		catch ( Exception $e ) {
 			$this->catch_clean( $e );
 		}
+	}
+
+	/**
+	 * Adds www to non-www redirection to site
+	 */
+	private function add_site_redirects() {
+		$confd_path = EE_CONF_ROOT . '/nginx/conf.d/';
+		$config_file_path = $confd_path . $this->site_name . '-redirect.conf';
+		$has_www = strpos( $this->site_name, 'www.' ) === 0;
+		$content = '';
+
+		if( $has_www ) {
+			$site_name_without_www = ltrim( $this->site_name, '.www' );
+			// ee site create www.example.com --le
+			if( $this->le ) {
+				$content = "
+server {
+	listen  80;
+	listen  443;
+	server_name  $site_name_without_www;
+	return  301 https://$this->site_name\$request_uri;
+}";
+			}
+			// ee site create www.example.com
+			else {
+				$content = "
+server {
+	listen  80;
+	server_name  $site_name_without_www;
+	return  301 http://$this->site_name\$request_uri;
+}";
+			}
+		}
+		else {
+			$site_name_with_www = 'www.' . $this->site_name;
+			// ee site create example.com --le
+			if( $this->le ) {
+
+				$content = "
+server {
+	listen  80;
+	listen  443;
+	server_name  $site_name_with_www;
+	return  301 https://$this->site_name\$request_uri;
+}";
+			}
+			// ee site create example.com
+			else {
+				$content = "
+server {
+	listen  80;
+	server_name  $site_name_with_www;
+	return  301 http://$this->site_name\$request_uri;
+}";
+			}
+		}
+		file_put_contents( $config_file_path, ltrim( $content, PHP_EOL ) );
 	}
 
 	/**
