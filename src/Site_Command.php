@@ -568,12 +568,28 @@ class Site_Command extends EE_Command {
 	/**
 	 * Generic function to run a docker compose command. Must be ran inside correct directory.
 	 */
-	private function run_compose_command( $action, $container, $action_to_display = null, $service_to_display = null) {
-		$display_action = $action_to_display ? $action_to_display : $action;
+	private function run_compose_command( $action, $container, $action_to_display = null, $service_to_display = null ) {
+		$services        = [ 'mailhog' => 0, 'phpmyadmin' => 0 ];
+		$db_actions      = [ 'up -d', 'stop' ];
+		$display_action  = $action_to_display ? $action_to_display : $action;
 		$display_service = $service_to_display ? $service_to_display : $container;
 
 		\EE::log( ucfirst( $display_action ) . 'ing ' . $display_service );
-		\EE\Utils\default_launch( "docker-compose $action $container" );
+		$run_compose_command = \EE\Utils\default_launch( "docker-compose $action $container" );
+
+		if ( $run_compose_command && in_array( $action, $db_actions ) ) {
+
+			$db_val = 'stop' === $action ? 0 : 1;
+			if ( empty( $container ) ) {
+				foreach ( $services as $service => $val ) {
+					$services[$service] = $db_val;
+				}
+			} else {
+				$services = [ $container => $db_val ];
+			}
+			$this->db::update( $services, [ 'sitename' => $this->site_name ], 'services' );
+
+		}
 	}
 
 	/**
