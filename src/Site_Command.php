@@ -1183,7 +1183,7 @@ server {
 		}
 
 		try {
-			if ( $this->db::insert( $data ) && $this->db::insert( [ 'sitename' => $this->site_name, 'services' ] ) ) {
+			if ( $this->db::insert( $data ) && $this->db::insert( [ 'sitename' => $this->site_name ], 'services' ) ) {
 				EE::log( 'Site entry created.' );
 			} else {
 				throw new Exception( 'Error creating site entry in database.' );
