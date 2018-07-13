@@ -16,6 +16,7 @@ before_script:
       echo "xdebug.ini does not exist"
     fi
   - ./ci/prepare.sh
+  - ./ci/add-test-certs.sh
 
 script:
   - cd "$TRAVIS_BUILD_DIR/../easyengine"

@@ -3,6 +3,8 @@
 include_once(__DIR__ . '/../../php/class-ee.php');
 include_once(__DIR__ . '/../../php/utils.php');
 
+define( 'EE_CONF_ROOT', '/opt/easyengine' );
+
 use Behat\Behat\Context\Context;
 use Behat\Behat\Hook\Scope\AfterFeatureScope;
 
@@ -63,6 +65,14 @@ class FeatureContext implements Context
 		if ( 0 !== $this->command->return_code ) {
 			throw new Exception("Actual return code is not zero: \n" . $this->command);
 		}
+	}
+
+	/**
+	 * @Then After delay of :time seconds
+	 */
+	public function afterDelayOfSeconds( $time )
+	{
+		sleep( $time );
 	}
 
 	/**
@@ -167,6 +177,61 @@ class FeatureContext implements Context
 		curl_setopt($ch, CURLOPT_HEADER, true);
 		curl_setopt($ch, CURLOPT_NOBODY, true);
 		curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+		curl_setopt($ch, CURLOPT_VERBOSE, true);
+		$headers = curl_exec($ch);
+
+		curl_close($ch);
+
+		$rows = $table->getHash();
+
+		foreach ($rows as $row) {
+			if (strpos($headers, $row['header']) === false) {
+				throw new Exception("Unable to find " . $row['header'] . "\nActual output is : " . $headers);
+			}
+		}
+	}
+
+	/**
+	 * @Then Request on :host with header :header should contain following headers:
+	 */
+	public function requestOnWithHeaderShouldContainFollowingHeaders($host, $header, TableNode $table)
+	{
+
+		$ch = curl_init();
+		curl_setopt($ch, CURLOPT_URL, $host);
+		curl_setopt($ch, CURLOPT_HEADER, true);
+		curl_setopt($ch, CURLOPT_HTTPHEADER, [ $header ]);
+		curl_setopt($ch, CURLOPT_NOBODY, true);
+		curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+		curl_setopt($ch, CURLOPT_VERBOSE, true);
+		$headers = curl_exec($ch);
+
+		curl_close($ch);
+
+		$rows = $table->getHash();
+
+		foreach ($rows as $row) {
+			if (strpos($headers, $row['header']) === false) {
+				throw new Exception("Unable to find " . $row['header'] . "\nActual output is : " . $headers);
+			}
+		}
+	}
+
+	/**
+	 * @Then Request on :host with resolve option :resolve should contain following headers:
+	 */
+	public function requestOnWithResolveOptionShouldContainFollowingHeaders($host, $resolve, TableNode $table)
+	{
+
+		$ch = curl_init();
+		curl_setopt($ch, CURLOPT_URL, $host);
+		curl_setopt($ch, CURLOPT_HEADER, true);
+		curl_setopt($ch, CURLOPT_NOBODY, true);
+		curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+		curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+		curl_setopt($ch, CURLOPT_RESOLVE, [ $resolve ]);
+		curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+		curl_setopt($ch, CURLOPT_VERBOSE, true);
 		$headers = curl_exec($ch);
 		curl_close($ch);
 
@@ -184,7 +249,22 @@ class FeatureContext implements Context
 	 */
 	public static function cleanup(AfterFeatureScope $scope)
 	{
-		exec("sudo bin/ee site delete hello.test");
+		$test_sites = [
+			'hello.test',
+			'example.test',
+			'www.example1.test',
+			'example2.test',
+			'www.example3.test',
+		];
+
+		$result = EE::launch( 'sudo bin/ee site list --format=text',false, true );
+		$running_sites = explode( "\n", $result->stdout );
+		$sites_to_delete = array_intersect( $test_sites, $running_sites );
+
+		foreach ( $sites_to_delete as $site ) {
+			exec("sudo bin/ee site delete $site --yes" );
+		}
+
 		if(file_exists('ee.phar')) {
 			unlink('ee.phar');
 		}
