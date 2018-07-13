@@ -7,10 +7,12 @@ define( 'EE_CONF_ROOT', '/opt/easyengine' );
 
 use Behat\Behat\Context\Context;
 use Behat\Behat\Hook\Scope\AfterFeatureScope;
-
+use Behat\Behat\Hook\Scope\BeforeScenarioScope;
 
 use Behat\Gherkin\Node\PyStringNode,
 	Behat\Gherkin\Node\TableNode;
+
+define( 'EE_SITE_ROOT', getenv('HOME') . '/ee-sites/' );
 
 class FeatureContext implements Context
 {
@@ -55,14 +57,35 @@ class FeatureContext implements Context
 	 */
 	public function iRun($command)
 	{
-		$this->command = EE::launch($command, false, true);
+		$this->commands[] = EE::launch($command, false, true);
 	}
+
+	/**
+	 * @When I create subsite :subsite in :site
+	 */
+	public function iCreateSubsiteInOfType($subsite, $site )
+	{
+		$php_container = implode( explode( '.', $subsite ) ) . '_php_1';
+
+		EE::launch( "docker exec -it --user='www-data' $php_container sh -c 'wp site create --slug=$site'", false, true );
+	}
+
 	/**
 	 * @Then return value should be 0
 	 */
-	public function returnCodeShouldBe0()
+	public function returnValueShouldBe0()
 	{
-		if ( 0 !== $this->command->return_code ) {
+		if ( 0 !== $this->commands[0]->return_code ) {
+			throw new Exception("Actual return code is not zero: \n" . $this->command);
+		}
+	}
+
+	/**
+	 * @Then return value of command :index should be 0
+	 */
+	public function returnValueOfCommandShouldBe0($index)
+	{
+		if ( 0 !== $this->commands[ $index - 1 ]->return_code ) {
 			throw new Exception("Actual return code is not zero: \n" . $this->command);
 		}
 	}
@@ -80,7 +103,22 @@ class FeatureContext implements Context
 	 */
 	public function stdoutShouldReturnExactly($output_stream, PyStringNode $expected_output)
 	{
-		$command_output = $output_stream === "STDOUT" ? $this->command->stdout : $this->command->stderr;
+		$command_output = $output_stream === "STDOUT" ? $this->commands[0]->stdout : $this->commands[0]->stderr;
+
+		$command_output = str_replace(["\033[1;31m","\033[0m"],'',$command_output);
+
+		$expected_out = isset($expected_output->getStrings()[0]) ? $expected_output->getStrings()[0] : '';
+		if ( $expected_out !== trim($command_output)) {
+			throw new Exception("Actual output is:\n" . $command_output);
+		}
+	}
+
+	/**
+	 * @Then /(STDOUT|STDERR) of command :index should return exactly/
+	 */
+	public function stdoutOfCommandShouldReturnExactly($output_stream, $index, PyStringNode $expected_output)
+	{
+		$command_output = $output_stream === "STDOUT" ? $this->commands[ $index - 1 ]->stdout : $this->commands[ $index - 1 ]->stderr;
 
 		$command_output = str_replace(["\033[1;31m","\033[0m"],'',$command_output);
 
@@ -95,11 +133,48 @@ class FeatureContext implements Context
 	 */
 	public function stdoutShouldReturnSomethingLike($output_stream, PyStringNode $expected_output)
 	{
-		$command_output = $output_stream === "STDOUT" ? $this->command->stdout : $this->command->stderr;
+		$command_output = $output_stream === "STDOUT" ? $this->commands[0]->stdout : $this->commands[0]->stderr;
 
 		$expected_out = isset($expected_output->getStrings()[0]) ? $expected_output->getStrings()[0] : '';
 		if (strpos($command_output, $expected_out) === false) {
 			throw new Exception("Actual output is:\n" . $command_output);
+		}
+	}
+
+
+	/**
+	 * @Then /(STDOUT|STDERR) of command :index should return something like/
+	 */
+	public function stdoutOfCommandShouldReturnSomethingLike($output_stream, $index, PyStringNode $expected_output)
+	{
+		$command_output = $output_stream === "STDOUT" ? $this->commands[ $index - 1 ]->stdout : $this->commands[ $index - 1 ]->stderr;
+
+		$expected_out = isset($expected_output->getStrings()[0]) ? $expected_output->getStrings()[0] : '';
+		if (strpos($command_output, $expected_out) === false) {
+			throw new Exception("Actual output is:\n" . $command_output);
+		}
+	}
+
+	/**
+	 * @Then The site :site should be :type multisite
+	 */
+	public function theSiteShouldBeMultisite( $site, $type )
+	{
+		$php_container = implode( explode( '.', $site ) ) . '_php_1';
+		$result = EE::launch("docker exec -it --user='www-data' $php_container sh -c 'wp config get SUBDOMAIN_INSTALL'", false, true );
+
+		if( $result->stderr ) {
+			throw new Exception("Found error while executing command: $result->stderr");
+		}
+
+		if($type === 'subdomain' && trim($result->stdout) !== '1') {
+			throw new Exception("Expecting SUBDOMAIN_INSTALL to be 1. Got: $result->stdout");
+		}
+		else if($type === 'subdir' && trim($result->stdout) === '') {
+			throw new Exception("Expecting SUBDOMAIN_INSTALL to be empty. Got: $result->stdout");
+		}
+		else if($type !== 'subdomain' && $type !== 'subdir') {
+			throw new Exception("Found unknown site type: $type");
 		}
 	}
 
@@ -120,7 +195,7 @@ class FeatureContext implements Context
 	 */
 	public function theWebrootShouldBeRemoved($site)
 	{
-		if (file_exists(getenv('HOME') . "/ee-sites/" . $site)) {
+		if (file_exists(EE_SITE_ROOT . $site)) {
 			throw new Exception("Webroot has not been removed!");
 		}
 	}
@@ -150,7 +225,7 @@ class FeatureContext implements Context
 	 */
 	public function theSiteShouldHaveWebroot($site)
 	{
-		if (!file_exists(getenv('HOME') . "/ee-sites/" . $site)) {
+		if (!file_exists(EE_SITE_ROOT . $site)) {
 			throw new Exception("Webroot has not been created!");
 		}
 	}
@@ -160,7 +235,7 @@ class FeatureContext implements Context
 	 */
 	public function theSiteShouldHaveWordpress($site)
 	{
-		if (!file_exists(getenv('HOME') . "/ee-sites/" . $site . "/app/src/wp-config.php")) {
+		if (!file_exists(EE_SITE_ROOT . $site . "/app/src/wp-config.php")) {
 			throw new Exception("WordPress data not found!");
 		}
 	}
@@ -242,6 +317,14 @@ class FeatureContext implements Context
 				throw new Exception("Unable to find " . $row['header'] . "\nActual output is : " . $headers);
 			}
 		}
+	}
+
+	/**
+	 * @BeforeScenario
+	 */
+	public function cleanupCommands(BeforeScenarioScope $scope)
+	{
+		$this->commands = [];
 	}
 
 	/**
