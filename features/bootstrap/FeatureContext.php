@@ -102,6 +102,7 @@ class FeatureContext implements Context
 			throw new Exception("Actual output is:\n" . $command_output);
 		}
 	}
+
 	/**
 	 * @Then The :site db entry should be removed
 	 */
@@ -176,7 +177,9 @@ class FeatureContext implements Context
 		curl_setopt($ch, CURLOPT_HEADER, true);
 		curl_setopt($ch, CURLOPT_NOBODY, true);
 		curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+		curl_setopt($ch, CURLOPT_VERBOSE, true);
 		$headers = curl_exec($ch);
+
 		curl_close($ch);
 
 		$rows = $table->getHash();
@@ -200,6 +203,35 @@ class FeatureContext implements Context
 		curl_setopt($ch, CURLOPT_HTTPHEADER, [ $header ]);
 		curl_setopt($ch, CURLOPT_NOBODY, true);
 		curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+		curl_setopt($ch, CURLOPT_VERBOSE, true);
+		$headers = curl_exec($ch);
+
+		curl_close($ch);
+
+		$rows = $table->getHash();
+
+		foreach ($rows as $row) {
+			if (strpos($headers, $row['header']) === false) {
+				throw new Exception("Unable to find " . $row['header'] . "\nActual output is : " . $headers);
+			}
+		}
+	}
+
+	/**
+	 * @Then Request on :host with resolve option :resolve should contain following headers:
+	 */
+	public function requestOnWithResolveOptionShouldContainFollowingHeaders($host, $resolve, TableNode $table)
+	{
+
+		$ch = curl_init();
+		curl_setopt($ch, CURLOPT_URL, $host);
+		curl_setopt($ch, CURLOPT_HEADER, true);
+		curl_setopt($ch, CURLOPT_NOBODY, true);
+		curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+		curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+		curl_setopt($ch, CURLOPT_RESOLVE, [ $resolve ]);
+		curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+		curl_setopt($ch, CURLOPT_VERBOSE, true);
 		$headers = curl_exec($ch);
 		curl_close($ch);
 
@@ -213,18 +245,6 @@ class FeatureContext implements Context
 	}
 
 	/**
-	 * @When Site :site has certs
-	 */
-	public function siteHasCerts( $site )
-	{
-		$certs_dir = EE_CONF_ROOT . '/nginx/certs/';
-
-		touch( $certs_dir . $site . '.crt' );
-		touch( $certs_dir . $site . '.key' );
-		exec('docker exec ee-nginx-proxy sh -c "/app/docker-entrypoint.sh /usr/local/bin/docker-gen /app/nginx.tmpl /etc/nginx/conf.d/default.conf; /usr/sbin/nginx -s reload"');
-	}
-
-	/**
 	 * @AfterFeature
 	 */
 	public static function cleanup(AfterFeatureScope $scope)
@@ -234,6 +254,7 @@ class FeatureContext implements Context
 		exec("sudo bin/ee site delete www.example1.test --yes");
 		exec("sudo bin/ee site delete example2.test --yes");
 		exec("sudo bin/ee site delete www.example3.test --yes");
+
 
 		if(file_exists('ee.phar')) {
 			unlink('ee.phar');
