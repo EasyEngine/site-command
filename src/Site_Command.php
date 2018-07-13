@@ -656,6 +656,7 @@ class Site_Command extends EE_Command {
 	private function configure_site() {
 
 		$site_conf_dir           = $this->site_root . '/config';
+		$site_admin_dir          = $this->site_root . '/app/src/ee-admin';
 		$site_docker_yml         = $this->site_root . '/docker-compose.yml';
 		$site_conf_env           = $this->site_root . '/.env';
 		$site_nginx_default_conf = $site_conf_dir . '/nginx/default.conf';
@@ -698,6 +699,8 @@ class Site_Command extends EE_Command {
 			if ( ! ( file_put_contents( $site_docker_yml, $docker_compose_content )
 				&& file_put_contents( $site_conf_env, $env_content )
 				&& mkdir( $site_conf_dir )
+				&& mkdir( $site_admin_dir, 0755, true )
+				&& copy( SITE_TEMPLATE_ROOT . '/admin-index.php.mustache', $site_admin_dir . '/index.php' )
 				&& mkdir( $site_conf_dir . '/nginx' )
 				&& file_put_contents( $site_nginx_default_conf, $default_conf_content )
 				&& mkdir( $site_conf_dir . '/php-fpm' )
