@@ -249,12 +249,21 @@ class FeatureContext implements Context
 	 */
 	public static function cleanup(AfterFeatureScope $scope)
 	{
-		exec("sudo bin/ee site delete hello.test --yes");
-		exec("sudo bin/ee site delete example.test --yes");
-		exec("sudo bin/ee site delete www.example1.test --yes");
-		exec("sudo bin/ee site delete example2.test --yes");
-		exec("sudo bin/ee site delete www.example3.test --yes");
+		$test_sites = [
+			'hello.test',
+			'example.test',
+			'www.example1.test',
+			'example2.test',
+			'www.example3.test',
+		];
 
+		$result = EE::launch( 'sudo bin/ee site list --format=text',false, true );
+		$running_sites = explode( "\n", $result->stdout );
+		$sites_to_delete = array_intersect( $test_sites, $running_sites );
+
+		foreach ( $sites_to_delete as $site ) {
+			exec("sudo bin/ee site delete $site --yes" );
+		}
 
 		if(file_exists('ee.phar')) {
 			unlink('ee.phar');
