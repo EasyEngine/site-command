@@ -431,15 +431,6 @@ class Site_Command extends EE_Command {
 	 * [--all]
 	 * : Start all containers of site.
 	 *
-	 * [--nginx]
-	 * : Start nginx container of site.
-	 *
-	 * [--php]
-	 * : Start php container of site.
-	 *
-	 * [--mysql]
-	 * : Start mysql container of site.
-	 *
 	 * [--redis]
 	 * : Start redis container of site.
 	 *
@@ -459,7 +450,7 @@ class Site_Command extends EE_Command {
 	 * : Start anemometer container of site.
 	 */
 	public function start( $args, $assoc_args ) {
-		$this->site_docker_compose_execute( $args[0], 'start', $args, $assoc_args);
+		$this->site_docker_compose_execute( $args[0], 'up -d', $args, $assoc_args );
 	}
 
 	/**
@@ -471,18 +462,6 @@ class Site_Command extends EE_Command {
 	 *
 	 * [--all]
 	 * : Stop all containers of site.
-	 *
-	 * [--nginx]
-	 * : Stop nginx container of site.
-	 *
-	 * [--php]
-	 * : Stop php container of site.
-	 *
-	 * [--mysql]
-	 * : Stop mysql container of site.
-	 *
-	 * [--redis]
-	 * : Stop redis container of site.
 	 *
 	 * [--mailhog]
 	 * : Stop mailhog container of site.
@@ -500,7 +479,7 @@ class Site_Command extends EE_Command {
 	 * : Stop anemometer container of site.
 	 */
 	public function stop( $args, $assoc_args ) {
-		$this->site_docker_compose_execute( $args[0], 'stop', $args, $assoc_args);
+		$this->site_docker_compose_execute( $args[0], 'stop', $args, $assoc_args );
 	}
 
 	/**
@@ -512,18 +491,6 @@ class Site_Command extends EE_Command {
 	 *
 	 * [--all]
 	 * : Restart all containers of site.
-	 *
-	 * [--nginx]
-	 * : Restart nginx container of site.
-	 *
-	 * [--php]
-	 * : Restart php container of site.
-	 *
-	 * [--mysql]
-	 * : Restart mysql container of site.
-	 *
-	 * [--redis]
-	 * : Restart redis container of site.
 	 *
 	 * [--mailhog]
 	 * : Restart mailhog container of site.
@@ -541,7 +508,7 @@ class Site_Command extends EE_Command {
 	 * : Restart anemometer container of site.
 	 */
 	public function restart( $args, $assoc_args ) {
-		$this->site_docker_compose_execute( $args[0], 'restart', $args, $assoc_args);
+		$this->site_docker_compose_execute( $args[0], 'restart', $args, $assoc_args );
 	}
 
 	/**
@@ -561,9 +528,9 @@ class Site_Command extends EE_Command {
 	 * : Start php service in container.
 	 */
 	public function reload( $args, $assoc_args ) {
-		$this->site_docker_compose_execute( $args[0], 'reload', $args, $assoc_args);
+		$this->site_docker_compose_execute( $args[0], 'reload', $args, $assoc_args );
 	}
-
+	
 	private function site_docker_compose_execute( $site, $action, $args, $assoc_args ) {
 		$all = \EE\Utils\get_flag_value( $assoc_args, 'all' );
 		$no_service_specified = count( $assoc_args ) === 0 ;
