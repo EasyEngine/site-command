@@ -395,26 +395,25 @@ class Site_Command extends EE_Command {
 			$this->populate_site_info( $args );
 		}
 		$ssl = $this->le ? 'Enabled' : 'Not Enabled';
-		EE::log( "Details for site $this->site_name:" );
+
 		$prefix = ( $this->le ) ? 'https://' : 'http://';
 		$info   = array(
-			array( 'Site', $prefix . $this->site_name ),
-			array( 'Access phpMyAdmin', $prefix . $this->site_name . '/ee-admin/pma/' ),
-			array( 'Access mailhog', $prefix . $this->site_name . '/ee-admin/mailhog/' ),
-			array( 'Site Title', $this->site_title ),
-			array( 'DB Root Password', $this->db_root_pass ),
-			array( 'DB Name', $this->db_name ),
-			array( 'DB User', $this->db_user ),
-			array( 'DB Password', $this->db_pass ),
-			array( 'E-Mail', $this->site_email ),
-			array( 'Cache Type', $this->cache_type ),
-			array( 'SSL', $ssl ),
+			array( 'Site', $prefix . $this->site_name . '/' ),
+			array( 'Admin Tools', $prefix . $this->site_name . '/ee-admin/' ),
 		);
-
+		
 		if ( ! empty( $this->site_user ) && ! $this->skip_install ) {
 			$info[] = array( 'WordPress Username', $this->site_user );
 			$info[] = array( 'WordPress Password', $this->site_pass );
 		}
+
+		$info[] = array( 'DB Root Password', $this->db_root_pass );
+		$info[] = array( 'DB Name', $this->db_name );
+		$info[] = array( 'DB User', $this->db_user );
+		$info[] = array( 'DB Password', $this->db_pass );
+		$info[] = array( 'E-Mail', $this->site_email );
+		$info[] = array( 'Cache Type', $this->cache_type );
+		$info[] = array( 'SSL', $ssl );
 
 		\EE\Utils\format_table( $info );
 
