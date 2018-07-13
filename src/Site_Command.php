@@ -423,16 +423,13 @@ class Site_Command extends EE_Command {
 
 	/**
 	 * Starts containers associated with site.
-	 * When no service(--nginx etc.) is specified, all containers will be restarted.
+	 * When no service(--mailhog etc.) is specified, all containers will be restarted.
 	 *
 	 * <site-name>
 	 * : Name of the site.
 	 *
 	 * [--all]
-	 * : Start all containers of site.
-	 *
-	 * [--redis]
-	 * : Start redis container of site.
+	 * : Start all admin containers of site.
 	 *
 	 * [--mailhog]
 	 * : Start mailhog container of site.
@@ -455,13 +452,13 @@ class Site_Command extends EE_Command {
 
 	/**
 	 * Stops containers associated with site.
-	 * When no service(--nginx etc.) is specified, all containers will be stopped.
+	 * When no service(--mailhog etc.) is specified, all containers will be stopped.
 	 *
 	 * <site-name>
 	 * : Name of the site.
 	 *
 	 * [--all]
-	 * : Stop all containers of site.
+	 * : Stop all admin containers of site.
 	 *
 	 * [--mailhog]
 	 * : Stop mailhog container of site.
@@ -484,13 +481,13 @@ class Site_Command extends EE_Command {
 
 	/**
 	 * Restarts containers associated with site.
-	 * When no service(--nginx etc.) is specified, all containers will be restarted.
+	 * When no service(--mailhog etc.) is specified, all containers will be restarted.
 	 *
 	 * <site-name>
 	 * : Name of the site.
 	 *
 	 * [--all]
-	 * : Restart all containers of site.
+	 * : Restart all admin containers of site.
 	 *
 	 * [--mailhog]
 	 * : Restart mailhog container of site.
