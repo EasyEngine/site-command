@@ -128,7 +128,7 @@ class Site_Command extends EE_Command {
 	 *
 	 * [--skip-status-check]
 	 * : Skips site status check.
-
+	 *
 	 * [--letsencrypt]
 	 * : Enables ssl via letsencrypt certificate.
 	 *
@@ -856,8 +856,11 @@ server {
 			chdir( $this->site_root );
 			\EE\Utils\default_launch( 'docker-compose pull' );
 			EE::log( 'Starting site\'s services.' );
-			if ( ! $this->docker::docker_compose_up( $this->site_root ) ) {
+			if ( ! $this->docker::docker_compose_up( $this->site_root, [ 'nginx' ] ) ) {
 				throw new Exception( 'There was some error in docker-compose up.' );
+			}
+			if ( 'wpredis' === $this->cache_type ) {
+				$this->docker::docker_compose_up( $this->site_root, [ 'redis' ] );
 			}
 		}
 		catch ( Exception $e ) {
@@ -1155,7 +1158,7 @@ server {
 	 * Function to save the site configuration entry into database.
 	 */
 	private function create_site_db_entry() {
-		$ssl = $this->le ? 1 : 0;
+		$ssl  = $this->le ? 1 : 0;
 		$data = array(
 			'sitename'         => $this->site_name,
 			'site_type'        => $this->site_type,
@@ -1180,7 +1183,7 @@ server {
 		}
 
 		try {
-			if ( $this->db::insert( $data ) ) {
+			if ( $this->db::insert( $data ) && $this->db::insert( [ 'sitename' => $this->site_name, 'services' ] ) ) {
 				EE::log( 'Site entry created.' );
 			} else {
 				throw new Exception( 'Error creating site entry in database.' );
@@ -1200,9 +1203,7 @@ server {
 
 		if ( $this->db::site_in_db( $this->site_name ) ) {
 
-			$data = array( 'site_type', 'site_title', 'proxy_type', 'cache_type', 'site_path', 'db_name', 'db_user', 'db_host', 'db_port', 'db_password', 'db_root_password', 'wp_user', 'wp_pass', 'email', 'is_ssl' );
-
-			$db_select = $this->db::select( $data, array( 'sitename' => $this->site_name ) );
+			$db_select = $this->db::select( [], array( 'sitename' => $this->site_name ), 'sites', 1 );
 
 			$this->site_type    = $db_select[0]['site_type'];
 			$this->site_title   = $db_select[0]['site_title'];
