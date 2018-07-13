@@ -530,32 +530,36 @@ class Site_Command extends EE_Command {
 	public function reload( $args, $assoc_args ) {
 		$this->site_docker_compose_execute( $args[0], 'reload', $args, $assoc_args );
 	}
-	
-	private function site_docker_compose_execute( $site, $action, $args, $assoc_args ) {
-		$all = \EE\Utils\get_flag_value( $assoc_args, 'all' );
-		$no_service_specified = count( $assoc_args ) === 0 ;
 
-		$this->populate_site_info( $args );
+	private function site_docker_compose_execute( $site, $action, $args, $assoc_args ) {
+		$all                  = \EE\Utils\get_flag_value( $assoc_args, 'all' );
+		$no_service_specified = count( $assoc_args ) === 0;
+
+		if ( ! isset( $this->site_name ) ) {
+			$this->populate_site_info( $args );
+		}
 
 		chdir( $this->site_root );
 
-		if( $all || $no_service_specified ) {
-			if( $action === 'reload' ) {
+		if ( $all || $no_service_specified ) {
+			if ( $action === 'reload' ) {
 				$this->reload_services( [ 'nginx', 'php' ] );
+
 				return;
 			}
 			$this->run_compose_command( $action, '', null, 'all services' );
-		}
-		else {
-			$services = array_map( [$this, 'map_args_to_service'], array_keys( $assoc_args ) );
+		} else {
+			$services = array_map( [ $this, 'map_args_to_service' ], array_keys( $assoc_args ) );
 
-			if( $action === 'reload' ) {
+			if ( $action === 'reload' ) {
 				$this->reload_services( $services );
+
 				return;
 			}
 
-			foreach( $services as $service ) {
-				$this->run_compose_command( $action, $service );
+			foreach ( $services as $service ) {
+				$action_to_display = 'up -d' === $action ? 'start' : null;
+				$this->run_compose_command( $action, $service, $action_to_display );
 			}
 		}
 	}
