@@ -424,7 +424,7 @@ class Site_Command extends EE_Command {
 	 * Starts containers associated with site.
 	 * When no service(--mailhog etc.) is specified, all containers will be restarted.
 	 *
-	 * <site-name>
+	 * [<site-name>]
 	 * : Name of the site.
 	 *
 	 * [--all]
@@ -446,14 +446,17 @@ class Site_Command extends EE_Command {
 	 * : Start anemometer container of site.
 	 */
 	public function start( $args, $assoc_args ) {
+		\EE\Utils\delem_log( 'site start start' );
+		$args = \EE\Utils\set_site_arg( $args, 'site start' );
 		$this->site_docker_compose_execute( $args[0], 'up -d', $args, $assoc_args );
+		\EE\Utils\delem_log( 'site start end' );
 	}
 
 	/**
 	 * Stops containers associated with site.
 	 * When no service(--mailhog etc.) is specified, all containers will be stopped.
 	 *
-	 * <site-name>
+	 * [<site-name>]
 	 * : Name of the site.
 	 *
 	 * [--all]
@@ -475,14 +478,17 @@ class Site_Command extends EE_Command {
 	 * : Stop anemometer container of site.
 	 */
 	public function stop( $args, $assoc_args ) {
+		\EE\Utils\delem_log( 'site stop start' );
+		$args = \EE\Utils\set_site_arg( $args, 'site stop' );
 		$this->site_docker_compose_execute( $args[0], 'stop', $args, $assoc_args );
+		\EE\Utils\delem_log( 'site stop end' );
 	}
 
 	/**
 	 * Restarts containers associated with site.
 	 * When no service(--mailhog etc.) is specified, all containers will be restarted.
 	 *
-	 * <site-name>
+	 * [<site-name>]
 	 * : Name of the site.
 	 *
 	 * [--all]
@@ -504,14 +510,17 @@ class Site_Command extends EE_Command {
 	 * : Restart anemometer container of site.
 	 */
 	public function restart( $args, $assoc_args ) {
+		\EE\Utils\delem_log( 'site restart start' );
+		$args = \EE\Utils\set_site_arg( $args, 'site restart' );
 		$this->site_docker_compose_execute( $args[0], 'restart', $args, $assoc_args );
+		\EE\Utils\delem_log( 'site restart end' );
 	}
 
 	/**
 	 * Reload services in containers without restarting container(s) associated with site.
 	 * When no service(--nginx etc.) is specified, all services will be reloaded.
 	 *
-	 * <site-name>
+	 * [<site-name>]
 	 * : Name of the site.
 	 *
 	 * [--all]
@@ -524,7 +533,10 @@ class Site_Command extends EE_Command {
 	 * : Start php service in container.
 	 */
 	public function reload( $args, $assoc_args ) {
+		\EE\Utils\delem_log( 'site reload start' );
+		$args = \EE\Utils\set_site_arg( $args, 'site reload' );
 		$this->site_docker_compose_execute( $args[0], 'reload', $args, $assoc_args );
+		\EE\Utils\delem_log( 'site reload end' );
 	}
 
 	private function site_docker_compose_execute( $site, $action, $args, $assoc_args ) {
@@ -571,7 +583,7 @@ class Site_Command extends EE_Command {
 		$display_service = $service_to_display ? $service_to_display : $container;
 
 		\EE::log( ucfirst( $display_action ) . 'ing ' . $display_service );
-		$run_compose_command = \EE\Utils\default_launch( "docker-compose $action $container" );
+		$run_compose_command = \EE\Utils\default_launch( "docker-compose $action $container", true, true );
 
 		if ( $run_compose_command && in_array( $action, $db_actions ) ) {
 
