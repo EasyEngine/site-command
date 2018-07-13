@@ -47,6 +47,7 @@ class Site_Docker {
 		$php['volumes']      = array(
 			array(
 				'vol' => array(
+					array( 'name' => '/opt/easyengine/ee.sqlite:/opt/easyengine/ee.sqlite:ro' ),
 					array( 'name' => './app/src:/var/www/html' ),
 					array( 'name' => './config/php-fpm/php.ini:/usr/local/etc/php/php.ini' ),
 				),
