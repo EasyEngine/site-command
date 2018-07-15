@@ -2,7 +2,7 @@
 
 function populate_service_info() {
 
-	$site_name = $_SERVER['SERVER_NAME'];
+	$site_name = $_SERVER['HTTP_HOST'];
 	$db_select = select( [], array( 'sitename' => $site_name ), 'services', 1 );
 
 	return $db_select[0];
@@ -64,7 +64,7 @@ foreach ( $services as $key => $value ) {
 		if ( array_key_exists( $key, $path_map ) ) {
 			echo '<a href="' . $path_map[$key] . '">' . $path_map[$key] . '</a><br/>';
 		} else {
-			echo '<a href="' . $key . '">' . $key . '</a>';
+			echo '<a href="' . $key . '">' . $key . '</a><br/>';
 		}
 	}
 }
