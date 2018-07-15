@@ -170,7 +170,7 @@ class FeatureContext implements Context
 		if($type === 'subdomain' && trim($result->stdout) !== '1') {
 			throw new Exception("Expecting SUBDOMAIN_INSTALL to be 1. Got: $result->stdout");
 		}
-		else if($type === 'subdir' && trim($result->stdout) === '') {
+		else if($type === 'subdir' && trim($result->stdout) !== '') {
 			throw new Exception("Expecting SUBDOMAIN_INSTALL to be empty. Got: $result->stdout");
 		}
 		else if($type !== 'subdomain' && $type !== 'subdir') {
