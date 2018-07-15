@@ -58,8 +58,8 @@ Feature: Site Command
     Then STDOUT should return exactly
     """
     wp.test
-    wpsubdom.test
     wpsubdir.test
+    wpsubdom.test
     """
 
   Scenario: Delete the sites
