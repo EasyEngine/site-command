@@ -107,8 +107,7 @@ class FeatureContext implements Context
 
 		$command_output = str_replace(["\033[1;31m","\033[0m"],'',$command_output);
 
-		$expected_out = isset($expected_output->getStrings()[0]) ? $expected_output->getStrings()[0] : '';
-		if ( $expected_out !== trim($command_output)) {
+		if ( $expected_output->getRaw() !== trim($command_output)) {
 			throw new Exception("Actual output is:\n" . $command_output);
 		}
 	}
