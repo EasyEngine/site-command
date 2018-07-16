@@ -260,7 +260,7 @@ class Site_Letsencrypt {
 		if ( $this->hasValidCertificate( $domain, $alternativeNames ) ) {
 			EE::debug( "Certificate found for $domain, executing renewal" );
 
-			return $this->executeRenewal( $domain, $alternativeNames, $force );
+			return $this->executeRenewal( $domain, $alternativeNames, $email, $force );
 		}
 
 		EE::debug( "No certificate found, executing first request for $domain" );
@@ -334,14 +334,42 @@ class Site_Letsencrypt {
 		file_put_contents( EE_CONF_ROOT . '/nginx/certs/' . $domain . '.crt', $fullChainPem );
 	}
 
+	private function reLoadCertsToNginxProxy( $domain ) {
+
+		$private_key_file = EE_CONF_ROOT . '/nginx/certs/' . $domain . '.key';
+		$full_chain_file  = EE_CONF_ROOT . '/nginx/certs/' . $domain . '.crt';
+
+		if ( file_exists( $private_key_file ) && file_exists( $full_chain_file ) ) {
+			EE::debug( '.crt and .key files present.' );
+
+			return;
+		}
+
+		$privateKey  = $this->repository->loadDomainKeyPair( $domain )->getPrivateKey();
+		$certificate = $this->repository->loadDomainCertificate( $domain );
+
+		// To handle wildcard certs
+		$domain = ltrim( $domain, '*.' );
+
+		file_put_contents( $private_key_file, trim( $privateKey->getPEM() ) );
+
+		$issuerChain = $certificate->getIssuerCertificate()->getPEM();
+
+		// Full chain
+		$fullChainPem = $certificate->getPEM() . "\n" . ( $issuerChain );
+
+		file_put_contents( $full_chain_file, $fullChainPem );
+	}
+
 	/**
 	 * Renew a given domain certificate.
 	 *
 	 * @param string $domain
 	 * @param array  $alternativeNames
+	 * @param string $email
 	 * @param bool   $force
 	 */
-	private function executeRenewal( $domain, array $alternativeNames, $force = false ) {
+	private function executeRenewal( $domain, array $alternativeNames, $email, $force = false ) {
 		try {
 			// Check expiration date to avoid too much renewal
 			EE::log( "Loading current certificate for $domain" );
@@ -360,7 +388,7 @@ class Site_Letsencrypt {
 							$parsedCertificate->getValidTo()->format( 'Y-m-d H:i:s' )
 						)
 					);
-
+					$this->reLoadCertsToNginxProxy( $domain );
 					return;
 				}
 
@@ -380,7 +408,7 @@ class Site_Letsencrypt {
 
 			// Distinguished name
 			EE::debug( 'Loading domain distinguished name...' );
-			$distinguishedName = $this->getOrCreateDistinguishedName( $domain, $alternativeNames );
+			$distinguishedName = $this->getOrCreateDistinguishedName( $domain, $alternativeNames, $email );
 
 			// Order
 			$domains = array_merge( [ $domain ], $alternativeNames );
@@ -397,7 +425,7 @@ class Site_Letsencrypt {
 			EE::log( 'Certificate received' );
 
 			$this->repository->storeDomainCertificate( $domain, $response->getCertificate() );
-			$this->log( 'Certificate stored' );
+			EE::log( 'Certificate stored' );
 
 			// Post-generate actions
 			$this->moveCertsToNginxProxy( $response );
