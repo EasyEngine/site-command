@@ -958,8 +958,13 @@ server {
 				$key_file   = EE_CONF_ROOT . "/nginx/certs/$this->site_name.key";
 				$conf_certs = EE_CONF_ROOT . "/acme-conf/certs/$this->site_name";
 				$conf_var   = EE_CONF_ROOT . "/acme-conf/var/$this->site_name";
-				\EE\Utils\delete_dir( $conf_certs );
-				\EE\Utils\delete_dir( $conf_var );
+				// TODO: Change all these operations to use symfony filesystem
+				if ( file_exists( $conf_certs ) ) {
+					\EE\Utils\delete_dir( $conf_certs );
+				}
+				if ( file_exists( $conf_var ) ) {
+					\EE\Utils\delete_dir( $conf_var );
+				}
 				if ( file_exists( $crt_file ) ) {
 					unlink( $crt_file );
 				}
