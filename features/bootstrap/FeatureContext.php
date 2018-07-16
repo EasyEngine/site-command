@@ -7,7 +7,7 @@ define( 'EE_CONF_ROOT', '/opt/easyengine' );
 
 use Behat\Behat\Context\Context;
 use Behat\Behat\Hook\Scope\AfterFeatureScope;
-use Behat\Behat\Hook\Scope\BeforeScenarioScope;
+use Behat\Behat\Hook\Scope\AfterScenarioScope;
 
 use Behat\Gherkin\Node\PyStringNode,
 	Behat\Gherkin\Node\TableNode;
@@ -18,6 +18,16 @@ class FeatureContext implements Context
 {
 	public $command;
 	public $webroot_path;
+	public $ee_path;
+
+	/**
+	 * Initializes context.
+	 */
+	public function __construct()
+	{
+		$this->commands = [];
+		$this->ee_path = getcwd();
+	}
 
 	/**
 	 * @Given ee phar is generated
@@ -159,8 +169,11 @@ class FeatureContext implements Context
 	 */
 	public function theSiteShouldBeMultisite( $site, $type )
 	{
-		$php_container = implode( explode( '.', $site ) ) . '_php_1';
-		$result = EE::launch("docker exec -it --user='www-data' $php_container sh -c 'wp config get SUBDOMAIN_INSTALL'", false, true );
+		var_dump(EE_SITE_ROOT . "$site" );
+		var_dump(scandir(EE_SITE_ROOT . "$site") );
+		chdir( EE_SITE_ROOT . "$site" );
+
+		$result = EE::launch("cd " . EE_SITE_ROOT . "$site && docker-compose exec --user='www-data' php sh -c 'wp config get SUBDOMAIN_INSTALL'", false, true );
 
 		if( $result->stderr ) {
 			throw new Exception("Found error while executing command: $result->stderr");
@@ -319,11 +332,12 @@ class FeatureContext implements Context
 	}
 
 	/**
-	 * @BeforeScenario
+	 * @AfterScenario
 	 */
-	public function cleanupCommands(BeforeScenarioScope $scope)
+	public function cleanupScenario(AfterScenarioScope $scope)
 	{
 		$this->commands = [];
+		chdir($this->ee_path);
 	}
 
 	/**
@@ -332,7 +346,9 @@ class FeatureContext implements Context
 	public static function cleanup(AfterFeatureScope $scope)
 	{
 		$test_sites = [
-			'hello.test',
+			'wp.test',
+			'wpsubdom.test',
+			'wpsubdir.test',
 			'example.test',
 			'www.example1.test',
 			'example2.test',
