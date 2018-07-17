@@ -351,6 +351,7 @@ class Site_Command extends EE_Command {
 		$args = \EE\Utils\set_site_arg( $args, 'site enable' );
 		$this->populate_site_info( $args );
 		EE::log( "Enabling site $this->site_name." );
+		// TODO: bring up only the contianers that were present.
 		if ( $this->docker::docker_compose_up( $this->site_root ) ) {
 			$this->db::update( [ 'is_enabled' => '1' ], [ 'sitename' => $this->site_name ] );
 			EE::success( "Site $this->site_name enabled." );
@@ -401,7 +402,7 @@ class Site_Command extends EE_Command {
 			array( 'Site', $prefix . $this->site_name . '/' ),
 			array( 'Admin Tools', $prefix . $this->site_name . '/ee-admin/' ),
 		);
-		
+
 		if ( ! empty( $this->site_user ) && ! $this->skip_install ) {
 			$info[] = array( 'WordPress Username', $this->site_user );
 			$info[] = array( 'WordPress Password', $this->site_pass );
@@ -437,13 +438,7 @@ class Site_Command extends EE_Command {
 	 * : Start phpmyadmin container of site.
 	 *
 	 * [--phpredisadmin]
-	 * : Start phpredisadmin container of site.
-	 *
-	 * [--adminer]
-	 * : Start adminer container of site.
-	 *
-	 * [--anemometer]
-	 * : Start anemometer container of site.
+	 * : Start phpredisadmin container of site, if site is redis cached.
 	 */
 	public function start( $args, $assoc_args ) {
 		\EE\Utils\delem_log( 'site start start' );
@@ -469,13 +464,7 @@ class Site_Command extends EE_Command {
 	 * : Stop phpmyadmin container of site.
 	 *
 	 * [--phpredisadmin]
-	 * : Stop phpredisadmin container of site.
-	 *
-	 * [--adminer]
-	 * : Stop adminer container of site.
-	 *
-	 * [--anemometer]
-	 * : Stop anemometer container of site.
+	 * : Stop phpredisadmin container of site, if site is redis cached.
 	 */
 	public function stop( $args, $assoc_args ) {
 		\EE\Utils\delem_log( 'site stop start' );
@@ -501,13 +490,7 @@ class Site_Command extends EE_Command {
 	 * : Restart phpmyadmin container of site.
 	 *
 	 * [--phpredisadmin]
-	 * : Restart phpredisadmin container of site.
-	 *
-	 * [--adminer]
-	 * : Restart adminer container of site.
-	 *
-	 * [--anemometer]
-	 * : Restart anemometer container of site.
+	 * : Restart phpredisadmin container of site, if site is redis cached.
 	 */
 	public function restart( $args, $assoc_args ) {
 		\EE\Utils\delem_log( 'site restart start' );
@@ -557,7 +540,13 @@ class Site_Command extends EE_Command {
 			}
 			$this->run_compose_command( $action, '', null, 'all services' );
 		} else {
-			$services = array_map( [ $this, 'map_args_to_service' ], array_keys( $assoc_args ) );
+			$assoc_args_array = array_keys( $assoc_args );
+			if ( 'redis' !== $this->cache_type ) {
+				if ( in_array( 'phpredisadmin', $assoc_args_array ) ) {
+					EE::error( 'Can\'t enable phpredisadmin as site is not redis cached.' );
+				}
+			}
+			$services = array_map( [ $this, 'map_args_to_service' ], $assoc_args_array );
 
 			if ( $action === 'reload' ) {
 				$this->reload_services( $services );
@@ -566,8 +555,7 @@ class Site_Command extends EE_Command {
 			}
 
 			foreach ( $services as $service ) {
-				$action_to_display = 'up -d' === $action ? 'start' : null;
-				$this->run_compose_command( $action, $service, $action_to_display );
+				$this->run_compose_command( $action, $service );
 			}
 		}
 	}
@@ -577,13 +565,22 @@ class Site_Command extends EE_Command {
 	 * Generic function to run a docker compose command. Must be ran inside correct directory.
 	 */
 	private function run_compose_command( $action, $container, $action_to_display = null, $service_to_display = null ) {
-		$services        = [ 'mailhog' => 0, 'phpmyadmin' => 0 ];
+		$action_to_display = 'up -d' === $action ? 'start' : null;
+		// TODO: get the service list from the db once all the services get configured.
+		$services = [ 'mailhog' => 0, 'phpmyadmin' => 0, 'phpredisadmin' => 0 ];
+		if ( 'redis' !== $this->cache_type ) {
+			unset( $services['phpredisadmin'] );
+		}
+
 		$db_actions      = [ 'up -d', 'stop' ];
 		$display_action  = $action_to_display ? $action_to_display : $action;
 		$display_service = $service_to_display ? $service_to_display : $container;
 
-		\EE::log( ucfirst( $display_action ) . 'ing ' . $display_service );
-		$run_compose_command = \EE\Utils\default_launch( "docker-compose $action $container", true, true );
+		EE::log( ucfirst( $display_action ) . 'ing ' . $display_service );
+
+		$action_on_container = empty( $container ) ? implode( ' ', array_keys( $services ) ) : $container;
+
+		$run_compose_command = \EE\Utils\default_launch( "docker-compose $action $action_on_container", true, true );
 
 		if ( $run_compose_command && in_array( $action, $db_actions ) ) {
 
