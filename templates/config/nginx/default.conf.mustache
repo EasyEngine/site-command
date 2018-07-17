@@ -22,7 +22,7 @@ server {
 		set $skip 1;
 	}
 	# Don't cache URL containing the following segments
-	if ($request_uri ~* "(/wp-admin/|/xmlrpc.php|wp-.*.php|index.php|/feed/|sitemap(_index)?.xml|[a-z0-9_-]+-sitemap([0-9]+)?.xml)") {
+	if ($request_uri ~* "(/ee-admin/|/wp-admin/|/xmlrpc.php|wp-.*.php|index.php|/feed/|sitemap(_index)?.xml|[a-z0-9_-]+-sitemap([0-9]+)?.xml)") {
 		set $skip 1;
 	}
 	# Don't use the cache for logged in users or recent commenter or customer with items in cart
