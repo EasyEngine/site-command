@@ -169,10 +169,6 @@ class FeatureContext implements Context
 	 */
 	public function theSiteShouldBeMultisite( $site, $type )
 	{
-		var_dump(EE_SITE_ROOT . "$site" );
-		var_dump(scandir(EE_SITE_ROOT . "$site") );
-		chdir( EE_SITE_ROOT . "$site" );
-
 		$result = EE::launch("cd " . EE_SITE_ROOT . "$site && docker-compose exec --user='www-data' php sh -c 'wp config get SUBDOMAIN_INSTALL'", false, true );
 
 		if( $result->stderr ) {
