@@ -8,9 +8,6 @@ class Site_Docker {
 	 * Generate docker-compose.yml according to requirement.
 	 *
 	 * @param array $filters Array of flags to determine the docker-compose.yml generation.
-	 *                       Empty/Default -> Generates default WordPress docker-compose.yml
-	 *                       ['le']        -> Enables letsencrypt in the generation.
-	 *
 	 * @return String docker-compose.yml content string.
 	 */
 	public function generate_docker_compose_yml( array $filters = [] ) {
@@ -47,6 +44,7 @@ class Site_Docker {
 		$php['volumes']      = array(
 			array(
 				'vol' => array(
+					array( 'name' => '/opt/easyengine/ee.sqlite:/opt/easyengine/ee.sqlite:ro' ),
 					array( 'name' => './app/src:/var/www/html' ),
 					array( 'name' => './config/php-fpm/php.ini:/usr/local/etc/php/php.ini' ),
 				),
@@ -71,7 +69,7 @@ class Site_Docker {
 		$nginx['depends_on']   = array( 'name' => 'php' );
 		$nginx['restart']      = $restart_default;
 
-		$v_host = in_array( 'wpsubdom', $filters, true ) ? 'VIRTUAL_HOST=${VIRTUAL_HOST},*.${VIRTUAL_HOST}' : 'VIRTUAL_HOST';
+		$v_host = ( 'wpsubdom' === $filters['site_type'] ) ? 'VIRTUAL_HOST=${VIRTUAL_HOST},*.${VIRTUAL_HOST}' : 'VIRTUAL_HOST';
 
 		$nginx['environment'] = array(
 			'env' => array(
@@ -122,7 +120,20 @@ class Site_Docker {
 		$redis['image']        = array( 'name' => 'easyengine/redis:v' . EE_VERSION );
 		$redis['networks']     = $network_default;
 
-		if ( in_array( 'db', $filters, true ) ) {
+		// phpredisadmin configuration.
+		$phpredisadmin['service_name'] = array( 'name' => 'phpredisadmin' );
+		$phpredisadmin['image']        = array( 'name' => 'easyengine/phpredisadmin:v' . EE_VERSION );
+		$phpredisadmin['environment']  = array(
+			'env' => array(
+				array( 'name' => $v_host ),
+				array( 'name' => 'REDIS_1_HOST=redis' ),
+				array( 'name' => 'REDIS_1_PORT=6379' ),
+				array( 'name' => 'VIRTUAL_PATH=/ee-admin/phpredisadmin/' ),
+			),
+		);
+		$phpredisadmin['networks']     = $network_default;
+
+		if ( 'db' === $filters['db_host'] ) {
 			$base[] = $db;
 		}
 
@@ -130,8 +141,9 @@ class Site_Docker {
 		$base[] = $nginx;
 		$base[] = $mailhog;
 		$base[] = $phpmyadmin;
+		$base[] = $phpredisadmin;
 
-		if ( in_array( 'wpredis', $filters, true ) ) {
+		if ( 'wpredis' === $filters['cache_type'] ) {
 			$base[] = $redis;
 		}
 

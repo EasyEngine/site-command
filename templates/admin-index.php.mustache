@@ -1,0 +1,74 @@
+<?php
+
+function populate_service_info() {
+
+	$site_name = $_SERVER['HTTP_HOST'];
+	$db_select = select( [], array( 'sitename' => $site_name ), 'services', 1 );
+
+	return $db_select[0];
+
+}
+
+function select( $columns = array(), $where = array(), $table_name = 'services', $limit = null ) {
+
+	$db_path = '/opt/easyengine/ee.sqlite';
+	$db      = new SQLite3( $db_path );
+
+	$conditions = array();
+	if ( empty( $columns ) ) {
+		$columns = '*';
+	} else {
+		$columns = implode( ',', $columns );
+	}
+
+	foreach ( $where as $key => $value ) {
+		$conditions[] = "`$key`='" . $value . "'";
+	}
+
+	$conditions = implode( ' AND ', $conditions );
+
+	$select_data_query = "SELECT {$columns} FROM `$table_name`";
+
+	if ( ! empty( $conditions ) ) {
+		$select_data_query .= " WHERE $conditions";
+	}
+
+	if ( ! empty( $limit ) ) {
+		$select_data_query .= " LIMIT $limit";
+	}
+
+	$select_data_exec = $db->query( $select_data_query );
+	$select_data      = array();
+	if ( $select_data_exec ) {
+		while ( $row = $select_data_exec->fetchArray( SQLITE3_ASSOC ) ) {
+			$select_data[] = $row;
+		}
+	}
+	if ( empty( $select_data ) ) {
+		return false;
+	}
+
+	return $select_data;
+}
+
+$services = populate_service_info();
+unset( $services['id'] );
+unset( $services['sitename'] );
+$any_service_enabled = false;
+
+$path_map = [ 'phpmyadmin' => 'pma' ];
+
+foreach ( $services as $key => $value ) {
+	if ( $value ) {
+		$any_service_enabled = true;
+		if ( array_key_exists( $key, $path_map ) ) {
+			echo '<a href="' . $path_map[$key] . '">' . $path_map[$key] . '</a><br/>';
+		} else {
+			echo '<a href="' . $key . '">' . $key . '</a><br/>';
+		}
+	}
+}
+
+if ( empty( $any_service_enabled ) ) {
+	echo "Check `ee help site start` to checkout how to enable services.";
+}

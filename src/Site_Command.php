@@ -128,7 +128,7 @@ class Site_Command extends EE_Command {
 	 *
 	 * [--skip-status-check]
 	 * : Skips site status check.
-
+	 *
 	 * [--letsencrypt]
 	 * : Enables ssl via letsencrypt certificate.
 	 *
@@ -350,8 +350,15 @@ class Site_Command extends EE_Command {
 		\EE\Utils\delem_log( 'site enable start' );
 		$args = \EE\Utils\set_site_arg( $args, 'site enable' );
 		$this->populate_site_info( $args );
+		$services   = $this->populate_service_info( $args );
+		$containers = [ 'nginx' ];
+		foreach ( $services as $service => $enabled ) {
+			if ( $enabled ) {
+				$containers[] = $service;
+			}
+		}
 		EE::log( "Enabling site $this->site_name." );
-		if ( $this->docker::docker_compose_up( $this->site_root ) ) {
+		if ( $this->docker::docker_compose_up( $this->site_root, $containers ) ) {
 			$this->db::update( [ 'is_enabled' => '1' ], [ 'sitename' => $this->site_name ] );
 			EE::success( "Site $this->site_name enabled." );
 		} else {
@@ -395,26 +402,25 @@ class Site_Command extends EE_Command {
 			$this->populate_site_info( $args );
 		}
 		$ssl = $this->le ? 'Enabled' : 'Not Enabled';
-		EE::log( "Details for site $this->site_name:" );
+
 		$prefix = ( $this->le ) ? 'https://' : 'http://';
 		$info   = array(
-			array( 'Site', $prefix . $this->site_name ),
-			array( 'Access phpMyAdmin', $prefix . $this->site_name . '/ee-admin/pma/' ),
-			array( 'Access mailhog', $prefix . $this->site_name . '/ee-admin/mailhog/' ),
-			array( 'Site Title', $this->site_title ),
-			array( 'DB Root Password', $this->db_root_pass ),
-			array( 'DB Name', $this->db_name ),
-			array( 'DB User', $this->db_user ),
-			array( 'DB Password', $this->db_pass ),
-			array( 'E-Mail', $this->site_email ),
-			array( 'Cache Type', $this->cache_type ),
-			array( 'SSL', $ssl ),
+			array( 'Site', $prefix . $this->site_name . '/' ),
+			array( 'Admin Tools', $prefix . $this->site_name . '/ee-admin/' ),
 		);
 
 		if ( ! empty( $this->site_user ) && ! $this->skip_install ) {
 			$info[] = array( 'WordPress Username', $this->site_user );
 			$info[] = array( 'WordPress Password', $this->site_pass );
 		}
+
+		$info[] = array( 'DB Root Password', $this->db_root_pass );
+		$info[] = array( 'DB Name', $this->db_name );
+		$info[] = array( 'DB User', $this->db_user );
+		$info[] = array( 'DB Password', $this->db_pass );
+		$info[] = array( 'E-Mail', $this->site_email );
+		$info[] = array( 'Cache Type', $this->cache_type );
+		$info[] = array( 'SSL', $ssl );
 
 		\EE\Utils\format_table( $info );
 
@@ -423,25 +429,13 @@ class Site_Command extends EE_Command {
 
 	/**
 	 * Starts containers associated with site.
-	 * When no service(--nginx etc.) is specified, all containers will be restarted.
+	 * When no service(--mailhog etc.) is specified, all containers will be restarted.
 	 *
-	 * <site-name>
+	 * [<site-name>]
 	 * : Name of the site.
 	 *
 	 * [--all]
-	 * : Start all containers of site.
-	 *
-	 * [--nginx]
-	 * : Start nginx container of site.
-	 *
-	 * [--php]
-	 * : Start php container of site.
-	 *
-	 * [--mysql]
-	 * : Start mysql container of site.
-	 *
-	 * [--redis]
-	 * : Start redis container of site.
+	 * : Start all admin containers of site.
 	 *
 	 * [--mailhog]
 	 * : Start mailhog container of site.
@@ -450,39 +444,24 @@ class Site_Command extends EE_Command {
 	 * : Start phpmyadmin container of site.
 	 *
 	 * [--phpredisadmin]
-	 * : Start phpredisadmin container of site.
-	 *
-	 * [--adminer]
-	 * : Start adminer container of site.
-	 *
-	 * [--anemometer]
-	 * : Start anemometer container of site.
+	 * : Start phpredisadmin container of site, if site is redis cached.
 	 */
 	public function start( $args, $assoc_args ) {
-		$this->site_docker_compose_execute( $args[0], 'start', $args, $assoc_args);
+		\EE\Utils\delem_log( 'site start start' );
+		$args = \EE\Utils\set_site_arg( $args, 'site start' );
+		$this->site_docker_compose_execute( $args[0], 'up -d', $args, $assoc_args );
+		\EE\Utils\delem_log( 'site start end' );
 	}
 
 	/**
 	 * Stops containers associated with site.
-	 * When no service(--nginx etc.) is specified, all containers will be stopped.
+	 * When no service(--mailhog etc.) is specified, all containers will be stopped.
 	 *
-	 * <site-name>
+	 * [<site-name>]
 	 * : Name of the site.
 	 *
 	 * [--all]
-	 * : Stop all containers of site.
-	 *
-	 * [--nginx]
-	 * : Stop nginx container of site.
-	 *
-	 * [--php]
-	 * : Stop php container of site.
-	 *
-	 * [--mysql]
-	 * : Stop mysql container of site.
-	 *
-	 * [--redis]
-	 * : Stop redis container of site.
+	 * : Stop all admin containers of site.
 	 *
 	 * [--mailhog]
 	 * : Stop mailhog container of site.
@@ -491,39 +470,24 @@ class Site_Command extends EE_Command {
 	 * : Stop phpmyadmin container of site.
 	 *
 	 * [--phpredisadmin]
-	 * : Stop phpredisadmin container of site.
-	 *
-	 * [--adminer]
-	 * : Stop adminer container of site.
-	 *
-	 * [--anemometer]
-	 * : Stop anemometer container of site.
+	 * : Stop phpredisadmin container of site, if site is redis cached.
 	 */
 	public function stop( $args, $assoc_args ) {
-		$this->site_docker_compose_execute( $args[0], 'stop', $args, $assoc_args);
+		\EE\Utils\delem_log( 'site stop start' );
+		$args = \EE\Utils\set_site_arg( $args, 'site stop' );
+		$this->site_docker_compose_execute( $args[0], 'stop', $args, $assoc_args );
+		\EE\Utils\delem_log( 'site stop end' );
 	}
 
 	/**
 	 * Restarts containers associated with site.
-	 * When no service(--nginx etc.) is specified, all containers will be restarted.
+	 * When no service(--mailhog etc.) is specified, all containers will be restarted.
 	 *
-	 * <site-name>
+	 * [<site-name>]
 	 * : Name of the site.
 	 *
 	 * [--all]
-	 * : Restart all containers of site.
-	 *
-	 * [--nginx]
-	 * : Restart nginx container of site.
-	 *
-	 * [--php]
-	 * : Restart php container of site.
-	 *
-	 * [--mysql]
-	 * : Restart mysql container of site.
-	 *
-	 * [--redis]
-	 * : Restart redis container of site.
+	 * : Restart all admin containers of site.
 	 *
 	 * [--mailhog]
 	 * : Restart mailhog container of site.
@@ -532,23 +496,20 @@ class Site_Command extends EE_Command {
 	 * : Restart phpmyadmin container of site.
 	 *
 	 * [--phpredisadmin]
-	 * : Restart phpredisadmin container of site.
-	 *
-	 * [--adminer]
-	 * : Restart adminer container of site.
-	 *
-	 * [--anemometer]
-	 * : Restart anemometer container of site.
+	 * : Restart phpredisadmin container of site, if site is redis cached.
 	 */
 	public function restart( $args, $assoc_args ) {
-		$this->site_docker_compose_execute( $args[0], 'restart', $args, $assoc_args);
+		\EE\Utils\delem_log( 'site restart start' );
+		$args = \EE\Utils\set_site_arg( $args, 'site restart' );
+		$this->site_docker_compose_execute( $args[0], 'restart', $args, $assoc_args );
+		\EE\Utils\delem_log( 'site restart end' );
 	}
 
 	/**
 	 * Reload services in containers without restarting container(s) associated with site.
 	 * When no service(--nginx etc.) is specified, all services will be reloaded.
 	 *
-	 * <site-name>
+	 * [<site-name>]
 	 * : Name of the site.
 	 *
 	 * [--all]
@@ -561,33 +522,45 @@ class Site_Command extends EE_Command {
 	 * : Start php service in container.
 	 */
 	public function reload( $args, $assoc_args ) {
-		$this->site_docker_compose_execute( $args[0], 'reload', $args, $assoc_args);
+		\EE\Utils\delem_log( 'site reload start' );
+		$args = \EE\Utils\set_site_arg( $args, 'site reload' );
+		$this->site_docker_compose_execute( $args[0], 'reload', $args, $assoc_args );
+		\EE\Utils\delem_log( 'site reload end' );
 	}
 
 	private function site_docker_compose_execute( $site, $action, $args, $assoc_args ) {
-		$all = \EE\Utils\get_flag_value( $assoc_args, 'all' );
-		$no_service_specified = count( $assoc_args ) === 0 ;
+		$all                  = \EE\Utils\get_flag_value( $assoc_args, 'all' );
+		$no_service_specified = count( $assoc_args ) === 0;
 
-		$this->populate_site_info( $args );
+		if ( ! isset( $this->site_name ) ) {
+			$this->populate_site_info( $args );
+		}
 
 		chdir( $this->site_root );
 
-		if( $all || $no_service_specified ) {
-			if( $action === 'reload' ) {
+		if ( $all || $no_service_specified ) {
+			if ( $action === 'reload' ) {
 				$this->reload_services( [ 'nginx', 'php' ] );
+
 				return;
 			}
 			$this->run_compose_command( $action, '', null, 'all services' );
-		}
-		else {
-			$services = array_map( [$this, 'map_args_to_service'], array_keys( $assoc_args ) );
+		} else {
+			$assoc_args_array = array_keys( $assoc_args );
+			if ( 'wpredis' !== $this->cache_type ) {
+				if ( in_array( 'phpredisadmin', $assoc_args_array ) ) {
+					EE::error( 'Can\'t enable phpredisadmin as site is not redis cached.' );
+				}
+			}
+			$services = array_map( [ $this, 'map_args_to_service' ], $assoc_args_array );
 
-			if( $action === 'reload' ) {
+			if ( $action === 'reload' ) {
 				$this->reload_services( $services );
+
 				return;
 			}
 
-			foreach( $services as $service ) {
+			foreach ( $services as $service ) {
 				$this->run_compose_command( $action, $service );
 			}
 		}
@@ -597,12 +570,37 @@ class Site_Command extends EE_Command {
 	/**
 	 * Generic function to run a docker compose command. Must be ran inside correct directory.
 	 */
-	private function run_compose_command( $action, $container, $action_to_display = null, $service_to_display = null) {
-		$display_action = $action_to_display ? $action_to_display : $action;
+	private function run_compose_command( $action, $container, $action_to_display = null, $service_to_display = null ) {
+		$action_to_display = 'up -d' === $action ? 'start' : null;
+		// TODO: get the service list from the db once all the services get configured.
+		$services = [ 'mailhog' => 0, 'phpmyadmin' => 0, 'phpredisadmin' => 0 ];
+		if ( 'redis' !== $this->cache_type ) {
+			unset( $services['phpredisadmin'] );
+		}
+
+		$db_actions      = [ 'up -d', 'stop' ];
+		$display_action  = $action_to_display ? $action_to_display : $action;
 		$display_service = $service_to_display ? $service_to_display : $container;
 
-		\EE::log( ucfirst( $display_action ) . 'ing ' . $display_service );
-		\EE\Utils\default_launch( "docker-compose $action $container" );
+		EE::log( ucfirst( $display_action ) . 'ing ' . $display_service );
+
+		$action_on_container = empty( $container ) ? implode( ' ', array_keys( $services ) ) : $container;
+
+		$run_compose_command = \EE\Utils\default_launch( "docker-compose $action $action_on_container", true, true );
+
+		if ( $run_compose_command && in_array( $action, $db_actions ) ) {
+
+			$db_val = 'stop' === $action ? 0 : 1;
+			if ( empty( $container ) ) {
+				foreach ( $services as $service => $val ) {
+					$services[$service] = $db_val;
+				}
+			} else {
+				$services = [ $container => $db_val ];
+			}
+			$this->db::update( $services, [ 'sitename' => $this->site_name ], 'services' );
+
+		}
 	}
 
 	/**
@@ -611,11 +609,11 @@ class Site_Command extends EE_Command {
 	private function reload_services( $services ) {
 		$reload_command = [
 			'nginx' => 'nginx sh -c \'nginx -t && service openresty reload\'',
-			'php' => 'php kill -USR2 1'
+			'php'   => 'php kill -USR2 1'
 		];
 
-		foreach( $services as $service ) {
-			$this->run_compose_command( 'exec', $reload_command[ $service ], 'reload', $service );
+		foreach ( $services as $service ) {
+			$this->run_compose_command( 'exec', $reload_command[$service], 'reload', $service );
 		}
 	}
 
@@ -626,7 +624,8 @@ class Site_Command extends EE_Command {
 		$services_map = [
 			'mysql' => 'db',
 		];
-		return in_array( $arg, array_keys( $services_map ) ) ? $services_map[ $arg ] : $arg ;
+
+		return in_array( $arg, array_keys( $services_map ) ) ? $services_map[$arg] : $arg;
 	}
 
 	/**
@@ -668,6 +667,7 @@ class Site_Command extends EE_Command {
 	private function configure_site() {
 
 		$site_conf_dir           = $this->site_root . '/config';
+		$site_admin_dir          = $this->site_root . '/app/src/ee-admin';
 		$site_docker_yml         = $this->site_root . '/docker-compose.yml';
 		$site_conf_env           = $this->site_root . '/.env';
 		$site_nginx_default_conf = $site_conf_dir . '/nginx/default.conf';
@@ -679,10 +679,10 @@ class Site_Command extends EE_Command {
 		EE::log( 'Copying configuration files.' );
 
 		$filter                 = array();
-		$filter[]               = $this->site_type;
-		$filter[]               = $this->cache_type;
-		$filter[]               = $this->le;
-		$filter[]               = $this->db_host;
+		$filter['site_type']    = $this->site_type;
+		$filter['cache_type']   = $this->cache_type;
+		$filter['le']           = $this->le;
+		$filter['db_host']      = $this->db_host;
 		$site_docker            = new Site_Docker();
 		$docker_compose_content = $site_docker->generate_docker_compose_yml( $filter );
 		$default_conf_content   = $this->generate_default_conf( $this->site_type, $this->cache_type, $server_name );
@@ -710,6 +710,8 @@ class Site_Command extends EE_Command {
 			if ( ! ( file_put_contents( $site_docker_yml, $docker_compose_content )
 				&& file_put_contents( $site_conf_env, $env_content )
 				&& mkdir( $site_conf_dir )
+				&& mkdir( $site_admin_dir, 0755, true )
+				&& copy( SITE_TEMPLATE_ROOT . '/admin-index.php.mustache', $site_admin_dir . '/index.php' )
 				&& mkdir( $site_conf_dir . '/nginx' )
 				&& file_put_contents( $site_nginx_default_conf, $default_conf_content )
 				&& mkdir( $site_conf_dir . '/php-fpm' )
@@ -829,32 +831,31 @@ server {
 	}
 
 	private function maybe_verify_remote_db_connection() {
-		if( 'db' === $this->db_host ) {
+		if ( 'db' === $this->db_host ) {
 			return;
 		}
 
-			// Docker needs special handling if we want to connect to host machine.
-			// The since we're inside the container and we want to access host machine,
-			// we would need to replace localhost with default gateway
-			if( $this->db_host === '127.0.0.1' || $this->db_host === 'localhost' ) {
-				$launch = EE::launch( "docker network inspect $this->site_name --format='{{ (index .IPAM.Config 0).Gateway }}'", false, true );
-				\EE\Utils\default_debug( $launch );
+		// Docker needs special handling if we want to connect to host machine.
+		// The since we're inside the container and we want to access host machine,
+		// we would need to replace localhost with default gateway
+		if ( $this->db_host === '127.0.0.1' || $this->db_host === 'localhost' ) {
+			$launch = EE::launch( "docker network inspect $this->site_name --format='{{ (index .IPAM.Config 0).Gateway }}'", false, true );
+			\EE\Utils\default_debug( $launch );
 
-				if( ! $launch->return_code ) {
-					$this->db_host = trim( $launch->stdout, "\n" );
-				}
-				else {
-					throw new Exception( 'There was a problem inspecting network. Please check the logs' );
-				}
-		}
-				\EE::log( 'Verifying connection to remote database' );
-
-				if( ! \EE\Utils\default_launch( "docker run -it --rm --network='$this->site_name' mysql sh -c \"mysql --host='$this->db_host' --port='$this->db_port' --user='$this->db_user' --password='$this->db_pass' --execute='EXIT'\"" ) ) {
-					throw new Exception( 'Unable to connect to remote db' );
-				}
-
-				\EE::success( 'Connection to remote db verified' );
+			if ( ! $launch->return_code ) {
+				$this->db_host = trim( $launch->stdout, "\n" );
+			} else {
+				throw new Exception( 'There was a problem inspecting network. Please check the logs' );
 			}
+		}
+		\EE::log( 'Verifying connection to remote database' );
+
+		if ( ! \EE\Utils\default_launch( "docker run -it --rm --network='$this->site_name' mysql sh -c \"mysql --host='$this->db_host' --port='$this->db_port' --user='$this->db_user' --password='$this->db_pass' --execute='EXIT'\"" ) ) {
+			throw new Exception( 'Unable to connect to remote db' );
+		}
+
+		\EE::success( 'Connection to remote db verified' );
+	}
 
 	/**
 	 * Function to create the site.
@@ -869,8 +870,11 @@ server {
 			chdir( $this->site_root );
 			\EE\Utils\default_launch( 'docker-compose pull' );
 			EE::log( 'Starting site\'s services.' );
-			if ( ! $this->docker::docker_compose_up( $this->site_root ) ) {
+			if ( ! $this->docker::docker_compose_up( $this->site_root, [ 'nginx' ] ) ) {
 				throw new Exception( 'There was some error in docker-compose up.' );
+			}
+			if ( 'wpredis' === $this->cache_type ) {
+				$this->docker::docker_compose_up( $this->site_root, [ 'redis' ] );
 			}
 		}
 		catch ( Exception $e ) {
@@ -1144,12 +1148,12 @@ server {
 		EE::log( "\nInstalling WordPress site." );
 		chdir( $this->site_root );
 
-		$wp_install_command = 'install';
-		$maybe_multisite_type    = '';
+		$wp_install_command   = 'install';
+		$maybe_multisite_type = '';
 
 		if ( 'wpsubdom' === $this->site_type || 'wpsubdir' === $this->site_type ) {
-			$wp_install_command = 'multisite-install';
-			$maybe_multisite_type  = $this->site_type === 'wpsubdom' ? '--subdomains' : '';
+			$wp_install_command   = 'multisite-install';
+			$maybe_multisite_type = $this->site_type === 'wpsubdom' ? '--subdomains' : '';
 		}
 
 		$install_command = "docker-compose exec --user='www-data' php wp core $wp_install_command --url='$this->site_name' --title='$this->site_title' --admin_user='$this->site_user'" . ( $this->site_pass ? " --admin_password='$this->site_pass'" : '' ) . " --admin_email='$this->site_email' $maybe_multisite_type";
@@ -1168,7 +1172,7 @@ server {
 	 * Function to save the site configuration entry into database.
 	 */
 	private function create_site_db_entry() {
-		$ssl = $this->le ? 1 : 0;
+		$ssl  = $this->le ? 1 : 0;
 		$data = array(
 			'sitename'         => $this->site_name,
 			'site_type'        => $this->site_type,
@@ -1193,7 +1197,7 @@ server {
 		}
 
 		try {
-			if ( $this->db::insert( $data ) ) {
+			if ( $this->db::insert( $data ) && $this->db::insert( [ 'sitename' => $this->site_name ], 'services' ) ) {
 				EE::log( 'Site entry created.' );
 			} else {
 				throw new Exception( 'Error creating site entry in database.' );
@@ -1213,9 +1217,7 @@ server {
 
 		if ( $this->db::site_in_db( $this->site_name ) ) {
 
-			$data = array( 'site_type', 'site_title', 'proxy_type', 'cache_type', 'site_path', 'db_name', 'db_user', 'db_host', 'db_port', 'db_password', 'db_root_password', 'wp_user', 'wp_pass', 'email', 'is_ssl' );
-
-			$db_select = $this->db::select( $data, array( 'sitename' => $this->site_name ) );
+			$db_select = $this->db::select( [], array( 'sitename' => $this->site_name ), 'sites', 1 );
 
 			$this->site_type    = $db_select[0]['site_type'];
 			$this->site_title   = $db_select[0]['site_title'];
@@ -1233,6 +1235,22 @@ server {
 			$this->site_email   = $db_select[0]['email'];
 			$this->le           = $db_select[0]['is_ssl'];
 
+		} else {
+			EE::error( "Site $this->site_name does not exist." );
+		}
+	}
+
+	/**
+	 * Populate service info from db.
+	 */
+	private function populate_service_info( $args ) {
+
+		$this->site_name = \EE\Utils\remove_trailing_slash( $args[0] );
+
+		if ( $this->db::site_in_db( $this->site_name ) ) {
+
+			$db_select = $this->db::select( [], array( 'sitename' => $this->site_name ), 'services', 1 );
+			return array_slice($db_select[0], 2);
 		} else {
 			EE::error( "Site $this->site_name does not exist." );
 		}
