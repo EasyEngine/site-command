@@ -350,9 +350,15 @@ class Site_Command extends EE_Command {
 		\EE\Utils\delem_log( 'site enable start' );
 		$args = \EE\Utils\set_site_arg( $args, 'site enable' );
 		$this->populate_site_info( $args );
+		$services   = $this->populate_service_info( $args );
+		$containers = [ 'nginx' ];
+		foreach ( $services as $service => $enabled ) {
+			if ( $enabled ) {
+				$containers[] = $service;
+			}
+		}
 		EE::log( "Enabling site $this->site_name." );
-		// TODO: bring up only the contianers that were present.
-		if ( $this->docker::docker_compose_up( $this->site_root ) ) {
+		if ( $this->docker::docker_compose_up( $this->site_root, $containers ) ) {
 			$this->db::update( [ 'is_enabled' => '1' ], [ 'sitename' => $this->site_name ] );
 			EE::success( "Site $this->site_name enabled." );
 		} else {
@@ -1229,6 +1235,22 @@ server {
 			$this->site_email   = $db_select[0]['email'];
 			$this->le           = $db_select[0]['is_ssl'];
 
+		} else {
+			EE::error( "Site $this->site_name does not exist." );
+		}
+	}
+
+	/**
+	 * Populate service info from db.
+	 */
+	private function populate_service_info( $args ) {
+
+		$this->site_name = \EE\Utils\remove_trailing_slash( $args[0] );
+
+		if ( $this->db::site_in_db( $this->site_name ) ) {
+
+			$db_select = $this->db::select( [], array( 'sitename' => $this->site_name ), 'services', 1 );
+			return array_slice($db_select[0], 2);
 		} else {
 			EE::error( "Site $this->site_name does not exist." );
 		}
