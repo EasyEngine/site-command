@@ -547,7 +547,7 @@ class Site_Command extends EE_Command {
 			$this->run_compose_command( $action, '', null, 'all services' );
 		} else {
 			$assoc_args_array = array_keys( $assoc_args );
-			if ( 'redis' !== $this->cache_type ) {
+			if ( 'wpredis' !== $this->cache_type ) {
 				if ( in_array( 'phpredisadmin', $assoc_args_array ) ) {
 					EE::error( 'Can\'t enable phpredisadmin as site is not redis cached.' );
 				}
