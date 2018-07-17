@@ -673,10 +673,10 @@ class Site_Command extends EE_Command {
 		EE::log( 'Copying configuration files.' );
 
 		$filter                 = array();
-		$filter[]               = $this->site_type;
-		$filter[]               = $this->cache_type;
-		$filter[]               = $this->le;
-		$filter[]               = $this->db_host;
+		$filter['site_type']    = $this->site_type;
+		$filter['cache_type']   = $this->cache_type;
+		$filter['le']           = $this->le;
+		$filter['db_host']      = $this->db_host;
 		$site_docker            = new Site_Docker();
 		$docker_compose_content = $site_docker->generate_docker_compose_yml( $filter );
 		$default_conf_content   = $this->generate_default_conf( $this->site_type, $this->cache_type, $server_name );
