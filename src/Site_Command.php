@@ -657,8 +657,17 @@ class Site_Command extends EE_Command {
 				}
 			}
 		}
+		if ( 'running' !== $this->docker::container_status( 'ee-cron-scheduler' ) ) {
+			$EE_CONF_ROOT     = EE_CONF_ROOT;
+			$cron_scheduler_run_command = "docker run --name ee-cron-scheduler --restart=always -d -v $EE_CONF_ROOT/cron:/etc/ofelia:ro -v /var/run/docker.sock:/var/run/docker.sock:ro easyengine/ofelia:v" . EE_VERSION;
+			if ( $this->docker::boot_container( 'ee-cron-scheduler', $cron_scheduler_run_command) ) {
+				EE::success( "ee-cron-scheduler container is up." );
+			} else {
+				EE::error( "There was some error in starting ee-cron-scheduler container. Please check logs." );
+			}
+		}
 
-		$this->site_root = WEBROOT . $this->site_name;
+			$this->site_root = WEBROOT . $this->site_name;
 		$this->create_site_root();
 	}
 
