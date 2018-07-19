@@ -1062,7 +1062,7 @@ server {
 
 		EE::log( 'Downloading and configuring WordPress.' );
 
-		$chown_command = "docker-compose exec php chown -R www-data: /var/www/";
+		$chown_command = "docker-compose exec --user=root php chown -R www-data: /var/www/";
 		\EE\Utils\default_launch( $chown_command );
 
 		$core_download_command = "docker-compose exec --user='www-data' php wp core download --locale='" . $this->locale . "' " . $core_download_arguments;
@@ -1247,7 +1247,7 @@ server {
 		\EE\Utils\delem_log( 'site cleanup start' );
 		EE::warning( $e->getMessage() );
 		EE::warning( 'Initiating clean-up.' );
-		$this->delete_site();
+		//$this->delete_site();
 		\EE\Utils\delem_log( 'site cleanup end' );
 		exit;
 	}
@@ -1258,7 +1258,7 @@ server {
 	private function rollback() {
 		EE::warning( 'Exiting gracefully after rolling back. This may take some time.' );
 		if ( $this->level > 0 ) {
-			$this->delete_site();
+			//$this->delete_site();
 		}
 		EE::success( 'Rollback complete. Exiting now.' );
 		exit;
