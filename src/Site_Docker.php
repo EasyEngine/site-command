@@ -47,7 +47,7 @@ class Site_Docker {
 		$php['volumes']      = array(
 			array(
 				'vol' => array(
-					array( 'name' => './app/src:/var/www/html' ),
+					array( 'name' => './app/src:/var/www/htdocs' ),
 					array( 'name' => './config/php-fpm/php.ini:/usr/local/etc/php/php.ini' ),
 				),
 			),
@@ -82,7 +82,7 @@ class Site_Docker {
 		);
 		$nginx['volumes']     = array(
 			'vol' => array(
-				array( 'name' => './app/src:/var/www/html' ),
+				array( 'name' => './app/src:/var/www/htdocs' ),
 				array( 'name' => './config/nginx/default.conf:/etc/nginx/conf.d/default.conf' ),
 				array( 'name' => './logs/nginx:/var/log/nginx' ),
 				array( 'name' => './config/nginx/common:/usr/local/openresty/nginx/conf/common' ),
