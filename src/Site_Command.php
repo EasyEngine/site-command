@@ -1247,7 +1247,7 @@ server {
 		\EE\Utils\delem_log( 'site cleanup start' );
 		EE::warning( $e->getMessage() );
 		EE::warning( 'Initiating clean-up.' );
-		//$this->delete_site();
+		$this->delete_site();
 		\EE\Utils\delem_log( 'site cleanup end' );
 		exit;
 	}
@@ -1258,7 +1258,7 @@ server {
 	private function rollback() {
 		EE::warning( 'Exiting gracefully after rolling back. This may take some time.' );
 		if ( $this->level > 0 ) {
-			//$this->delete_site();
+			$this->delete_site();
 		}
 		EE::success( 'Rollback complete. Exiting now.' );
 		exit;
