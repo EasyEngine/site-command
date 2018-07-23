@@ -704,6 +704,8 @@ class Site_Command extends EE_Command {
 		$env_content            = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/.env.mustache', $env_data );
 		$php_ini_content        = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/php-fpm/php.ini.mustache', [] );
 
+		$this->add_site_redirects();
+
 		try {
 			if ( ! ( file_put_contents( $site_docker_yml, $docker_compose_content )
 				&& file_put_contents( $site_conf_env, $env_content )
@@ -719,6 +721,63 @@ class Site_Command extends EE_Command {
 		catch ( Exception $e ) {
 			$this->catch_clean( $e );
 		}
+	}
+
+	/**
+	 * Adds www to non-www redirection to site
+	 */
+	private function add_site_redirects() {
+		$confd_path = EE_CONF_ROOT . '/nginx/conf.d/';
+		$config_file_path = $confd_path . $this->site_name . '-redirect.conf';
+		$has_www = strpos( $this->site_name, 'www.' ) === 0;
+		$content = '';
+
+		if( $has_www ) {
+			$site_name_without_www = ltrim( $this->site_name, '.www' );
+			// ee site create www.example.com --le
+			if( $this->le ) {
+				$content = "
+server {
+	listen  80;
+	listen  443;
+	server_name  $site_name_without_www;
+	return  301 https://$this->site_name\$request_uri;
+}";
+			}
+			// ee site create www.example.com
+			else {
+				$content = "
+server {
+	listen  80;
+	server_name  $site_name_without_www;
+	return  301 http://$this->site_name\$request_uri;
+}";
+			}
+		}
+		else {
+			$site_name_with_www = 'www.' . $this->site_name;
+			// ee site create example.com --le
+			if( $this->le ) {
+
+				$content = "
+server {
+	listen  80;
+	listen  443;
+	server_name  $site_name_with_www;
+	return  301 https://$this->site_name\$request_uri;
+}";
+			}
+			// ee site create example.com
+			else {
+				$content = "
+server {
+	listen  80;
+	server_name  $site_name_with_www;
+	return  301 http://$this->site_name\$request_uri;
+}";
+			}
+		}
+		file_put_contents( $config_file_path, ltrim( $content, PHP_EOL ) );
 	}
 
 	/**
@@ -895,8 +954,17 @@ class Site_Command extends EE_Command {
 		if ( $this->level > 4 ) {
 			if ( $this->le ) {
 				EE::log( 'Removing ssl certs.' );
-				$crt_file = EE_CONF_ROOT . "/nginx/certs/$this->site_name.crt";
-				$key_file = EE_CONF_ROOT . "/nginx/certs/$this->site_name.key";
+				$crt_file   = EE_CONF_ROOT . "/nginx/certs/$this->site_name.crt";
+				$key_file   = EE_CONF_ROOT . "/nginx/certs/$this->site_name.key";
+				$conf_certs = EE_CONF_ROOT . "/acme-conf/certs/$this->site_name";
+				$conf_var   = EE_CONF_ROOT . "/acme-conf/var/$this->site_name";
+				// TODO: Change all these operations to use symfony filesystem
+				if ( file_exists( $conf_certs ) ) {
+					\EE\Utils\delete_dir( $conf_certs );
+				}
+				if ( file_exists( $conf_var ) ) {
+					\EE\Utils\delete_dir( $conf_var );
+				}
 				if ( file_exists( $crt_file ) ) {
 					unlink( $crt_file );
 				}
@@ -1003,7 +1071,7 @@ class Site_Command extends EE_Command {
 
 		EE::log( 'Downloading and configuring WordPress.' );
 
-		$chown_command = "docker-compose exec php chown -R www-data: /var/www/";
+		$chown_command = "docker-compose exec --user=root php chown -R www-data: /var/www/";
 		\EE\Utils\default_launch( $chown_command );
 
 		$core_download_command = "docker-compose exec --user='www-data' php wp core download --locale='" . $this->locale . "' " . $core_download_arguments;

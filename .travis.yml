@@ -1,0 +1,35 @@
+sudo: required
+
+language: php
+php: 7.1
+
+env:
+  global:
+    - TEST_COMMAND=$(echo $TRAVIS_REPO_SLUG | cut -d/ -f 2) # Get command name to be tested
+
+before_script:
+  - |
+    # Remove Xdebug for a huge performance increase:
+    if [ -f ~/.phpenv/versions/$(phpenv version-name)/etc/conf.d/xdebug.ini ]; then
+      phpenv config-rm xdebug.ini
+    else
+      echo "xdebug.ini does not exist"
+    fi
+  - ./ci/prepare.sh
+  - ./ci/add-test-certs.sh
+
+script:
+  - cd "$TRAVIS_BUILD_DIR/../easyengine"
+  - ./vendor/bin/behat
+
+after_script:
+  - cat /opt/easyengine/ee.log
+
+cache:
+  directories:
+    - $HOME/.composer/cache
+
+notifications:
+  email:
+    on_success: never
+    on_failure: change
