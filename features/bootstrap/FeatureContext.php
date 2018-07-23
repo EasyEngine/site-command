@@ -337,6 +337,22 @@ class FeatureContext implements Context
 	}
 
 	/**
+	 * @Then There should be :expected_running_containers containers with labels
+	 */
+	public function thereShouldBeContainersWithLabel($expected_running_containers, PyStringNode $pyStringNode)
+	{
+		$labels = $pyStringNode->getStrings();
+		$label_string = implode($labels, ' -f label=');
+
+		$result = EE::launch( "docker ps -aqf label=$label_string | wc -l", false, true );
+		$running_containers = (int) trim($result->stdout);
+
+		if($expected_running_containers === $running_containers) {
+			throw new Exception("Expected $expected_running_containers running containers. Found: $running_containers");
+		}
+	}
+
+	/**
 	 * @AfterFeature
 	 */
 	public static function cleanup(AfterFeatureScope $scope)
@@ -349,6 +365,7 @@ class FeatureContext implements Context
 			'www.example1.test',
 			'example2.test',
 			'www.example3.test',
+			'labels.test'
 		];
 
 		$result = EE::launch( 'sudo bin/ee site list --format=text',false, true );

@@ -23,6 +23,13 @@ class Site_Docker {
 		$db['service_name'] = array( 'name' => 'db' );
 		$db['image']        = array( 'name' => 'easyengine/mariadb:v' . EE_VERSION );
 		$db['restart']      = $restart_default;
+		$db['labels']      = array(
+			array(
+				'label' => array(
+					'name' => 'io.easyengine.site=${VIRTUAL_HOST}',
+				),
+			),
+		);
 		$db['volumes']      = array(
 			array(
 				'vol' => array(
@@ -44,6 +51,13 @@ class Site_Docker {
 		$php['image']        = array( 'name' => 'easyengine/php:v' . EE_VERSION );
 		$php['depends_on']   = array( 'name' => 'db' );
 		$php['restart']      = $restart_default;
+		$php['labels']      = array(
+			array(
+				'label' => array(
+					'name' => 'io.easyengine.site=${VIRTUAL_HOST}',
+				),
+			),
+		);
 		$php['volumes']      = array(
 			array(
 				'vol' => array(
@@ -88,6 +102,13 @@ class Site_Docker {
 				array( 'name' => './config/nginx/common:/usr/local/openresty/nginx/conf/common' ),
 			),
 		);
+		$nginx['labels']      = array(
+			array(
+				'label' => array(
+					'name' => 'io.easyengine.site=${VIRTUAL_HOST}',
+				),
+			),
+		);
 		$nginx['networks']    = $network_default;
 
 		// PhpMyAdmin configuration.
@@ -99,6 +120,13 @@ class Site_Docker {
 				array( 'name' => 'PMA_ABSOLUTE_URI=http://${VIRTUAL_HOST}/ee-admin/pma/' ),
 				array( 'name' => $v_host ),
 				array( 'name' => 'VIRTUAL_PATH=/ee-admin/pma/' ),
+			),
+		);
+		$phpmyadmin['labels']      = array(
+			array(
+				'label' => array(
+					'name' => 'io.easyengine.site=${VIRTUAL_HOST}',
+				),
 			),
 		);
 		$phpmyadmin['networks']     = $network_default;
@@ -115,11 +143,25 @@ class Site_Docker {
 				array( 'name' => 'VIRTUAL_PORT=8025' ),
 			),
 		);
+		$mailhog['labels']      = array(
+			array(
+				'label' => array(
+					'name' => 'io.easyengine.site=${VIRTUAL_HOST}',
+				),
+			),
+		);
 		$mailhog['networks']     = $network_default;
 
 		// redis configuration.
 		$redis['service_name'] = array( 'name' => 'redis' );
 		$redis['image']        = array( 'name' => 'easyengine/redis:v' . EE_VERSION );
+		$redis['labels']      = array(
+			array(
+				'label' => array(
+					'name' => 'io.easyengine.site=${VIRTUAL_HOST}',
+				),
+			),
+		);
 		$redis['networks']     = $network_default;
 
 		if ( in_array( 'db', $filters, true ) ) {
