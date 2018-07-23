@@ -25,36 +25,58 @@ Feature: Site Command
     usage: ee site
     """
 
-  Scenario: Create site successfully
-    When I run 'sudo bin/ee site create hello.test --wp'
-    Then The site 'hello.test' should have webroot
-    And The site 'hello.test' should have WordPress
-    And Request on 'hello.test' should contain following headers:
-    | header           |
-    | HTTP/1.1 200 OK  |
+  Scenario: Create wp site successfully
+    When I run 'sudo bin/ee site create wp.test --wp'
+    Then The site 'wp.test' should have webroot
+      And The site 'wp.test' should have WordPress
+      And Request on 'wp.test' should contain following headers:
+        | header           |
+        | HTTP/1.1 200 OK  |
+
+  Scenario: Create wpsubdir site successfully
+    When I run 'sudo bin/ee site create wpsubdir.test --wpsubdir'
+      And I create subsite '1' in 'wpsubdir.test'
+    Then The site 'wpsubdir.test' should have webroot
+      And The site 'wpsubdir.test' should have WordPress
+      And The site 'wpsubdir.test' should be 'subdir' multisite
+      And Request on 'wpsubdir.test' should contain following headers:
+        | header           |
+        | HTTP/1.1 200 OK  |
+
+  Scenario: Create wpsubdom site successfully
+    When I run 'sudo bin/ee site create wpsubdom.test --wpsubdom'
+      And I create subsite '1' in 'wpsubdom.test'
+    Then The site 'wpsubdom.test' should have webroot
+      And The site 'wpsubdom.test' should have WordPress
+      And The site 'wpsubdom.test' should be 'subdomain' multisite
+      And Request on 'wpsubdom.test' should contain following headers:
+        | header           |
+        | HTTP/1.1 200 OK  |
 
   Scenario: List the sites
     When I run 'sudo bin/ee site list --format=text'
     Then STDOUT should return exactly
     """
-    hello.test
+    wp.test
+    wpsubdir.test
+    wpsubdom.test
     """
 
   Scenario: Delete the sites
-    When I run 'sudo bin/ee site delete hello.test --yes'
+    When I run 'sudo bin/ee site delete wp.test --yes'
     Then STDOUT should return something like
     """
-    Site hello.test deleted.
+    Site wp.test deleted.
     """
-    And STDERR should return exactly
-    """
-    """
-    And The 'hello.test' db entry should be removed
-    And The 'hello.test' webroot should be removed
-    And Following containers of site 'hello.test' should be removed:
-      | container  |
-      | nginx      |
-      | php        |
-      | db         |
-      | redis      |
-      | phpmyadmin |
+      And STDERR should return exactly
+      """
+      """
+      And The 'wp.test' db entry should be removed
+      And The 'wp.test' webroot should be removed
+      And Following containers of site 'wp.test' should be removed:
+        | container  |
+        | nginx      |
+        | php        |
+        | db         |
+        | redis      |
+        | phpmyadmin |
