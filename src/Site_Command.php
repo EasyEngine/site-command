@@ -1071,7 +1071,7 @@ server {
 
 		EE::log( 'Downloading and configuring WordPress.' );
 
-		$chown_command = "docker-compose exec php chown -R www-data: /var/www/";
+		$chown_command = "docker-compose exec --user=root php chown -R www-data: /var/www/";
 		\EE\Utils\default_launch( $chown_command );
 
 		$core_download_command = "docker-compose exec --user='www-data' php wp core download --locale='" . $this->locale . "' " . $core_download_arguments;
