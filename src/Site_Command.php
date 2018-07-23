@@ -954,8 +954,17 @@ server {
 		if ( $this->level > 4 ) {
 			if ( $this->le ) {
 				EE::log( 'Removing ssl certs.' );
-				$crt_file = EE_CONF_ROOT . "/nginx/certs/$this->site_name.crt";
-				$key_file = EE_CONF_ROOT . "/nginx/certs/$this->site_name.key";
+				$crt_file   = EE_CONF_ROOT . "/nginx/certs/$this->site_name.crt";
+				$key_file   = EE_CONF_ROOT . "/nginx/certs/$this->site_name.key";
+				$conf_certs = EE_CONF_ROOT . "/acme-conf/certs/$this->site_name";
+				$conf_var   = EE_CONF_ROOT . "/acme-conf/var/$this->site_name";
+				// TODO: Change all these operations to use symfony filesystem
+				if ( file_exists( $conf_certs ) ) {
+					\EE\Utils\delete_dir( $conf_certs );
+				}
+				if ( file_exists( $conf_var ) ) {
+					\EE\Utils\delete_dir( $conf_var );
+				}
 				if ( file_exists( $crt_file ) ) {
 					unlink( $crt_file );
 				}
