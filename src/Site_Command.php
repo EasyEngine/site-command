@@ -300,22 +300,10 @@ class Site_Command extends EE_Site_Command {
 		$prefix = ( $this->le ) ? 'https://' : 'http://';
 		$info   = array(
 			array( 'Site', $prefix . $this->site_name ),
-			array( 'Access phpMyAdmin', $prefix . $this->site_name . '/ee-admin/pma/' ),
 			array( 'Access mailhog', $prefix . $this->site_name . '/ee-admin/mailhog/' ),
-			array( 'Site Title', $this->site_title ),
-			array( 'DB Root Password', $this->db_root_pass ),
-			array( 'DB Name', $this->db_name ),
-			array( 'DB User', $this->db_user ),
-			array( 'DB Password', $this->db_pass ),
-			array( 'E-Mail', $this->site_email ),
-			array( 'Cache Type', $this->cache_type ),
+			array( 'Site Root', $this->site_root ),
 			array( 'SSL', $ssl ),
 		);
-
-		if ( ! empty( $this->site_user ) && ! $this->skip_install ) {
-			$info[] = array( 'WordPress Username', $this->site_user );
-			$info[] = array( 'WordPress Password', $this->site_pass );
-		}
 
 		\EE\Utils\format_table( $info );
 
@@ -357,7 +345,7 @@ class Site_Command extends EE_Site_Command {
 		\EE\Utils\delem_log( 'site restart stop' );
 	}
 
-		/**
+	/**
 	 * Reload services in containers without restarting container(s) associated with site.
 	 * When no service(--nginx etc.) is specified, all services will be reloaded.
 	 *
