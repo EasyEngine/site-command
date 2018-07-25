@@ -616,37 +616,6 @@ class Site_Command extends EE_Command {
 	}
 
 	/**
-	 * Creates site root directory if does not exist.
-	 * Throws error if it does exist.
-	 */
-	private function create_site_root() {
-
-		if ( is_dir( $this->site_root ) ) {
-			EE::error( "Webroot directory for site $this->site_name already exists." );
-		}
-
-		if ( ! \EE\Utils\default_launch( "mkdir $this->site_root" ) ) {
-			EE::error( "Cannot create directory $this->site_root. Please check that folder permission allows easyengine to create directory there." );
-		}
-
-		try {
-			$this->level = 1;
-			$whoami      = EE::launch( "whoami", false, true );
-
-			$terminal_username = rtrim( $whoami->stdout );
-
-			if ( ! chown( $this->site_root, $terminal_username ) ) {
-				throw new Exception( 'Could not change ownership of the site root. Please make sure you have appropriate rights.' );
-			}
-		}
-		catch ( Exception $e ) {
-			$this->catch_clean( $e );
-		}
-
-		return true;
-	}
-
-	/**
 	 * Function to create the site.
 	 */
 	private function create_site( $assoc_args ) {
