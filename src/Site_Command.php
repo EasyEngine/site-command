@@ -740,41 +740,6 @@ class Site_Command extends EE_Command {
 		EE::log( "Site $this->site_name deleted." );
 	}
 
-
-	/**
-	 * Checking site is running or not [TESTING]
-	 */
-	private function site_status_check() {
-		$this->level = 4;
-		EE::log( 'Checking and verifying site-up status. This may take some time.' );
-		$httpcode = '000';
-		$ch       = curl_init( $this->site_name );
-		curl_setopt( $ch, CURLOPT_HEADER, true );
-		curl_setopt( $ch, CURLOPT_NOBODY, true );
-		curl_setopt( $ch, CURLOPT_RETURNTRANSFER, 1 );
-		curl_setopt( $ch, CURLOPT_TIMEOUT, 10 );
-
-		$i = 0;
-		try {
-			while ( 200 !== $httpcode && 302 !== $httpcode ) {
-				curl_exec( $ch );
-				$httpcode = curl_getinfo( $ch, CURLINFO_HTTP_CODE );
-				echo '.';
-				sleep( 2 );
-				if ( $i ++ > 60 ) {
-					break;
-				}
-			}
-			if ( 200 !== $httpcode && 302 !== $httpcode ) {
-				throw new Exception( 'Problem connecting to site!' );
-			}
-		}
-		catch ( Exception $e ) {
-			$this->catch_clean( $e );
-		}
-
-	}
-
 	/**
 	 * Function to save the site configuration entry into database.
 	 */
