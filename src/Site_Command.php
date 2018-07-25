@@ -337,11 +337,11 @@ class Site_Command extends EE_Site_Command {
 		\EE\Utils\delem_log( 'site info end' );
 	}
 
-	/**
+		/**
 	 * Restarts containers associated with site.
-	 * When no service(--nginx etc.) is specified, all containers will be restarted.
+	 * When no service(--nginx etc.) is specified, all site containers will be restarted.
 	 *
-	 * <site-name>
+	 * [<site-name>]
 	 * : Name of the site.
 	 *
 	 * [--all]
@@ -349,35 +349,29 @@ class Site_Command extends EE_Site_Command {
 	 *
 	 * [--nginx]
 	 * : Restart nginx container of site.
-	 *
-	 * [--php]
-	 * : Restart php container of site.
-	 *
-	 * [--mysql]
-	 * : Restart mysql container of site.
-	 *
-	 * [--redis]
-	 * : Restart redis container of site.
-	 *
-	 * [--mailhog]
-	 * : Restart mailhog container of site.
-	 *
-	 * [--phpmyadmin]
-	 * : Restart phpmyadmin container of site.
-	 *
-	 * [--phpredisadmin]
-	 * : Restart phpredisadmin container of site.
-	 *
-	 * [--adminer]
-	 * : Restart adminer container of site.
-	 *
-	 * [--anemometer]
-	 * : Restart anemometer container of site.
 	 */
 	public function restart( $args, $assoc_args ) {
-		$this->site_docker_compose_execute( $args[0], 'restart', $args, $assoc_args);
-	}
+		\EE\Utils\delem_log( 'site restart start' );
+		$args                 = \EE\SiteUtils\auto_site_name( $args, $this->command, __FUNCTION__ );
+		$all                  = \EE\Utils\get_flag_value( $assoc_args, 'all' );
+		$no_service_specified = count( $assoc_args ) === 0;
 
+		$this->populate_site_info( $args );
+
+		chdir( $this->site_root );
+
+		if ( $all || $no_service_specified ) {
+			$containers = [ 'nginx' ];
+		} else {
+			$containers = array_keys( $assoc_args );
+		}
+
+		foreach ( $containers as $container ) {
+			EE\Siteutils\run_compose_command( 'restart', $container, null, 'all services' );
+		}
+		\EE\Utils\delem_log( 'site restart stop' );
+	}
+	
 	/**
 	 * Reload services in containers without restarting container(s) associated with site.
 	 * When no service(--nginx etc.) is specified, all services will be reloaded.
