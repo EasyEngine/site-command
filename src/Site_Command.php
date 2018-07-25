@@ -776,28 +776,6 @@ class Site_Command extends EE_Command {
 	}
 
 	/**
-	 * Function to setup site network.
-	 */
-	private function setup_site_network() {
-
-		$this->level = 2;
-
-		try {
-			if ( $this->docker::create_network( $this->site_name ) ) {
-				EE::success( 'Network started.' );
-			} else {
-				throw new Exception( 'There was some error in starting the network.' );
-			}
-			$this->level = 3;
-
-			$this->docker::connect_site_network_to( $this->site_name, $this->proxy_type );
-		}
-		catch ( Exception $e ) {
-			$this->catch_clean( $e );
-		}
-	}
-
-	/**
 	 * Function to create entry in /etc/hosts.
 	 */
 	private function create_etc_hosts_entry() {
