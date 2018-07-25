@@ -513,21 +513,7 @@ class Site_Command extends EE_Site_Command {
 	 *  Level - 5: Remove db entry.
 	 */
 	private function delete_site() {
-
-		// Commented below block intentionally as they need change in DB
-		// which should be discussed with the team
-		if ( 'db' !== $this->db_host && $this->level >= 4 ) {
-
-			chdir( $this->site_root );
-			$delete_db_command = "docker-compose exec php bash -c \"mysql --host=$this->db_host --port=$this->db_port --user=$this->db_user --password=$this->db_pass --execute='DROP DATABASE $this->db_name'\"";
-
-			if ( \EE\Utils\default_launch( $delete_db_command ) ) {
-				EE::log( 'Database deleted.' );
-			} else {
-				EE::warning( 'Could not remove the database.' );
-			}
-		}
-
+		$proxy_type = EE_PROXY_TYPE;
 		if ( $this->level >= 3 ) {
 			if ( $this->docker::docker_compose_down( $this->site_root ) ) {
 				EE::log( "[$this->site_name] Docker Containers removed." );
@@ -538,21 +524,25 @@ class Site_Command extends EE_Site_Command {
 				}
 			}
 
-			$this->docker::disconnect_site_network_from( $this->site_name, $this->proxy_type );
+			$this->docker::disconnect_site_network_from( $this->site_name, $proxy_type );
 		}
 
 		if ( $this->level >= 2 ) {
 			if ( $this->docker::rm_network( $this->site_name ) ) {
-				EE::log( "[$this->site_name] Docker container removed from network $this->proxy_type." );
+				EE::log( "[$this->site_name] Docker container removed from network $proxy_type." );
 			} else {
 				if ( $this->level > 2 ) {
-					EE::warning( "Error in removing Docker container from network $this->proxy_type" );
+					EE::warning( "Error in removing Docker container from network $proxy_type" );
 				}
 			}
 		}
 
-		if ( is_dir( $this->site_root ) ) {
-			if ( ! \EE\Utils\default_launch( "rm -rf $this->site_root" ) ) {
+		if ( $this->fs->exists( $this->site_root ) ) {
+			try {
+				$this->fs->remove( $this->site_root );
+			}
+			catch ( Exception $e ) {
+				EE::debug( $e );
 				EE::error( 'Could not remove site root. Please check if you have sufficient rights.' );
 			}
 			EE::log( "[$this->site_name] site root removed." );
@@ -565,19 +555,15 @@ class Site_Command extends EE_Site_Command {
 				$key_file   = EE_CONF_ROOT . "/nginx/certs/$this->site_name.key";
 				$conf_certs = EE_CONF_ROOT . "/acme-conf/certs/$this->site_name";
 				$conf_var   = EE_CONF_ROOT . "/acme-conf/var/$this->site_name";
-				// TODO: Change all these operations to use symfony filesystem
-				if ( file_exists( $conf_certs ) ) {
-					\EE\Utils\delete_dir( $conf_certs );
+
+				$cert_files = [ $conf_certs, $conf_var, $crt_file, $key_file ];
+				try {
+					$this->fs->remove( $cert_files );
 				}
-				if ( file_exists( $conf_var ) ) {
-					\EE\Utils\delete_dir( $conf_var );
+				catch ( Exception $e ) {
+					EE::warning( $e );
 				}
-				if ( file_exists( $crt_file ) ) {
-					unlink( $crt_file );
-				}
-				if ( file_exists( $key_file ) ) {
-					unlink( $key_file );
-				}
+
 			}
 			if ( $this->db::delete( array( 'sitename' => $this->site_name ) ) ) {
 				EE::log( 'Removing database entry.' );
