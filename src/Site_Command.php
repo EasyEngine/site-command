@@ -20,27 +20,12 @@ class Site_Command extends EE_Site_Command {
 	private $site_name;
 	private $site_root;
 	private $site_type;
-	private $site_title;
-	private $site_user;
-	private $site_pass;
-	private $site_email;
-	private $proxy_type;
-	private $cache_type;
 	private $db;
 	private $docker;
 	private $level;
 	private $logger;
 	private $le;
-	private $db_name;
-	private $db_user;
-	private $db_root_pass;
-	private $db_pass;
-	private $db_host;
-	private $db_port;
-	private $locale;
-	private $skip_install;
 	private $skip_chk;
-	private $force;
 	private $le_mail;
 	private $fs;
 
