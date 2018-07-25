@@ -622,25 +622,11 @@ class Site_Command extends EE_Site_Command {
 
 		if ( $this->db::site_in_db( $this->site_name ) ) {
 
-			$data = array( 'site_type', 'site_title', 'proxy_type', 'cache_type', 'site_path', 'db_name', 'db_user', 'db_host', 'db_port', 'db_password', 'db_root_password', 'wp_user', 'wp_pass', 'email', 'is_ssl' );
+			$db_select = $this->db::select( [], array( 'sitename' => $this->site_name ) );
 
-			$db_select = $this->db::select( $data, array( 'sitename' => $this->site_name ) );
-
-			$this->site_type    = $db_select[0]['site_type'];
-			$this->site_title   = $db_select[0]['site_title'];
-			$this->proxy_type   = $db_select[0]['proxy_type'];
-			$this->cache_type   = $db_select[0]['cache_type'];
-			$this->site_root    = $db_select[0]['site_path'];
-			$this->db_user      = $db_select[0]['db_user'];
-			$this->db_name      = $db_select[0]['db_name'];
-			$this->db_host      = $db_select[0]['db_host'];
-			$this->db_port      = $db_select[0]['db_port'];
-			$this->db_pass      = $db_select[0]['db_password'];
-			$this->db_root_pass = $db_select[0]['db_root_password'];
-			$this->site_user    = $db_select[0]['wp_user'];
-			$this->site_pass    = $db_select[0]['wp_pass'];
-			$this->site_email   = $db_select[0]['email'];
-			$this->le           = $db_select[0]['is_ssl'];
+			$this->site_type = $db_select[0]['site_type'];
+			$this->site_root = $db_select[0]['site_path'];
+			$this->le        = $db_select[0]['is_ssl'];
 
 		} else {
 			EE::error( "Site $this->site_name does not exist." );
