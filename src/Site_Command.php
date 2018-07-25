@@ -12,7 +12,7 @@ declare( ticks=1 );
  *
  * @package ee-cli
  */
-class Site_Command extends EE_Command {
+class Site_Command extends EE_Site_Command {
 	private $command;
 	private $site_name;
 	private $site_root;
@@ -257,7 +257,7 @@ class Site_Command extends EE_Command {
 	 * [<site-name>]
 	 * : Name of website to be enabled.
 	 */
-	public function enable( $args ) {
+	public function up( $args, $assoc_args ) {
 		\EE\Utils\delem_log( 'site enable start' );
 		$args = \EE\SiteUtils\auto_site_name( $args, $this->command, __FUNCTION__ );
 		$this->populate_site_info( $args );
@@ -279,7 +279,7 @@ class Site_Command extends EE_Command {
 	 * [<site-name>]
 	 * : Name of website to be disabled.
 	 */
-	public function disable( $args ) {
+	public function down( $args, $assoc_args ) {
 		\EE\Utils\delem_log( 'site disable start' );
 		$args = \EE\SiteUtils\auto_site_name( $args, $this->command, __FUNCTION__ );
 		$this->populate_site_info( $args );
@@ -299,7 +299,7 @@ class Site_Command extends EE_Command {
 	 * [<site-name>]
 	 * : Name of the website whose info is required.
 	 */
-	public function info( $args ) {
+	public function info( $args, $assoc_args ) {
 		\EE\Utils\delem_log( 'site info start' );
 		if ( ! isset( $this->site_name ) ) {
 			$args = \EE\SiteUtils\auto_site_name( $args, $this->command, __FUNCTION__ );
