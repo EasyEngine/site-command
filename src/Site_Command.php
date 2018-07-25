@@ -746,34 +746,6 @@ server {
 		return true;
 	}
 
-	private function maybe_verify_remote_db_connection() {
-		if( 'db' === $this->db_host ) {
-			return;
-		}
-
-			// Docker needs special handling if we want to connect to host machine.
-			// The since we're inside the container and we want to access host machine,
-			// we would need to replace localhost with default gateway
-			if( $this->db_host === '127.0.0.1' || $this->db_host === 'localhost' ) {
-				$launch = EE::launch( "docker network inspect $this->site_name --format='{{ (index .IPAM.Config 0).Gateway }}'", false, true );
-				\EE\Utils\default_debug( $launch );
-
-				if( ! $launch->return_code ) {
-					$this->db_host = trim( $launch->stdout, "\n" );
-				}
-				else {
-					throw new Exception( 'There was a problem inspecting network. Please check the logs' );
-				}
-		}
-				\EE::log( 'Verifying connection to remote database' );
-
-				if( ! \EE\Utils\default_launch( "docker run -it --rm --network='$this->site_name' mysql sh -c \"mysql --host='$this->db_host' --port='$this->db_port' --user='$this->db_user' --password='$this->db_pass' --execute='EXIT'\"" ) ) {
-					throw new Exception( 'Unable to connect to remote db' );
-				}
-
-				\EE::success( 'Connection to remote db verified' );
-			}
-
 	/**
 	 * Function to create the site.
 	 */
