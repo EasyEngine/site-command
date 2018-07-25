@@ -30,7 +30,7 @@ class Site_Command extends EE_Site_Command {
 	private $fs;
 
 	public function __construct() {
-		$this->level = 0;
+		$this->level   = 0;
 		$this->command = 'site';
 		pcntl_signal( SIGTERM, [ $this, "rollback" ] );
 		pcntl_signal( SIGHUP, [ $this, "rollback" ] );
@@ -181,7 +181,7 @@ class Site_Command extends EE_Site_Command {
 	 */
 	private function init_le() {
 		$client        = new Site_Letsencrypt();
-		$this->le_mail = EE::get_runner()->config[ 'le-mail' ] ?? EE::input( 'Enter your mail id: ' );
+		$this->le_mail = EE::get_runner()->config['le-mail'] ?? EE::input( 'Enter your mail id: ' );
 		EE::get_runner()->ensure_present_in_config( 'le-mail', $this->le_mail );
 		if ( ! $client->register( $this->le_mail ) ) {
 			$this->le = false;
@@ -310,7 +310,7 @@ class Site_Command extends EE_Site_Command {
 		\EE\Utils\delem_log( 'site info end' );
 	}
 
-		/**
+	/**
 	 * Restarts containers associated with site.
 	 * When no service(--nginx etc.) is specified, all site containers will be restarted.
 	 *
@@ -411,7 +411,7 @@ class Site_Command extends EE_Site_Command {
 		$filter[]               = $this->le;
 		$site_docker            = new Site_Docker();
 		$docker_compose_content = $site_docker->generate_docker_compose_yml( $filter );
-		$default_conf_content   = $default_conf_content   = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx/default.conf.mustache', [ $this->site_name ] );
+		$default_conf_content   = $default_conf_content = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx/default.conf.mustache', [ $this->site_name ] );
 
 		$env_data    = [
 			'virtual_host' => $this->site_name,
@@ -427,7 +427,7 @@ class Site_Command extends EE_Site_Command {
 			$this->fs->mkdir( $site_conf_dir . '/nginx' );
 			$this->fs->dumpFile( $site_nginx_default_conf, $default_conf_content );
 
-			$index_data = ['v'.EE_VERSION,$this->site_root];
+			$index_data = [ 'v' . EE_VERSION, $this->site_root ];
 			$index_html = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/index.html.mustache', $index_data );
 			$this->fs->mkdir( $site_src_dir );
 			$this->fs->dumpFile( $site_src_dir . '/index.html', $index_html );
