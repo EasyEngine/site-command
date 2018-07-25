@@ -776,25 +776,6 @@ class Site_Command extends EE_Command {
 	}
 
 	/**
-	 * Function to create entry in /etc/hosts.
-	 */
-	private function create_etc_hosts_entry() {
-
-		$host_line = LOCALHOST_IP . "\t$this->site_name";
-		$etc_hosts = file_get_contents( '/etc/hosts' );
-		if ( ! preg_match( "/\s+$this->site_name\$/m", $etc_hosts ) ) {
-			if ( \EE\Utils\default_launch( "/bin/bash -c 'echo \"$host_line\" >> /etc/hosts'" ) ) {
-				EE::success( 'Host entry successfully added.' );
-			} else {
-				EE::warning( "Failed to add $this->site_name in host entry, Please do it manually!" );
-			}
-		} else {
-			EE::log( 'Host entry already exists.' );
-		}
-	}
-
-
-	/**
 	 * Function to save the site configuration entry into database.
 	 */
 	private function create_site_db_entry() {
