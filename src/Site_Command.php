@@ -179,7 +179,7 @@ class Site_Command extends EE_Command {
 		$this->skip_chk     = \EE\Utils\get_flag_value( $assoc_args, 'skip-status-check' );
 		$this->force        = \EE\Utils\get_flag_value( $assoc_args, 'force' );
 
-		$this->init_checks();
+		\EE\SiteUtils\init_checks();
 
 		EE::log( 'Configuring project.' );
 
@@ -545,39 +545,6 @@ class Site_Command extends EE_Command {
 			'mysql' => 'db',
 		];
 		return in_array( $arg, array_keys( $services_map ) ) ? $services_map[ $arg ] : $arg ;
-	}
-
-	/**
-	 * Function to check all the required configurations needed to create the site.
-	 *
-	 * Boots up the container if it is stopped or not running.
-	 */
-	private function init_checks() {
-		if ( 'running' !== $this->docker::container_status( $this->proxy_type ) ) {
-			/**
-			 * Checking ports.
-			 */
-			@fsockopen( 'localhost', 80, $port_80_exit_status );
-			@fsockopen( 'localhost', 443, $port_443_exit_status );
-
-			// if any/both the port/s is/are occupied.
-			if ( ! ( $port_80_exit_status && $port_443_exit_status ) ) {
-				EE::error( 'Cannot create/start proxy container. Please make sure port 80 and 443 are free.' );
-			} else {
-				$EE_CONF_ROOT     = EE_CONF_ROOT;
-				$ee_proxy_command = "docker run --name $this->proxy_type -e LOCAL_USER_ID=`id -u` -e LOCAL_GROUP_ID=`id -g` --restart=always -d -p 80:80 -p 443:443 -v $EE_CONF_ROOT/nginx/certs:/etc/nginx/certs -v $EE_CONF_ROOT/nginx/dhparam:/etc/nginx/dhparam -v $EE_CONF_ROOT/nginx/conf.d:/etc/nginx/conf.d -v $EE_CONF_ROOT/nginx/htpasswd:/etc/nginx/htpasswd -v $EE_CONF_ROOT/nginx/vhost.d:/etc/nginx/vhost.d -v /var/run/docker.sock:/tmp/docker.sock:ro -v $EE_CONF_ROOT:/app/ee4 -v /usr/share/nginx/html easyengine/nginx-proxy:v" . EE_VERSION;
-
-
-				if ( $this->docker::boot_container( $this->proxy_type, $ee_proxy_command ) ) {
-					EE::success( "$this->proxy_type container is up." );
-				} else {
-					EE::error( "There was some error in starting $this->proxy_type container. Please check logs." );
-				}
-			}
-		}
-
-		$this->site_root = WEBROOT . $this->site_name;
-		$this->create_site_root();
 	}
 
 	/**
