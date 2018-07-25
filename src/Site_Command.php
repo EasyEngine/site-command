@@ -13,6 +13,7 @@ declare( ticks=1 );
  * @package ee-cli
  */
 class Site_Command extends EE_Command {
+	private $command;
 	private $site_name;
 	private $site_root;
 	private $site_type;
@@ -41,6 +42,7 @@ class Site_Command extends EE_Command {
 
 	public function __construct() {
 		$this->level = 0;
+		$this->command = 'site';
 		pcntl_signal( SIGTERM, [ $this, "rollback" ] );
 		pcntl_signal( SIGHUP, [ $this, "rollback" ] );
 		pcntl_signal( SIGUSR1, [ $this, "rollback" ] );
@@ -348,7 +350,7 @@ class Site_Command extends EE_Command {
 	 */
 	public function enable( $args ) {
 		\EE\Utils\delem_log( 'site enable start' );
-		$args = \EE\Utils\set_site_arg( $args, 'site enable' );
+		$args = \EE\SiteUtils\auto_site_name( $args, $this->command, __FUNCTION__ );
 		$this->populate_site_info( $args );
 		EE::log( "Enabling site $this->site_name." );
 		if ( $this->docker::docker_compose_up( $this->site_root ) ) {
@@ -370,7 +372,7 @@ class Site_Command extends EE_Command {
 	 */
 	public function disable( $args ) {
 		\EE\Utils\delem_log( 'site disable start' );
-		$args = \EE\Utils\set_site_arg( $args, 'site disable' );
+		$args = \EE\SiteUtils\auto_site_name( $args, $this->command, __FUNCTION__ );
 		$this->populate_site_info( $args );
 		EE::log( "Disabling site $this->site_name." );
 		if ( $this->docker::docker_compose_down( $this->site_root ) ) {
@@ -391,7 +393,7 @@ class Site_Command extends EE_Command {
 	public function info( $args ) {
 		\EE\Utils\delem_log( 'site info start' );
 		if ( ! isset( $this->site_name ) ) {
-			$args = \EE\Utils\set_site_arg( $args, 'site info' );
+			$args = \EE\SiteUtils\auto_site_name( $args, $this->command, __FUNCTION__ );
 			$this->populate_site_info( $args );
 		}
 		$ssl = $this->le ? 'Enabled' : 'Not Enabled';
