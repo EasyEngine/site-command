@@ -592,29 +592,14 @@ class Site_Command extends EE_Site_Command {
 	 * Function to save the site configuration entry into database.
 	 */
 	private function create_site_db_entry() {
-		$ssl = $this->le ? 1 : 0;
+		$ssl  = $this->le ? 1 : 0;
 		$data = array(
-			'sitename'         => $this->site_name,
-			'site_type'        => $this->site_type,
-			'site_title'       => $this->site_title,
-			'proxy_type'       => $this->proxy_type,
-			'cache_type'       => $this->cache_type,
-			'site_path'        => $this->site_root,
-			'db_name'          => $this->db_name,
-			'db_user'          => $this->db_user,
-			'db_host'          => $this->db_host,
-			'db_port'          => $this->db_port,
-			'db_password'      => $this->db_pass,
-			'db_root_password' => $this->db_root_pass,
-			'email'            => $this->site_email,
-			'is_ssl'           => $ssl,
-			'created_on'       => date( 'Y-m-d H:i:s', time() ),
+			'sitename'   => $this->site_name,
+			'site_type'  => $this->site_type,
+			'site_path'  => $this->site_root,
+			'is_ssl'     => $ssl,
+			'created_on' => date( 'Y-m-d H:i:s', time() ),
 		);
-
-		if ( ! $this->skip_install ) {
-			$data['wp_user'] = $this->site_user;
-			$data['wp_pass'] = $this->site_pass;
-		}
 
 		try {
 			if ( $this->db::insert( $data ) ) {
