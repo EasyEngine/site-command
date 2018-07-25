@@ -411,7 +411,7 @@ class Site_Command extends EE_Site_Command {
 		$filter[]               = $this->le;
 		$site_docker            = new Site_Docker();
 		$docker_compose_content = $site_docker->generate_docker_compose_yml( $filter );
-		$default_conf_content   = $default_conf_content = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx/default.conf.mustache', [ $this->site_name ] );
+		$default_conf_content   = $default_conf_content = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx/default.conf.mustache', [ 'server_name' => $this->site_name ] );
 
 		$env_data    = [
 			'virtual_host' => $this->site_name,
