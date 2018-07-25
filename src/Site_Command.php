@@ -12,6 +12,9 @@ declare( ticks=1 );
  *
  * @package ee-cli
  */
+
+use \Symfony\Component\Filesystem\Filesystem;
+
 class Site_Command extends EE_Site_Command {
 	private $command;
 	private $site_name;
@@ -39,6 +42,7 @@ class Site_Command extends EE_Site_Command {
 	private $skip_chk;
 	private $force;
 	private $le_mail;
+	private $fs;
 
 	public function __construct() {
 		$this->level = 0;
@@ -52,6 +56,7 @@ class Site_Command extends EE_Site_Command {
 		$this->db     = EE::db();
 		$this->docker = EE::docker();
 		$this->logger = EE::get_file_logger()->withName( 'site_command' );
+		$this->fs     = new Filesystem();
 	}
 
 	/**
@@ -449,57 +454,47 @@ class Site_Command extends EE_Site_Command {
 	/**
 	 * Function to configure site and copy all the required files.
 	 */
-	private function configure_site() {
+	private function configure_site_files() {
 
 		$site_conf_dir           = $this->site_root . '/config';
 		$site_docker_yml         = $this->site_root . '/docker-compose.yml';
 		$site_conf_env           = $this->site_root . '/.env';
 		$site_nginx_default_conf = $site_conf_dir . '/nginx/default.conf';
-		$site_php_ini            = $site_conf_dir . '/php-fpm/php.ini';
-		$server_name             = ( 'wpsubdom' === $this->site_type ) ? "$this->site_name *.$this->site_name" : $this->site_name;
+		$server_name             = $this->site_name;
+		$site_src_dir            = $this->site_root . '/app/src';
 		$process_user            = posix_getpwuid( posix_geteuid() );
 
-		EE::log( "Creating WordPress site $this->site_name." );
+		EE::log( "Creating site $this->site_name." );
 		EE::log( 'Copying configuration files.' );
 
 		$filter                 = array();
 		$filter[]               = $this->site_type;
-		$filter[]               = $this->cache_type;
 		$filter[]               = $this->le;
-		$filter[]               = $this->db_host;
 		$site_docker            = new Site_Docker();
 		$docker_compose_content = $site_docker->generate_docker_compose_yml( $filter );
-		$default_conf_content   = $this->generate_default_conf( $this->site_type, $this->cache_type, $server_name );
-		$local                  = ( 'db' === $this->db_host ) ? true : false;
-		$env_data               = [
-			'local'         => $local,
-			'virtual_host'  => $this->site_name,
-			'root_password' => $this->db_root_pass,
-			'database_name' => $this->db_name,
-			'database_user' => $this->db_user,
-			'user_password' => $this->db_pass,
-			'wp_db_host'    => "$this->db_host:$this->db_port",
-			'wp_db_user'    => $this->db_user,
-			'wp_db_name'    => $this->db_name,
-			'wp_db_pass'    => $this->db_pass,
-			'user_id'       => $process_user['uid'],
-			'group_id'      => $process_user['gid'],
-		];
-		$env_content            = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/.env.mustache', $env_data );
-		$php_ini_content        = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/php-fpm/php.ini.mustache', [] );
+		$default_conf_content   = $default_conf_content   = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx/default.conf.mustache', [ $this->site_name ] );
 
-		\EE\SiteUtils\add_site_redirects();
+		$env_data    = [
+			'virtual_host' => $this->site_name,
+			'user_id'      => $process_user['uid'],
+			'group_id'     => $process_user['gid'],
+		];
+		$env_content = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/.env.mustache', $env_data );
 
 		try {
-			if ( ! ( file_put_contents( $site_docker_yml, $docker_compose_content )
-				&& file_put_contents( $site_conf_env, $env_content )
-				&& mkdir( $site_conf_dir )
-				&& mkdir( $site_conf_dir . '/nginx' )
-				&& file_put_contents( $site_nginx_default_conf, $default_conf_content )
-				&& mkdir( $site_conf_dir . '/php-fpm' )
-				&& file_put_contents( $site_php_ini, $php_ini_content ) ) ) {
-				throw new Exception( 'Could not copy configuration files.' );
-			}
+			$this->fs->dumpFile( $site_docker_yml, $docker_compose_content );
+			$this->fs->dumpFile( $site_conf_env, $env_content );
+			$this->fs->mkdir( $site_conf_dir );
+			$this->fs->mkdir( $site_conf_dir . '/nginx' );
+			$this->fs->dumpFile( $site_nginx_default_conf, $default_conf_content );
+
+			$index_data = ['v'.EE_VERSION,$this->site_root];
+			$index_html = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/index.html.mustache', $index_data );
+			$this->fs->mkdir( $site_src_dir );
+			$this->fs->dumpFile( $site_src_dir . '/index.html', $index_html );
+
+			EE\Siteutils\add_site_redirects( $this->site_name, $this->le );
+
 			EE::success( 'Configuration files copied.' );
 		}
 		catch ( Exception $e ) {
@@ -508,56 +503,34 @@ class Site_Command extends EE_Site_Command {
 	}
 
 	/**
-	 * Function to generate default.conf from mustache templates.
-	 *
-	 * @param string $site_type   Type of site (wpsubdom, wpredis etc..)
-	 * @param string $cache_type  Type of cache(wpredis or none)
-	 * @param string $server_name Name of server to use in virtual_host
-	 */
-	private function generate_default_conf( $site_type, $cache_type, $server_name ) {
-		$default_conf_data['site_type']             = $site_type;
-		$default_conf_data['server_name']           = $server_name;
-		$default_conf_data['include_php_conf']      = $cache_type !== 'wpredis';
-		$default_conf_data['include_wpsubdir_conf'] = $site_type === 'wpsubdir';
-		$default_conf_data['include_redis_conf']    = $cache_type === 'wpredis';
-
-		return \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx/default.conf.mustache', $default_conf_data );
-	}
-
-	/**
 	 * Function to create the site.
 	 */
-	private function create_site( $assoc_args ) {
-		$this->setup_site_network();
+	private function create_site() {
+		$this->site_root = WEBROOT . $this->site_name;
+		$this->level     = 1;
 		try {
-			$this->maybe_verify_remote_db_connection();
-			$this->configure_site();
+			EE\Siteutils\create_site_root( $this->site_root, $this->site_name );
+			$this->level = 2;
+			EE\Siteutils\setup_site_network( $this->site_name );
 			$this->level = 3;
-			EE::log( 'Pulling latest images. This may take some time.' );
-			chdir( $this->site_root );
-			\EE\Utils\default_launch( 'docker-compose pull' );
-			EE::log( 'Starting site\'s services.' );
-			if ( ! $this->docker::docker_compose_up( $this->site_root ) ) {
-				throw new Exception( 'There was some error in docker-compose up.' );
+			$this->configure_site_files();
+
+			EE\Siteutils\start_site_containers( $this->site_root );
+
+			EE\Siteutils\create_etc_hosts_entry( $this->site_name );
+			if ( ! $this->skip_chk ) {
+				$this->level = 4;
+				EE\Siteutils\site_status_check( $this->site_name );
 			}
 		}
 		catch ( Exception $e ) {
 			$this->catch_clean( $e );
 		}
 
-		$this->wp_download_and_config( $assoc_args );
-
-		if ( ! $this->skip_install ) {
-			$this->create_etc_hosts_entry();
-			if ( ! $this->skip_chk ) {
-				$this->site_status_check();
-			}
-			$this->install_wp();
-		}
 		if ( $this->le ) {
 			$this->init_le();
 		}
-		$this->info( array( $this->site_name ) );
+		$this->info( [ $this->site_name ], [] );
 		$this->create_site_db_entry();
 	}
 
