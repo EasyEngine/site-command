@@ -62,80 +62,14 @@ class Site_Command extends EE_Command {
 	 * <site-name>
 	 * : Name of website.
 	 *
-	 * [--wp]
-	 * : WordPress website.
-	 *
-	 * [--wpredis]
-	 * : Use redis for WordPress.
-	 *
-	 * [--wpsubdir]
-	 * : WordPress sub-dir Multi-site.
-	 *
-	 * [--wpsubdom]
-	 * : WordPress sub-domain Multi-site.
-	 *
-	 * [--title=<title>]
-	 * : Title of your site.
-	 *
-	 * [--admin_user=<admin_user>]
-	 * : Username of the administrator.
-	 *
-	 *  [--admin_pass=<admin_pass>]
-	 * : Password for the the administrator.
-	 *
-	 * [--admin_email=<admin_email>]
-	 * : E-Mail of the administrator.
-	 *
-	 * [--dbname=<dbname>]
-	 * : Set the database name.
-	 * ---
-	 * default: wordpress
-	 * ---
-	 *
-	 * [--dbuser=<dbuser>]
-	 * : Set the database user.
-	 *
-	 * [--dbpass=<dbpass>]
-	 * : Set the database password.
-	 *
-	 * [--dbhost=<dbhost>]
-	 * : Set the database host. Pass value only when remote dbhost is required.
-	 * ---
-	 * default: db
-	 * ---
-	 *
-	 * [--dbprefix=<dbprefix>]
-	 * : Set the database table prefix.
-	 *
-	 * [--dbcharset=<dbcharset>]
-	 * : Set the database charset.
-	 * ---
-	 * default: utf8
-	 * ---
-	 *
-	 * [--dbcollate=<dbcollate>]
-	 * : Set the database collation.
-	 *
-	 * [--skip-check]
-	 * : If set, the database connection is not checked.
-	 *
-	 * [--version=<version>]
-	 * : Select which wordpress version you want to download. Accepts a version number, ‘latest’ or ‘nightly’.
-	 *
-	 * [--skip-content]
-	 * : Download WP without the default themes and plugins.
-	 *
-	 * [--skip-install]
-	 * : Skips wp-core install.
-	 *
-	 * [--skip-status-check]
-	 * : Skips site status check.
-
 	 * [--letsencrypt]
 	 * : Enables ssl via letsencrypt certificate.
 	 *
-	 * [--force]
-	 * : Resets the remote database if it is not empty.
+	 * [--type=<type>]
+	 * : Type of the site to be created. Values: html,php,wp.
+	 *
+	 * [--skip-status-check]
+	 * : Skips site status check.
 	 */
 	public function create( $args, $assoc_args ) {
 
@@ -144,48 +78,23 @@ class Site_Command extends EE_Command {
 		$this->logger->debug( 'args:', $args );
 		$this->logger->debug( 'assoc_args:', empty( $assoc_args ) ? array( 'NULL' ) : $assoc_args );
 		$this->site_name = strtolower( \EE\Utils\remove_trailing_slash( $args[0] ) );
-		$this->site_type = \EE\Utils\get_type( $assoc_args, [ 'wp', 'wpsubdom', 'wpsubdir' ], 'wp' );
-		if ( false === $this->site_type ) {
-			EE::error( 'Invalid arguments' );
+		$this->site_type = \EE\Utils\get_flag_value( $assoc_args, 'type', 'html' );
+		if ( 'html' !== $this->site_type ) {
+			EE::error( "Invalid site-type: $this->site_type" );
 		}
 
 		if ( $this->db::site_in_db( $this->site_name ) ) {
 			EE::error( "Site $this->site_name already exists. If you want to re-create it please delete the older one using:\n`ee site delete $this->site_name`" );
 		}
 
-		$this->proxy_type   = 'ee-nginx-proxy';
-		$this->cache_type   = ! empty( $assoc_args['wpredis'] ) ? 'wpredis' : 'none';
-		$this->le           = \EE\Utils\get_flag_value( $assoc_args, 'letsencrypt' );
-		$this->site_title   = \EE\Utils\get_flag_value( $assoc_args, 'title', $this->site_name );
-		$this->site_user    = \EE\Utils\get_flag_value( $assoc_args, 'admin_user', 'admin' );
-		$this->site_pass    = \EE\Utils\get_flag_value( $assoc_args, 'admin_pass', \EE\Utils\random_password() );
-		$this->db_name      = str_replace( [ '.', '-' ], '_', $this->site_name );
-		$this->db_host      = \EE\Utils\get_flag_value( $assoc_args, 'dbhost' );
-		$this->db_user      = \EE\Utils\get_flag_value( $assoc_args, 'dbuser', 'wordpress' );
-		$this->db_pass      = \EE\Utils\get_flag_value( $assoc_args, 'dbpass', \EE\Utils\random_password() );
-		$this->locale       = \EE\Utils\get_flag_value( $assoc_args, 'locale', EE::get_config( 'locale' ) );
-		$this->db_root_pass = \EE\Utils\random_password();
-
-		// If user wants to connect to remote database
-		if ( 'db' !== $this->db_host ) {
-			if ( ! isset( $assoc_args['dbuser'] ) || ! isset( $assoc_args['dbpass'] ) ) {
-				EE::error( '`--dbuser` and `--dbpass` are required for remote db host.' );
-			}
-			$arg_host_port = explode( ':', $this->db_host );
-			$this->db_host = $arg_host_port[0];
-			$this->db_port = empty( $arg_host_port[1] ) ? '3306' : $arg_host_port[1];
-		}
-
-		$this->site_email   = \EE\Utils\get_flag_value( $assoc_args, 'admin_email', strtolower( 'mail@' . $this->site_name ) );
-		$this->skip_install = \EE\Utils\get_flag_value( $assoc_args, 'skip-install' );
-		$this->skip_chk     = \EE\Utils\get_flag_value( $assoc_args, 'skip-status-check' );
-		$this->force        = \EE\Utils\get_flag_value( $assoc_args, 'force' );
+		$this->le       = \EE\Utils\get_flag_value( $assoc_args, 'letsencrypt' );
+		$this->skip_chk = \EE\Utils\get_flag_value( $assoc_args, 'skip-status-check' );
 
 		\EE\SiteUtils\init_checks();
 
 		EE::log( 'Configuring project.' );
 
-		$this->create_site( $assoc_args );
+		$this->create_site();
 		\EE\Utils\delem_log( 'site create end' );
 	}
 
