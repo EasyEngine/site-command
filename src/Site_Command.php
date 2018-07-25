@@ -371,8 +371,8 @@ class Site_Command extends EE_Site_Command {
 		}
 		\EE\Utils\delem_log( 'site restart stop' );
 	}
-	
-	/**
+
+		/**
 	 * Reload services in containers without restarting container(s) associated with site.
 	 * When no service(--nginx etc.) is specified, all services will be reloaded.
 	 *
@@ -385,40 +385,23 @@ class Site_Command extends EE_Site_Command {
 	 * [--nginx]
 	 * : Reload nginx service in container.
 	 *
-	 * [--php]
-	 * : Start php service in container.
 	 */
 	public function reload( $args, $assoc_args ) {
-		$this->site_docker_compose_execute( $args[0], 'reload', $args, $assoc_args);
-	}
-
-	private function site_docker_compose_execute( $site, $action, $args, $assoc_args ) {
-		$all = \EE\Utils\get_flag_value( $assoc_args, 'all' );
-		$no_service_specified = count( $assoc_args ) === 0 ;
+		\EE\Utils\delem_log( 'site reload start' );
+		$args                 = \EE\SiteUtils\auto_site_name( $args, $this->command, __FUNCTION__ );
+		$all                  = \EE\Utils\get_flag_value( $assoc_args, 'all' );
+		$no_service_specified = count( $assoc_args ) === 0;
 
 		$this->populate_site_info( $args );
 
 		chdir( $this->site_root );
 
-		if( $all || $no_service_specified ) {
-			if( $action === 'reload' ) {
-				$this->reload_services( [ 'nginx', 'php' ] );
-				return;
-			}
-			\EE\SiteUtils\run_compose_command( $action, '', null, 'all services' );
+		if ( $all || $no_service_specified ) {
+			$this->reload_services( [ 'nginx' ] );
+		} else {
+			$this->reload_services( array_keys( $assoc_args ) );
 		}
-		else {
-			$services = array_map( [$this, 'map_args_to_service'], array_keys( $assoc_args ) );
-
-			if( $action === 'reload' ) {
-				$this->reload_services( $services );
-				return;
-			}
-
-			foreach( $services as $service ) {
-				\EE\SiteUtils\run_compose_command( $action, $service );
-			}
-		}
+		\EE\Utils\delem_log( 'site reload stop' );
 	}
 
 	/**
@@ -427,22 +410,11 @@ class Site_Command extends EE_Site_Command {
 	private function reload_services( $services ) {
 		$reload_command = [
 			'nginx' => 'nginx sh -c \'nginx -t && service openresty reload\'',
-			'php' => 'php kill -USR2 1'
 		];
 
-		foreach( $services as $service ) {
-			\EE\SiteUtils\run_compose_command( 'exec', $reload_command[ $service ], 'reload', $service );
+		foreach ( $services as $service ) {
+			$this->run_compose_command( 'exec', $reload_command[$service], 'reload', $service );
 		}
-	}
-
-	/**
-	 * Maps argument passed from cli to docker-compose service name
-	 */
-	private function map_args_to_service( $arg ) {
-		$services_map = [
-			'mysql' => 'db',
-		];
-		return in_array( $arg, array_keys( $services_map ) ) ? $services_map[ $arg ] : $arg ;
 	}
 
 	/**
