@@ -427,7 +427,10 @@ class Site_Command extends EE_Site_Command {
 			$this->fs->mkdir( $site_conf_dir . '/nginx' );
 			$this->fs->dumpFile( $site_nginx_default_conf, $default_conf_content );
 
-			$index_data = [ 'v' . EE_VERSION, $this->site_root ];
+			$index_data = [
+				'version'       => 'v' . EE_VERSION,
+				'site_src_root' => $this->site_root . '/app/src',
+			];
 			$index_html = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/index.html.mustache', $index_data );
 			$this->fs->mkdir( $site_src_dir );
 			$this->fs->dumpFile( $site_src_dir . '/index.html', $index_html );
