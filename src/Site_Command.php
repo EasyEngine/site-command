@@ -497,7 +497,7 @@ class Site_Command extends EE_Command {
 				$this->reload_services( [ 'nginx', 'php' ] );
 				return;
 			}
-			$this->run_compose_command( $action, '', null, 'all services' );
+			\EE\SiteUtils\run_compose_command( $action, '', null, 'all services' );
 		}
 		else {
 			$services = array_map( [$this, 'map_args_to_service'], array_keys( $assoc_args ) );
@@ -508,21 +508,9 @@ class Site_Command extends EE_Command {
 			}
 
 			foreach( $services as $service ) {
-				$this->run_compose_command( $action, $service );
+				\EE\SiteUtils\run_compose_command( $action, $service );
 			}
 		}
-	}
-
-
-	/**
-	 * Generic function to run a docker compose command. Must be ran inside correct directory.
-	 */
-	private function run_compose_command( $action, $container, $action_to_display = null, $service_to_display = null) {
-		$display_action = $action_to_display ? $action_to_display : $action;
-		$display_service = $service_to_display ? $service_to_display : $container;
-
-		\EE::log( ucfirst( $display_action ) . 'ing ' . $display_service );
-		\EE\Utils\default_launch( "docker-compose $action $container" );
 	}
 
 	/**
@@ -535,7 +523,7 @@ class Site_Command extends EE_Command {
 		];
 
 		foreach( $services as $service ) {
-			$this->run_compose_command( 'exec', $reload_command[ $service ], 'reload', $service );
+			\EE\SiteUtils\run_compose_command( 'exec', $reload_command[ $service ], 'reload', $service );
 		}
 	}
 
