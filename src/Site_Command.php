@@ -277,11 +277,10 @@ class Site_Command extends EE_Site_Command {
 	/**
 	 * @inheritdoc
 	 */
-	public function reload( $args, $assoc_args, $whitelisted_containers = [] ) {
+	public function reload( $args, $assoc_args, $whitelisted_containers = [], $reload_commands = [] ) {
 		$whitelisted_containers = [ 'nginx' ];
-		parent::reload( $args, $assoc_args, $whitelisted_containers );
+		parent::reload( $args, $assoc_args, $whitelisted_containers, $reload_commands = [] );
 	}
-
 
 	/**
 	 * @inheritdoc
