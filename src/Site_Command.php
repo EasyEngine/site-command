@@ -712,6 +712,7 @@ class Site_Command extends EE_Command {
 				&& mkdir( $site_conf_dir )
 				&& mkdir( $site_conf_dir . '/nginx' )
 				&& file_put_contents( $site_nginx_default_conf, $default_conf_content )
+				&& $this->add_postfix_ssl_config( $site_conf_dir )
 				&& mkdir( $site_conf_dir . '/php-fpm' )
 				&& file_put_contents( $site_php_ini, $php_ini_content ) ) ) {
 				throw new Exception( 'Could not copy configuration files.' );
@@ -721,6 +722,16 @@ class Site_Command extends EE_Command {
 		catch ( Exception $e ) {
 			$this->catch_clean( $e );
 		}
+	}
+
+	/**
+	 * Adds postfix config to site
+	 */
+	private function add_postfix_ssl_config( $site_conf_dir ) {
+		mkdir( $site_conf_dir . '/postfix' );
+		mkdir( $site_conf_dir . '/postfix/ssl' );
+		$ssl_dir = $site_conf_dir . '/postfix/ssl';
+		return \EE\Utils\default_launch("openssl req -new -x509 -nodes -days 365 -subj \"/CN=smtp.example.com\" -out $ssl_dir/server.crt -keyout $ssl_dir/server.key");
 	}
 
 	/**
@@ -872,6 +883,7 @@ server {
 			if ( ! $this->docker::docker_compose_up( $this->site_root ) ) {
 				throw new Exception( 'There was some error in docker-compose up.' );
 			}
+			$this->configure_and_restart_postfix();
 		}
 		catch ( Exception $e ) {
 			$this->catch_clean( $e );
@@ -891,6 +903,17 @@ server {
 		}
 		$this->info( array( $this->site_name ) );
 		$this->create_site_db_entry();
+	}
+
+	private function configure_and_restart_postfix() {
+		if( ! ( \EE\Utils\default_launch("docker-compose exec postfix postconf -e 'relayhost ='")
+		    && \EE\Utils\default_launch("docker-compose exec postfix postconf -e 'smtpd_recipient_restrictions = permit_mynetworks'")
+			&& \EE\Utils\default_launch("subnet_cidr=\"$(docker network inspect -f '{{ with (index .IPAM.Config 0) }}{{ .Subnet }}{{ end }}' $this->site_name)\" && docker-compose exec postfix postconf -e \"mynetworks = \$subnet_cidr 127.0.0.0/8\"")
+			&& \EE\Utils\default_launch("docker-compose exec postfix postconf -e 'myhostname = $this->site_name'")
+			&& \EE\Utils\default_launch("docker-compose exec postfix postconf -e 'syslog_name = \$myhostname'")
+			&& \EE\Utils\default_launch("docker-compose restart postfix") ) ) {
+			throw new Exception("Unable to configure postfix container");
+		}
 	}
 
 	/**

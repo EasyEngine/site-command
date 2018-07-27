@@ -9,6 +9,9 @@ services:
     {{#image}}
     image: {{name}}
     {{/image}}
+    {{#hostname}}
+    hostname: {{name}}
+    {{/hostname}}
     {{#depends_on}}
     depends_on:
       - {{name}}
