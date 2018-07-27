@@ -119,15 +119,17 @@ class Site_Command extends EE_Site_Command {
 	/**
 	 * @inheritdoc
 	 */
-	public function restart( $args, $assoc_args ) {
-		parent::restart( $args, $assoc_args );
+	public function restart( $args, $assoc_args, $whitelisted_containers = [] ) {
+		$whitelisted_containers = [ 'nginx' ];
+		parent::restart( $args, $assoc_args, $whitelisted_containers );
 	}
 
 	/**
 	 * @inheritdoc
 	 */
-	public function reload( $args, $assoc_args ) {
-		parent::reload( $args, $assoc_args );
+	public function reload( $args, $assoc_args, $whitelisted_containers = [] ) {
+		$whitelisted_containers = [ 'nginx' ];
+		parent::reload( $args, $assoc_args, $whitelisted_containers = [] );
 	}
 
 
