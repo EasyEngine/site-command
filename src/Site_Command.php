@@ -3,12 +3,12 @@
 declare( ticks=1 );
 
 /**
- * Creates a simple WordPress Website.
+ * Creates a simple html Website.
  *
  * ## EXAMPLES
  *
- *     # Create simple WordPress site
- *     $ ee site create example.com --wp
+ *     # Create simple html site
+ *     $ ee site create example.com
  *
  * @package ee-cli
  */
@@ -206,11 +206,12 @@ class Site_Command extends EE_Site_Command {
 	private function create_site_db_entry() {
 		$ssl  = $this->le ? 1 : 0;
 		$data = array(
-			'sitename'   => $this->site_name,
-			'site_type'  => $this->site_type,
-			'site_path'  => $this->site_root,
-			'is_ssl'     => $ssl,
-			'created_on' => date( 'Y-m-d H:i:s', time() ),
+			'sitename'     => $this->site_name,
+			'site_type'    => $this->site_type,
+			'site_path'    => $this->site_root,
+			'site_command' => $this->command,
+			'is_ssl'       => $ssl,
+			'created_on'   => date( 'Y-m-d H:i:s', time() ),
 		);
 
 		try {
