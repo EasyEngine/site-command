@@ -250,27 +250,6 @@ class Site_Command extends EE_Site_Command {
 	/**
 	 * @inheritdoc
 	 */
-	public function _list( $args, $assoc_args ) {
-		parent::_list( $args, $assoc_args );
-	}
-
-	/**
-	 * @inheritdoc
-	 */
-	public function delete( $args, $assoc_args ) {
-		parent::delete( $args, $assoc_args );
-	}
-
-	/**
-	 * @inheritdoc
-	 */
-	public function delete_site( $level, $site_name, $site_root ) {
-		parent::delete_site( $level, $site_name, $site_root );
-	}
-
-	/**
-	 * @inheritdoc
-	 */
 	public function restart( $args, $assoc_args, $whitelisted_containers = [] ) {
 		$whitelisted_containers = [ 'nginx' ];
 		parent::restart( $args, $assoc_args, $whitelisted_containers );
@@ -282,34 +261,6 @@ class Site_Command extends EE_Site_Command {
 	public function reload( $args, $assoc_args, $whitelisted_containers = [], $reload_commands = [] ) {
 		$whitelisted_containers = [ 'nginx' ];
 		parent::reload( $args, $assoc_args, $whitelisted_containers, $reload_commands = [] );
-	}
-
-	/**
-	 * @inheritdoc
-	 */
-	public function up( $args, $assoc_args ) {
-		parent::up( $args, $assoc_args );
-	}
-
-	/**
-	 * @inheritdoc
-	 */
-	public function down( $args, $assoc_args ) {
-		parent::down( $args, $assoc_args );
-	}
-
-	/**
-	 * @inheritdoc
-	 */
-	public function init_le( $site_name, $site_root, $wildcard = false ) {
-		return parent::init_le( $site_name, $site_root, $wildcard );
-	}
-
-	/**
-	 * @inheritdoc
-	 */
-	public function le( $args = [], $assoc_args = [], $wildcard = false ) {
-		return parent::le( $args, $assoc_args, $wildcard );
 	}
 
 	/**
