@@ -28,7 +28,6 @@ Feature: Site Command
   Scenario: Create html site successfully
     When I run 'sudo bin/ee site create site.test --type=html'
     Then The site 'site.test' should have webroot
-      And The site 'site.test' should have WordPress
       And Request on 'site.test' should contain following headers:
         | header           |
         | HTTP/1.1 200 OK  |
