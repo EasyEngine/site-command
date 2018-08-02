@@ -712,7 +712,7 @@ class Site_Command extends EE_Command {
 				&& mkdir( $site_conf_dir )
 				&& mkdir( $site_conf_dir . '/nginx' )
 				&& file_put_contents( $site_nginx_default_conf, $default_conf_content )
-				&& $this->add_postfix_ssl_config( $site_conf_dir )
+				&& $this->add_postfix_ssl_config( $this->site_name, $site_conf_dir )
 				&& mkdir( $site_conf_dir . '/php-fpm' )
 				&& file_put_contents( $site_php_ini, $php_ini_content ) ) ) {
 				throw new Exception( 'Could not copy configuration files.' );
@@ -726,12 +726,19 @@ class Site_Command extends EE_Command {
 
 	/**
 	 * Adds postfix config to site
+	 *
+	 * @param $site_name Name of site
+	 * @param $site_conf_dir Config directory of site
+	 *
+	 * @return bool
 	 */
-	private function add_postfix_ssl_config( $site_conf_dir ) {
+	private function add_postfix_ssl_config( $site_name, $site_conf_dir ) {
 		mkdir( $site_conf_dir . '/postfix' );
 		mkdir( $site_conf_dir . '/postfix/ssl' );
 		$ssl_dir = $site_conf_dir . '/postfix/ssl';
-		return \EE\Utils\default_launch("openssl req -new -x509 -nodes -days 365 -subj \"/CN=smtp.example.com\" -out $ssl_dir/server.crt -keyout $ssl_dir/server.key");
+
+		return \EE\Utils\default_launch( "openssl req -new -x509 -nodes -days 365 -subj \"/CN=smtp.$site_name\" -out $ssl_dir/server.crt -keyout $ssl_dir/server.key" )
+			&& \EE\Utils\default_launch( "chmod 0600 $ssl_dir/server.key" );
 	}
 
 	/**

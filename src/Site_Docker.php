@@ -165,8 +165,8 @@ class Site_Docker {
 		$redis['networks']     = $network_default;
 
 		// mailhog configuration.
-		$postfix['service_name'] = array( 'name' => 'postfix' . EE_VERSION );
-		$postfix['image']      = array( 'name' => 'easyengine/postfix:v' );
+		$postfix['service_name'] = array( 'name' => 'postfix' );
+		$postfix['image']      = array( 'name' => 'easyengine/postfix:v' . EE_VERSION );
 		$postfix['hostname']        = array( 'name' => '${VIRTUAL_HOST}' );
 		$postfix['restart']      = $restart_default;
 		$postfix['labels']      = array(
