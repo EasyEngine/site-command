@@ -26,3 +26,6 @@ cp -R ../$TEST_COMMAND vendor/easyengine/
 # Create phar and test it
 php -dphar.readonly=0 ./utils/make-phar.php easyengine.phar --quite  > /dev/null
 sudo php easyengine.phar cli info
+
+# Add test certs for redirection tests
+. "./add-test-certs.sh"
