@@ -3,28 +3,23 @@
 Performs basic site functions in easyengine.
 
 `site` command contains following subcommand
- * [create](#ee-site-create)
- * [delete](#ee-site-delete)
- * [disable](#ee-site-disable)
- * [enable](#ee-site-enable)
- * [info](#ee-site-info)
- * [list](#ee-site-list)
- * [start](#ee-site-start)
- * [stop](#ee-site-stop)
- * [restart](#ee-site-restart)
- * [reload](#ee-site-reload)
+ * [create](#create)
+ * [delete](#delete)
+ * [disable](#disable)
+ * [enable](#enable)
+ * [info](#info)
+ * [list](#list)
+ * [up](#up)
+ * [down](#down)
+ * [restart](#restart)
+ * [reload](#reload)
 
 ## create
 Runs the site creation.
-
+Check [this](https://github.com/EasyEngine/site-wp-command) for `--type=wp` support package.
 ```bash
-ee site create example.com                      # install wordpress without any page caching (default)
-ee site create example.com --wp                 # install wordpress without any page caching
-ee site create example.com --wpredis            # install wordpress with page caching
-ee site create example.com --wpsubir            # install wpmu-subdirectory without any page caching
-ee site create example.com --wpsubir --wpredis  # install wpmu-subdirectory with page caching
-ee site create example.com --wpsubdom           # install wpmu-subdomain without any page caching
-ee site create example.com --wpsubdom --wpredis # install wpmu-subdomain with page cache
+ee site create example.com            # install html site (default)
+ee site create example.com --type=wp  # install wp site 
 ```
 
 Let's Encrypt SSL
@@ -32,8 +27,6 @@ Let's Encrypt SSL
 # Enable SSL using Let’s Encrypt (You can add --letsencrypt along with any other flag.)
 ee site create example.com [--letsencrypt|--le]
 ee site create example.com --le                 # install wordpress without any page caching + letsencrypt ssl
-ee site create example.com --wpredis --le       # install wordpress with page caching + letsencrypt ssl
-ee site create example.com --wpsubdom --le      # install wordpress wpmu-subdomain + wildcard letsencrypt ssl
 ```
 
 ## delete
@@ -75,20 +68,20 @@ ee site list --enabled                                 # List enabled sites
 ee site list --disabled                                # List disabled sites 
 ```
 
-## start
+## up
 Starts services associated with site.
 
 ```bash
-ee site start example.com		# Defaults to all services
-ee site start example.com --nginx
+ee site up example.com		# Defaults to all services
+ee site up example.com --nginx
 ```
 
-## stop
+## down
 Stops services associated with site.
 
 ```bash
-ee site stop example.com		# Defaults to all services
-ee site stop example.com --mailhog
+ee site down example.com		# Defaults to all services
+ee site down example.com --mailhog
 ```
 
 ## restart
