@@ -382,7 +382,7 @@ class FeatureContext implements Context
 		$labels = $pyStringNode->getStrings();
 		$label_string = implode($labels, ' -f label=');
 
-		$result = EE::launch( "docker ps -aqf label=$label_string | wc -l", false, true );
+		$result = EE::launch( "docker ps -qf label=$label_string | wc -l", false, true );
 		$running_containers = (int) trim($result->stdout);
 
 		if($expected_running_containers === $running_containers) {
