@@ -46,27 +46,7 @@ class Site_Docker {
 		];
 		$nginx['networks']    = $network_default;
 
-		// mailhog configuration.
-		$mailhog['service_name'] = [ 'name' => 'mailhog' ];
-		$mailhog['image']        = [ 'name' => 'easyengine/mailhog:v' . EE_VERSION ];
-		$mailhog['restart']      = $restart_default;
-		$mailhog['command']      = [ 'name' => '["-invite-jim=false"]' ];
-		$mailhog['environment']  = [
-			'env' => [
-				[ 'name' => $v_host ],
-				[ 'name' => 'VIRTUAL_PATH=/ee-admin/mailhog/' ],
-				[ 'name' => 'VIRTUAL_PORT=8025' ],
-			],
-		];
-		$mailhog['labels']       = [
-			'label' => [
-				'name' => 'io.easyengine.site=${VIRTUAL_HOST}',
-			],
-		];
-		$mailhog['networks']     = $network_default;
-
 		$base[] = $nginx;
-		$base[] = $mailhog;
 
 		$binding = [
 			'services' => $base,

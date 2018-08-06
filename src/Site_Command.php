@@ -139,7 +139,6 @@ class Site_Command extends EE_Site_Command {
 		$prefix = ( $this->le ) ? 'https://' : 'http://';
 		$info   = [
 			[ 'Site', $prefix . $this->site['name'] ],
-			[ 'Access mailhog', $prefix . $this->site['name'] . '/ee-admin/mailhog/' ],
 			[ 'Site Root', $this->site['root'] ],
 			[ 'SSL', $ssl ],
 		];
