@@ -2,6 +2,7 @@ Feature: Site Redirection
 
   Scenario: no_www-no_ssl redirection works properly
     When I run 'bin/ee site create example.test'
+    Then After delay of 5 seconds
     Then Request on 'localhost' with header 'Host: www.example.test' should contain following headers:
     | header                         |
     | HTTP/1.1 301 Moved Permanently |
@@ -9,6 +10,7 @@ Feature: Site Redirection
 
   Scenario: www-no_ssl redirection works properly
     When I run 'bin/ee site create www.example1.test'
+    Then After delay of 5 seconds
     Then Request on 'localhost' with header 'Host: example1.test' should contain following headers:
     | header                              |
     | HTTP/1.1 301 Moved Permanently      |
@@ -16,6 +18,7 @@ Feature: Site Redirection
 
   Scenario: no_www-ssl redirection works properly
     When I run 'sudo bin/ee site create example2.test --le --le-mail=test@test.com --skip-status-check'
+    Then After delay of 5 seconds
     Then Request on 'localhost' with header 'Host: www.example2.test' should contain following headers:
       | header                           |
       | HTTP/1.1 301 Moved Permanently   |
@@ -27,6 +30,7 @@ Feature: Site Redirection
 
   Scenario: www-ssl redirection works properly
     When I run 'sudo bin/ee site create www.example3.test --le --le-mail=test@test.com --skip-status-check'
+    Then After delay of 5 seconds
     Then Request on 'localhost' with header 'Host: example3.test' should contain following headers:
       | header                               |
       | HTTP/1.1 301 Moved Permanently       |
