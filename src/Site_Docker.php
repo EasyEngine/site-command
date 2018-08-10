@@ -12,14 +12,15 @@ class Site_Docker {
 	 * @return String docker-compose.yml content string.
 	 */
 	public function generate_docker_compose_yml( array $filters = [] ) {
-		$base = [];
+		$img_versions = EE\Utils\get_image_versions();
+		$base         = [];
 
 		$restart_default = [ 'name' => 'always' ];
 		$network_default = [ 'name' => 'site-network' ];
 
 		// nginx configuration.
 		$nginx['service_name'] = [ 'name' => 'nginx' ];
-		$nginx['image']        = [ 'name' => 'easyengine/nginx:v' . EE_VERSION ];
+		$nginx['image']        = [ 'name' => 'easyengine/nginx:' . $img_versions['easyengine/nginx'] ];
 		$nginx['restart']      = $restart_default;
 
 		$v_host = 'VIRTUAL_HOST';
