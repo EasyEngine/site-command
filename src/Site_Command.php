@@ -13,14 +13,10 @@ declare( ticks=1 );
  * @package ee-cli
  */
 
+use EE\Model\Site;
 use \Symfony\Component\Filesystem\Filesystem;
 
 class Site_Command extends EE_Site_Command {
-
-	/**
-	 * @var string $command Name of the command being run.
-	 */
-	private $command;
 
 	/**
 	 * @var array $site Associative array containing essential site related information.
@@ -57,22 +53,15 @@ class Site_Command extends EE_Site_Command {
 	 */
 	private $fs;
 
-	/**
-	 * @var Object $db Object to access `EE::db()` functions.
-	 */
-	private $db;
-
 	public function __construct() {
 
 		$this->level   = 0;
-		$this->command = 'site';
 		pcntl_signal( SIGTERM, [ $this, "rollback" ] );
 		pcntl_signal( SIGHUP, [ $this, "rollback" ] );
 		pcntl_signal( SIGUSR1, [ $this, "rollback" ] );
 		pcntl_signal( SIGINT, [ $this, "rollback" ] );
 		$shutdown_handler = new Shutdown_Handler();
 		register_shutdown_function( [ $shutdown_handler, "cleanup" ], [ &$this ] );
-		$this->db     = EE::db();
 		$this->docker = EE::docker();
 		$this->logger = EE::get_file_logger()->withName( 'site_command' );
 		$this->fs     = new Filesystem();
@@ -107,7 +96,7 @@ class Site_Command extends EE_Site_Command {
 			EE::error( sprintf( 'Invalid site-type: %s', $this->site['type'] ) );
 		}
 
-		if ( $this->db::site_in_db( $this->site['name'] ) ) {
+		if ( Site::find( $this->site['name'] ) ) {
 			EE::error( sprintf( "Site %1\$s already exists. If you want to re-create it please delete the older one using:\n`ee site delete %1\$s`", $this->site['name'] ) );
 		}
 
@@ -132,7 +121,7 @@ class Site_Command extends EE_Site_Command {
 
 		EE\Utils\delem_log( 'site info start' );
 		if ( ! isset( $this->site['name'] ) ) {
-			$args = EE\SiteUtils\auto_site_name( $args, $this->command, __FUNCTION__ );
+			$args = EE\SiteUtils\auto_site_name( $args, 'site', __FUNCTION__ );
 			$this->populate_site_info( $args );
 		}
 		$ssl    = $this->le ? 'Enabled' : 'Not Enabled';
@@ -238,18 +227,17 @@ class Site_Command extends EE_Site_Command {
 	 */
 	private function create_site_db_entry() {
 
-		$ssl  = $this->le ? 1 : 0;
-		$data = [
-			'sitename'     => $this->site['name'],
+		$ssl = $this->le ? 'letsencrypt' : null ;
+
+		$site = Site::create([
+			'site_url'     => $this->site['name'],
 			'site_type'    => $this->site['type'],
-			'site_path'    => $this->site['root'],
-			'site_command' => $this->command,
-			'is_ssl'       => $ssl,
-			'created_on'   => date( 'Y-m-d H:i:s', time() ),
-		];
+			'site_fs_path' => $this->site['root'],
+			'site_ssl'     => $ssl,
+		]);
 
 		try {
-			if ( $this->db::insert( $data ) ) {
+			if ( $site ) {
 				EE::log( 'Site entry created.' );
 			} else {
 				throw new Exception( 'Error creating site entry in database.' );
@@ -266,13 +254,12 @@ class Site_Command extends EE_Site_Command {
 
 		$this->site['name'] = EE\Utils\remove_trailing_slash( $args[0] );
 
-		if ( $this->db::site_in_db( $this->site['name'] ) ) {
+		$site = Site::find( $this->site['name'] );
 
-			$db_select = $this->db::select( [], [ 'sitename' => $this->site['name'] ], 'sites', 1 );
-
-			$this->site['type'] = $db_select['site_type'];
-			$this->site['root'] = $db_select['site_path'];
-			$this->le           = $db_select['is_ssl'];
+		if ( $site ) {
+			$this->site['type'] = $site->site_type;
+			$this->site['root'] = $site->site_fs_path;
+			$this->le           = $site->site_ssl;
 
 		} else {
 			EE::error( sprintf( 'Site %s does not exist.', $this->site['name'] ) );
