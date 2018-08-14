@@ -43,9 +43,14 @@ class Site_Command extends EE_Site_Command {
 	private $logger;
 
 	/**
-	 * @var bool $le Whether the site is letsencrypt or not.
+	 * @var bool $ssl Whether the site is has SSL enabled.
 	 */
-	private $le;
+	private $ssl;
+
+	/**
+	 * @var bool $ssl_wildcard Whether the site SSL is wildcard.
+	 */
+	private $ssl_wildcard;
 
 	/**
 	 * @var bool $skip_chk To skip site status check pre-installation.
@@ -86,9 +91,11 @@ class Site_Command extends EE_Site_Command {
 	 * <site-name>
 	 * : Name of website.
 	 *
-	 * [--letsencrypt]
+	 * [--ssl=<value>]
 	 * : Enables ssl via letsencrypt certificate.
 	 *
+	 * [--wildcard]
+	 * : Gets wildcard SSL .
 	 * [--type=<type>]
 	 * : Type of the site to be created. Values: html,php,wp.
 	 *
@@ -111,8 +118,9 @@ class Site_Command extends EE_Site_Command {
 			EE::error( sprintf( "Site %1\$s already exists. If you want to re-create it please delete the older one using:\n`ee site delete %1\$s`", $this->site['name'] ) );
 		}
 
-		$this->le       = EE\Utils\get_flag_value( $assoc_args, 'letsencrypt' );
-		$this->skip_chk = EE\Utils\get_flag_value( $assoc_args, 'skip-status-check' );
+		$this->ssl          = EE\Utils\get_flag_value( $assoc_args, 'ssl' );
+		$this->ssl_wildcard = EE\Utils\get_flag_value( $assoc_args, 'wildcard' );
+		$this->skip_chk      = EE\Utils\get_flag_value( $assoc_args, 'skip-status-check' );
 
 		EE\SiteUtils\init_checks();
 
@@ -135,13 +143,17 @@ class Site_Command extends EE_Site_Command {
 			$args = EE\SiteUtils\auto_site_name( $args, $this->command, __FUNCTION__ );
 			$this->populate_site_info( $args );
 		}
-		$ssl    = $this->le ? 'Enabled' : 'Not Enabled';
-		$prefix = ( $this->le ) ? 'https://' : 'http://';
+		$ssl    = $this->ssl ? 'Enabled' : 'Not Enabled';
+		$prefix = ( $this->ssl ) ? 'https://' : 'http://';
 		$info   = [
 			[ 'Site', $prefix . $this->site['name'] ],
 			[ 'Site Root', $this->site['root'] ],
 			[ 'SSL', $ssl ],
 		];
+
+		if ( $this->ssl ) {
+			$info[] = [ 'SSL Wildcard', $this->ssl_wildcard ? 'Yes': 'No' ];
+		}
 
 		EE\Utils\format_table( $info );
 
@@ -166,7 +178,6 @@ class Site_Command extends EE_Site_Command {
 
 		$filter                 = [];
 		$filter[]               = $this->site['type'];
-		$filter[]               = $this->le;
 		$site_docker            = new Site_Docker();
 		$docker_compose_content = $site_docker->generate_docker_compose_yml( $filter );
 		$default_conf_content   = $default_conf_content = EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx/default.conf.mustache', [ 'server_name' => $this->site['name'] ] );
@@ -193,7 +204,7 @@ class Site_Command extends EE_Site_Command {
 			$this->fs->mkdir( $site_src_dir );
 			$this->fs->dumpFile( $site_src_dir . '/index.html', $index_html );
 
-			EE\Siteutils\add_site_redirects( $this->site['name'], $this->le );
+			EE\Siteutils\add_site_redirects( $this->site['name'], $this->ssl );
 
 			EE::success( 'Configuration files copied.' );
 		} catch ( Exception $e ) {
@@ -225,9 +236,14 @@ class Site_Command extends EE_Site_Command {
 		} catch ( Exception $e ) {
 			$this->catch_clean( $e );
 		}
+		EE::debug( 'Starting SSL procedure' );
 
-		if ( $this->le ) {
-			$this->init_le( $this->site['name'], $this->site['root'], false );
+		if ( 'le' === $this->ssl ) {
+			EE::debug( 'Initializing LE' );
+			$this->init_le( $this->site['name'], $this->site['root'], $this->ssl_wildcard );
+		} elseif ( 'inherit' === $this->ssl ) {
+			EE::debug( 'Inheriting certs' );
+			$this->inherit_certs( $this->site['name'], $this->ssl_wildcard );
 		}
 		$this->info( [ $this->site['name'] ], [] );
 		$this->create_site_db_entry();
@@ -238,13 +254,15 @@ class Site_Command extends EE_Site_Command {
 	 */
 	private function create_site_db_entry() {
 
-		$ssl  = $this->le ? 1 : 0;
+		$ssl  = $this->ssl ? 1 : 0;
+		$ssl_wildcard = $this->ssl_wildcard ? 1 : 0;
 		$data = [
 			'sitename'     => $this->site['name'],
 			'site_type'    => $this->site['type'],
 			'site_path'    => $this->site['root'],
 			'site_command' => $this->command,
 			'is_ssl'       => $ssl,
+			'site_ssl_wildcard' => $ssl_wildcard,
 			'created_on'   => date( 'Y-m-d H:i:s', time() ),
 		];
 
@@ -272,7 +290,8 @@ class Site_Command extends EE_Site_Command {
 
 			$this->site['type'] = $db_select['site_type'];
 			$this->site['root'] = $db_select['site_path'];
-			$this->le           = $db_select['is_ssl'];
+			$this->ssl           = $db_select['is_ssl'];
+			$this->ssl_wildcard  = $db_select['site_ssl_wildcard'];
 
 		} else {
 			EE::error( sprintf( 'Site %s does not exist.', $this->site['name'] ) );
