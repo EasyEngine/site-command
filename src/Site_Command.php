@@ -244,6 +244,8 @@ class Site_Command extends EE_Site_Command {
 		} elseif ( 'inherit' === $this->ssl ) {
 			EE::debug( 'Inheriting certs' );
 			$this->inherit_certs( $this->site['name'], $this->ssl_wildcard );
+		} else {
+			EE::error( "Unrecognized value in --ssl flag: $this->ssl" );
 		}
 		$this->info( [ $this->site['name'] ], [] );
 		$this->create_site_db_entry();
