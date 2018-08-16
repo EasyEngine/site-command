@@ -68,7 +68,7 @@ class Site_Command extends EE_Site_Command {
 	}
 
 	/**
-	 * Runs the standard WordPress Site installation.
+	 * Runs the standard WordPress site installation.
 	 *
 	 * ## OPTIONS
 	 *
