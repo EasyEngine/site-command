@@ -227,7 +227,7 @@ class Site_Command extends EE_Site_Command {
 	 */
 	private function create_site_db_entry() {
 
-		$ssl = $this->le ? 'letsencrypt' : null ;
+		$ssl = $this->le ? 'letsencrypt' : null;
 
 		$site = Site::create([
 			'site_url'     => $this->site['url'],
