@@ -204,8 +204,6 @@ class Site_Command extends EE_Site_Command {
 			$this->fs->mkdir( $site_src_dir );
 			$this->fs->dumpFile( $site_src_dir . '/index.html', $index_html );
 
-			EE\Siteutils\add_site_redirects( $this->site['name'], $this->ssl );
-
 			EE::success( 'Configuration files copied.' );
 		} catch ( Exception $e ) {
 			$this->catch_clean( $e );
@@ -247,6 +245,9 @@ class Site_Command extends EE_Site_Command {
 		} else {
 			EE::error( "Unrecognized value in --ssl flag: $this->ssl" );
 		}
+
+		EE\Siteutils\add_site_redirects( $this->site['name'], $this->ssl );
+
 		$this->info( [ $this->site['name'] ], [] );
 		$this->create_site_db_entry();
 	}
