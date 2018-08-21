@@ -10,7 +10,6 @@ rm ee
 cd ..
 git clone https://github.com/EasyEngine/easyengine.git easyengine --depth=1
 cd easyengine
-echo 'travis_test' > VERSION
 
 # Copy tests to EE repo
 rm -r features
