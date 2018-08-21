@@ -259,7 +259,6 @@ class Site_Command extends EE_Site_Command {
 			'site_url'          => $this->site['url'],
 			'site_type'         => $this->site['type'],
 			'site_fs_path'      => $this->site['root'],
-			'site_command'      => $this->command,
 			'site_ssl'          => $ssl,
 			'site_ssl_wildcard' => $ssl_wildcard,
 			'created_on'        => date( 'Y-m-d H:i:s', time() ),
