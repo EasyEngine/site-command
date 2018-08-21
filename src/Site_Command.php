@@ -218,15 +218,15 @@ class Site_Command extends EE_Site_Command {
 		$this->site['root'] = WEBROOT . $this->site['name'];
 		$this->level        = 1;
 		try {
-			EE\Siteutils\create_site_root( $this->site['root'], $this->site['name'] );
+			EE\SiteUtils\create_site_root( $this->site['root'], $this->site['name'] );
 			$this->level = 2;
-			EE\Siteutils\setup_site_network( $this->site['name'] );
+			EE\SiteUtils\setup_site_network( $this->site['name'] );
 			$this->level = 3;
 			$this->configure_site_files();
 
-			EE\Siteutils\start_site_containers( $this->site['root'] );
+			EE\SiteUtils\start_site_containers( $this->site['root'] );
 
-			EE\Siteutils\create_etc_hosts_entry( $this->site['name'] );
+			EE\SiteUtils\create_etc_hosts_entry( $this->site['name'] );
 			if ( ! $this->skip_chk ) {
 				$this->level = 4;
 				EE\Siteutils\site_status_check( $this->site['name'] );
