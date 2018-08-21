@@ -242,11 +242,12 @@ class Site_Command extends EE_Site_Command {
 			 * We add redirection config two times in case of ssl as we need http redirection
 			 * when certs are being requested and http+https redirection after we have certs.
 			 */
-			EE\SiteUtils\add_site_redirects( $this->site['name'], false );
+			EE\SiteUtils\add_site_redirects( $this->site['name'], false, 'inherit' === $this->ssl );
 			EE\SiteUtils\reload_proxy_configuration();
+
 			if ( $this->ssl ) {
 				$this->init_ssl( $this->site['name'], $this->site['root'], $this->ssl, $this->ssl_wildcard );
-				EE\SiteUtils\add_site_redirects( $this->site['name'], true );
+				EE\SiteUtils\add_site_redirects( $this->site['name'], true, 'inherit' === $this->ssl );
 				EE\SiteUtils\reload_proxy_configuration();
 			}
 		} catch ( Exception $e ) {
