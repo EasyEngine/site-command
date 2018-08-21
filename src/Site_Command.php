@@ -229,24 +229,29 @@ class Site_Command extends EE_Site_Command {
 			EE\SiteUtils\create_etc_hosts_entry( $this->site['name'] );
 			if ( ! $this->skip_chk ) {
 				$this->level = 4;
-				EE\Siteutils\site_status_check( $this->site['name'] );
+				EE\SiteUtils\site_status_check( $this->site['name'] );
+			}
+
+			/*
+			 * This adds http www redirection which is needed for issuing cert for a site.
+			 * i.e. when you create example.com site, certs are issued for example.com and www.example.com
+			 *
+			 * We're issuing certs for both domains as it is needed in order to perform redirection of
+			 * https://www.example.com -> https://example.com
+			 *
+			 * We add redirection config two times in case of ssl as we need http redirection
+			 * when certs are being requested and http+https redirection after we have certs.
+			 */
+			EE\SiteUtils\add_site_redirects( $this->site['name'], false );
+			EE\SiteUtils\reload_proxy_configuration();
+			if ( $this->ssl ) {
+				$this->init_ssl( $this->site['name'], $this->site['root'], $this->ssl, $this->ssl_wildcard );
+				EE\SiteUtils\add_site_redirects( $this->site['name'], true );
+				EE\SiteUtils\reload_proxy_configuration();
 			}
 		} catch ( Exception $e ) {
 			$this->catch_clean( $e );
 		}
-		EE::debug( 'Starting SSL procedure' );
-
-		if ( 'le' === $this->ssl ) {
-			EE::debug( 'Initializing LE' );
-			$this->init_le( $this->site['name'], $this->site['root'], $this->ssl_wildcard );
-		} elseif ( 'inherit' === $this->ssl ) {
-			EE::debug( 'Inheriting certs' );
-			$this->inherit_certs( $this->site['name'], $this->ssl_wildcard );
-		} else {
-			EE::error( "Unrecognized value in --ssl flag: $this->ssl" );
-		}
-
-		EE\Siteutils\add_site_redirects( $this->site['name'], $this->ssl );
 
 		$this->info( [ $this->site['name'] ], [] );
 		$this->create_site_db_entry();
