@@ -65,6 +65,8 @@ class FeatureContext implements Context
 	{
 		$this->commands = [];
 		$this->ee_path = getcwd();
+		$config_contents = \Mustangostang\Spyc::YAMLDump(['le-mail' => 'abc@example.com']);
+		file_put_contents( EE_CONF_ROOT . '/config.yml', $config_contents );
 	}
 
 	/**
