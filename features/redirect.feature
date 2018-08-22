@@ -17,7 +17,7 @@ Feature: Site Redirection
     | Location: http://www.example1.test/ |
 
   Scenario: no_www-ssl redirection works properly
-    When I run 'sudo bin/ee site create example2.test --le --le-mail=test@test.com --skip-status-check'
+    When I run 'sudo bin/ee site create example2.test --ssl=le --skip-status-check'
     Then After delay of 5 seconds
     Then Request on 'localhost' with header 'Host: www.example2.test' should contain following headers:
       | header                           |
@@ -29,7 +29,7 @@ Feature: Site Redirection
       | Location: https://example2.test/ |
 
   Scenario: www-ssl redirection works properly
-    When I run 'sudo bin/ee site create www.example3.test --le --le-mail=test@test.com --skip-status-check'
+    When I run 'sudo bin/ee site create www.example3.test --ssl=le --skip-status-check'
     Then After delay of 5 seconds
     Then Request on 'localhost' with header 'Host: example3.test' should contain following headers:
       | header                               |

@@ -39,9 +39,14 @@ class Site_Command extends EE_Site_Command {
 	private $logger;
 
 	/**
-	 * @var bool $le Whether the site is letsencrypt or not.
+	 * @var bool $ssl Whether the site is has SSL enabled.
 	 */
-	private $le;
+	private $ssl;
+
+	/**
+	 * @var bool $ssl_wildcard Whether the site SSL is wildcard.
+	 */
+	private $ssl_wildcard;
 
 	/**
 	 * @var bool $skip_chk To skip site status check pre-installation.
@@ -75,9 +80,11 @@ class Site_Command extends EE_Site_Command {
 	 * <site-name>
 	 * : Name of website.
 	 *
-	 * [--letsencrypt]
+	 * [--ssl=<value>]
 	 * : Enables ssl via letsencrypt certificate.
 	 *
+	 * [--wildcard]
+	 * : Gets wildcard SSL .
 	 * [--type=<type>]
 	 * : Type of the site to be created. Values: html,php,wp.
 	 *
@@ -100,8 +107,9 @@ class Site_Command extends EE_Site_Command {
 			EE::error( sprintf( "Site %1\$s already exists. If you want to re-create it please delete the older one using:\n`ee site delete %1\$s`", $this->site['url'] ) );
 		}
 
-		$this->le       = EE\Utils\get_flag_value( $assoc_args, 'letsencrypt' );
-		$this->skip_chk = EE\Utils\get_flag_value( $assoc_args, 'skip-status-check' );
+		$this->ssl          = EE\Utils\get_flag_value( $assoc_args, 'ssl' );
+		$this->ssl_wildcard = EE\Utils\get_flag_value( $assoc_args, 'wildcard' );
+		$this->skip_chk      = EE\Utils\get_flag_value( $assoc_args, 'skip-status-check' );
 
 		EE\SiteUtils\init_checks();
 
@@ -124,13 +132,17 @@ class Site_Command extends EE_Site_Command {
 			$args = EE\SiteUtils\auto_site_name( $args, 'site', __FUNCTION__ );
 			$this->populate_site_info( $args );
 		}
-		$ssl    = $this->le ? 'Enabled' : 'Not Enabled';
-		$prefix = ( $this->le ) ? 'https://' : 'http://';
+		$ssl    = $this->ssl ? 'Enabled' : 'Not Enabled';
+		$prefix = ( $this->ssl ) ? 'https://' : 'http://';
 		$info   = [
 			[ 'Site', $prefix . $this->site['url'] ],
 			[ 'Site Root', $this->site['root'] ],
 			[ 'SSL', $ssl ],
 		];
+
+		if ( $this->ssl ) {
+			$info[] = [ 'SSL Wildcard', $this->ssl_wildcard ? 'Yes': 'No' ];
+		}
 
 		EE\Utils\format_table( $info );
 
@@ -155,7 +167,6 @@ class Site_Command extends EE_Site_Command {
 
 		$filter                 = [];
 		$filter[]               = $this->site['type'];
-		$filter[]               = $this->le;
 		$site_docker            = new Site_Docker();
 		$docker_compose_content = $site_docker->generate_docker_compose_yml( $filter );
 		$default_conf_content   = $default_conf_content = EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx/default.conf.mustache', [ 'server_name' => $this->site['url'] ] );
@@ -182,8 +193,6 @@ class Site_Command extends EE_Site_Command {
 			$this->fs->mkdir( $site_src_dir );
 			$this->fs->dumpFile( $site_src_dir . '/index.html', $index_html );
 
-			EE\Siteutils\add_site_redirects( $this->site['url'], $this->le );
-
 			EE::success( 'Configuration files copied.' );
 		} catch ( Exception $e ) {
 			$this->catch_clean( $e );
@@ -198,26 +207,42 @@ class Site_Command extends EE_Site_Command {
 		$this->site['root'] = WEBROOT . $this->site['url'];
 		$this->level        = 1;
 		try {
-			EE\Siteutils\create_site_root( $this->site['root'], $this->site['url'] );
+			EE\SiteUtils\create_site_root( $this->site['root'], $this->site['url'] );
 			$this->level = 2;
-			EE\Siteutils\setup_site_network( $this->site['url'] );
+			EE\SiteUtils\setup_site_network( $this->site['url'] );
 			$this->level = 3;
 			$this->configure_site_files();
 
-			EE\Siteutils\start_site_containers( $this->site['root'] );
+			EE\SiteUtils\start_site_containers( $this->site['root'] );
 
-			EE\Siteutils\create_etc_hosts_entry( $this->site['url'] );
+			EE\SiteUtils\create_etc_hosts_entry( $this->site['url'] );
 			if ( ! $this->skip_chk ) {
 				$this->level = 4;
-				EE\Siteutils\site_status_check( $this->site['url'] );
+				EE\SiteUtils\site_status_check( $this->site['url'] );
+			}
+
+			/*
+			 * This adds http www redirection which is needed for issuing cert for a site.
+			 * i.e. when you create example.com site, certs are issued for example.com and www.example.com
+			 *
+			 * We're issuing certs for both domains as it is needed in order to perform redirection of
+			 * https://www.example.com -> https://example.com
+			 *
+			 * We add redirection config two times in case of ssl as we need http redirection
+			 * when certs are being requested and http+https redirection after we have certs.
+			 */
+			EE\SiteUtils\add_site_redirects( $this->site['url'], false, 'inherit' === $this->ssl );
+			EE\SiteUtils\reload_proxy_configuration();
+
+			if ( $this->ssl ) {
+				$this->init_ssl( $this->site['url'], $this->site['root'], $this->ssl, $this->ssl_wildcard );
+				EE\SiteUtils\add_site_redirects( $this->site['url'], true, 'inherit' === $this->ssl );
+				EE\SiteUtils\reload_proxy_configuration();
 			}
 		} catch ( Exception $e ) {
 			$this->catch_clean( $e );
 		}
 
-		if ( $this->le ) {
-			$this->init_le( $this->site['url'], $this->site['root'], false );
-		}
 		$this->info( [ $this->site['url'] ], [] );
 		$this->create_site_db_entry();
 	}
@@ -227,13 +252,16 @@ class Site_Command extends EE_Site_Command {
 	 */
 	private function create_site_db_entry() {
 
-		$ssl = $this->le ? 'letsencrypt' : null;
+		$ssl = $this->ssl ? 1 : 0;
+		$ssl_wildcard = $this->ssl_wildcard ? 1 : 0;
 
 		$site = Site::create([
-			'site_url'     => $this->site['url'],
-			'site_type'    => $this->site['type'],
-			'site_fs_path' => $this->site['root'],
-			'site_ssl'     => $ssl,
+			'site_url'          => $this->site['url'],
+			'site_type'         => $this->site['type'],
+			'site_fs_path'      => $this->site['root'],
+			'site_ssl'          => $ssl,
+			'site_ssl_wildcard' => $ssl_wildcard,
+			'created_on'        => date( 'Y-m-d H:i:s', time() ),
 		]);
 
 		try {
@@ -259,8 +287,8 @@ class Site_Command extends EE_Site_Command {
 		if ( $site ) {
 			$this->site['type'] = $site->site_type;
 			$this->site['root'] = $site->site_fs_path;
-			$this->le           = $site->site_ssl;
-
+			$this->ssl          = $site->site_ssl;
+			$this->ssl_wildcard = $site->site_ssl_wildcard;
 		} else {
 			EE::error( sprintf( 'Site %s does not exist.', $this->site['url'] ) );
 		}
