@@ -20,7 +20,7 @@ services:
     command: {{name}}
     {{/command}}
     {{#labels}}
-    labels: 
+    labels:
     {{#label}}
       - "{{name}}"
     {{/label}}
@@ -41,7 +41,6 @@ services:
     networks:
       - {{name}}
     {{/networks}}
-    
 {{/services}}
 
 {{#network}}
@@ -49,4 +48,7 @@ networks:
   site-network:
     external:
       name: ${VIRTUAL_HOST}
-{{/network}}  
+  global-network:
+    external:
+      name: ee-global-network
+{{/network}}
