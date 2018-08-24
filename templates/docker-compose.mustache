@@ -39,15 +39,15 @@ services:
     {{/environment}}
     {{#networks}}
     networks:
-      - {{name}}
+    {{#net}}
+      - "{{name}}"
+    {{/net}}
     {{/networks}}
 {{/services}}
 
 {{#network}}
 networks:
   site-network:
-    external:
-      name: ${VIRTUAL_HOST}
   global-network:
     external:
       name: ee-global-network

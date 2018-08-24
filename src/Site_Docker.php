@@ -45,8 +45,12 @@ class Site_Docker {
 				'name' => 'io.easyengine.site=${VIRTUAL_HOST}',
 			],
 		];
-		$nginx['networks']    = $network_default;
-		$nginx['networks']    = [ 'name' => 'global-network' ];
+		$nginx['networks']    = [
+			'net' => [
+				$network_default,
+				[ 'name' => 'global-network' ],
+			]
+		];
 
 		$base[] = $nginx;
 
