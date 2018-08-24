@@ -51,7 +51,7 @@ class Site_Docker {
 		];
 		$nginx['networks']    = [
 			'net' => [
-				$network_default,
+				[ 'name' => 'site-network' ],
 				[ 'name' => 'global-network' ],
 			]
 		];
