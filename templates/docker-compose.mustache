@@ -48,6 +48,12 @@ services:
 {{#network}}
 networks:
   site-network:
+    {{#networks_labels}}
+    labels:
+    {{#label}}
+     - "{{name}}"
+    {{/label}}
+    {{/networks_labels}}
   global-network:
     external:
       name: ee-global-network
