@@ -63,7 +63,8 @@ class Site_Docker {
 			'network'  => [
 				'networks_labels' => [
 					'label' => [
-						'name' => 'org.label-schema.vendor=EasyEngine',
+						[ 'name' => 'org.label-schema.vendor=EasyEngine' ],
+						[ 'name' => 'io.easyengine.site=${VIRTUAL_HOST}' ],
 					],
 				],
 			],
