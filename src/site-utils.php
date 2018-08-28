@@ -125,7 +125,7 @@ function generate_global_docker_compose_yml( Filesystem $fs ) {
 	$data     = [
 		'services' => [
 			'name'           => 'nginx-proxy',
-			'container_name' => 'ee-nginx-proxy',
+			'container_name' => EE_PROXY_TYPE,
 			'image'          => 'easyengine/nginx-proxy:' . $img_versions['easyengine/nginx-proxy'],
 			'restart'        => 'always',
 			'ports'          => [
@@ -177,12 +177,12 @@ function create_site_root( $site_root, $site_name ) {
 }
 
 /**
- * Reloads configuration of ee-nginx-proxy container
+ * Reloads configuration of global-proxy container
  *
  * @return bool
  */
 function reload_proxy_configuration() {
-	return EE::exec( 'docker exec ee-nginx-proxy sh -c "/app/docker-entrypoint.sh /usr/local/bin/docker-gen /app/nginx.tmpl /etc/nginx/conf.d/default.conf; /usr/sbin/nginx -s reload"' );
+	return EE::exec( sprintf( 'docker exec %s sh -c "/app/docker-entrypoint.sh /usr/local/bin/docker-gen /app/nginx.tmpl /etc/nginx/conf.d/default.conf; /usr/sbin/nginx -s reload"', EE_PROXY_TYPE ) );
 }
 
 /**
