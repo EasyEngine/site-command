@@ -168,7 +168,7 @@ class HTML extends EE_Site_Command {
 
 		$filter                 = [];
 		$filter[]               = $this->site['type'];
-		$site_docker            = new Docker_Compose_Generator();
+		$site_docker            = new Site_HTML_Docker();
 		$docker_compose_content = $site_docker->generate_docker_compose_yml( $filter );
 		$default_conf_content   = $default_conf_content = EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx/default.conf.mustache', [ 'server_name' => $this->site['url'] ] );
 

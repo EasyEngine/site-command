@@ -3,7 +3,7 @@
 namespace EE\Site\Type;
 use function \EE\Utils\mustache_render;
 
-class Docker_Compose_Generator {
+class Site_HTML_Docker {
 
 	/**
 	 * Generate docker-compose.yml according to requirement.
