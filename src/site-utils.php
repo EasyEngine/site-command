@@ -151,7 +151,7 @@ function generate_global_docker_compose_yml( Filesystem $fs ) {
 		],
 	];
 
-	$contents = EE\Utils\mustache_render( EE_ROOT . '/templates/global_docker_compose.yml.mustache', $data );
+	$contents = EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/global_docker_compose.yml.mustache', $data );
 	$fs->dumpFile( EE_CONF_ROOT . '/docker-compose.yml', $contents );
 }
 
