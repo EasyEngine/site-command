@@ -18,18 +18,17 @@ if ( file_exists( $autoload ) ) {
 // Load utility functions
 require_once 'src/site-utils.php';
 
-function Before_Help_Command() {
+function Before_Help_Command( $args, $assoc_args ) {
 
-	$all_args   = EE::get_runner()->get_args();
-	$args       = $all_args[0];
-	$assoc_args = $all_args[1];
-
-	if ( isset( $args[1] ) && 'site' === $args[1] ) {
+	if ( isset( $args[0] ) && 'site' === $args[0] ) {
 		$site_types = Site_Command::get_site_types();
-		if ( ! isset( $assoc_args['type'] ) ) {
-			EE::error( 'No `--type` passed.' );
+		if ( isset( $assoc_args['type'] ) ) {
+			$type = $assoc_args['type'];	
+		} else {
+			//TODO: get from config.
+			$type = 'html';
 		}
-		$type = $assoc_args['type'];
+		
 		if ( isset( $site_types[ $type ] ) ) {
 			$callback = $site_types[ $type ];
 
