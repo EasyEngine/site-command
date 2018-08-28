@@ -1,6 +1,5 @@
 <?php
 
-namespace EE\Site;
 use EE\Dispatcher\CommandFactory;
 use EE\Model\Site;
 
