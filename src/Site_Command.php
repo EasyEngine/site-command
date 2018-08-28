@@ -19,9 +19,14 @@ use \Symfony\Component\Filesystem\Filesystem;
 class Site_Command extends EE_Site_Command {
 
 	/**
-	 * @var array $site Associative array containing essential site related information.
+	 * @var string $site url of the site.
 	 */
-	private $site;
+	private $site_url;
+
+	/**
+	 * @var string $site directory on which site is installed.
+	 */
+	private $site_root;
 
 	/**
 	 * @var object $docker Object to access `EE::docker()` functions.
@@ -99,8 +104,8 @@ class Site_Command extends EE_Site_Command {
 		$site_config['skip_chk']     = EE\Utils\get_flag_value( $assoc_args, 'skip-status-check' );
 		$site_config['root']         = WEBROOT . $site_config['url'];
 
-		$this->site['url']  = $site_config['url'];
-		$this->site['root'] = $site_config['root'];
+		$this->site_url  = $site_config['url'];
+		$this->site_root = $site_config['root'];
 
 		EE\SiteUtils\init_checks();
 
@@ -286,8 +291,8 @@ class Site_Command extends EE_Site_Command {
 		$site = Site::find( $site_url );
 
 		if ( $site ) {
-			$this->site['url'] = $site_url;
-			$this->site['root'] = $site->site_fs_path;
+			$this->site_url = $site_url;
+			$this->site_root = $site->site_fs_path;
 			return $site;
 		} else {
 			EE::error( sprintf( 'Site %s does not exist.', $site_url ) );
@@ -333,7 +338,7 @@ class Site_Command extends EE_Site_Command {
 
 		EE::warning( 'Exiting gracefully after rolling back. This may take some time.' );
 		if ( $this->level > 0 ) {
-			$this->delete_site( $this->level, $this->site['url'], $this->site['root'] );
+			$this->delete_site( $this->level, $this->site_url, $this->site_root );
 		}
 		EE::success( 'Rollback complete. Exiting now.' );
 		exit;
