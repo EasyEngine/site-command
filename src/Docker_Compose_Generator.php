@@ -1,8 +1,9 @@
 <?php
 
+namespace EE\Site\Type;
 use function \EE\Utils\mustache_render;
 
-class Site_Docker {
+class Docker_Compose_Generator {
 
 	/**
 	 * Generate docker-compose.yml according to requirement.
