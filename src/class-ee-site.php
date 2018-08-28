@@ -155,7 +155,7 @@ abstract class EE_Site_Command {
 		if ( $this->fs->exists( $site_root ) ) {
 			try {
 				$this->fs->remove( $site_root );
-			} catch ( Exception $e ) {
+			} catch ( \Exception $e ) {
 				\EE::debug( $e );
 				\EE::error( 'Could not remove site root. Please check if you have sufficient rights.' );
 			}
@@ -167,7 +167,7 @@ abstract class EE_Site_Command {
 		if ( $this->fs->exists( $config_file_path ) ) {
 			try {
 				$this->fs->remove( $config_file_path );
-			} catch ( Exception $e ) {
+			} catch ( \Exception $e ) {
 				\EE::debug( $e );
 				\EE::error( 'Could not remove site redirection file. Please check if you have sufficient rights.' );
 			}
@@ -185,7 +185,7 @@ abstract class EE_Site_Command {
 				$cert_files = [$conf_certs, $conf_var, $crt_file, $key_file];
 				try {
 					$this->fs->remove( $cert_files );
-				} catch ( Exception $e ) {
+				} catch ( \Exception $e ) {
 					\EE::warning( $e );
 				}
 			}

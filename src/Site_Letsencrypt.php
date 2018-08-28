@@ -113,7 +113,7 @@ class Site_Letsencrypt {
 		try {
 			$this->client->registerAccount( null, $email );
 		}
-		catch ( Exception $e ) {
+		catch ( \Exception $e ) {
 			\EE::warning( $e->getMessage() );
 			\EE::warning( 'It seems you\'re in local environment or there is some issue with network, please check logs. Skipping letsencrypt.' );
 
@@ -129,7 +129,7 @@ class Site_Letsencrypt {
 		try {
 			$order = $this->client->requestOrder( $domains );
 		}
-		catch ( Exception $e ) {
+		catch ( \Exception $e ) {
 			\EE::warning( $e->getMessage() );
 			\EE::warning( 'It seems you\'re in local environment or using non-public domain, please check logs. Skipping letsencrypt.' );
 
@@ -229,7 +229,7 @@ class Site_Letsencrypt {
 				try {
 					$this->client->challengeAuthorization( $authorizationChallenge );
 				}
-				catch ( Exception $e ) {
+				catch ( \Exception $e ) {
 					\EE::debug( $e->getMessage() );
 					\EE::warning( 'Challange Authorization failed. Check logs and check if your domain is pointed correctly to this server.' );
 					$site_name = isset( $domains[1] ) ? $domains[1] : $domains[0];
