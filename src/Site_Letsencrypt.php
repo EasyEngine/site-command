@@ -1,5 +1,6 @@
 <?php
 
+namespace EE\Site\Type;
 use AcmePhp\Cli\Repository\Repository;
 use AcmePhp\Cli\Serializer\PemEncoder;
 use AcmePhp\Cli\Serializer\PemNormalizer;
