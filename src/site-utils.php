@@ -1,6 +1,6 @@
 <?php
 
-namespace EE\SiteUtils;
+namespace EE\Site\Utils;
 
 use \EE;
 use EE\Model\Site;
