@@ -18,12 +18,14 @@
         "branch-alias": {
             "dev-master": "1.x-dev"
         },
-        "bundled": true,
-        "commands": [
-            "site",
-            "site create",
-            "site list",
-            "site delete"
-        ]
+        "bundled": true
+    },
+    "require": {
+        "acmephp/core": "dev-master",
+        "ext-openssl": "*",
+        "guzzlehttp/guzzle": "^6.0",
+        "league/flysystem": "^1.0.19",
+        "symfony/serializer": "^3.0",
+        "webmozart/assert": "^1.0"
     }
 }
