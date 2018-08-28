@@ -15,6 +15,9 @@ if ( file_exists( $autoload ) ) {
 	require_once $autoload;
 }
 
+// Load utility functions
+require_once 'src/site-utils.php';
+
 function Before_Help_Command() {
 
 	$all_args   = EE::get_runner()->get_args();
