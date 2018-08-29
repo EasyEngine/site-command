@@ -12,7 +12,11 @@
             "": "src/",
             "AcmePhp\\Cli\\": "AcmePhp/Cli"
         },
-        "files": [ "site-command.php" ]
+        "files": [
+            "site-command.php",
+            "src/helper/site-utils.php",
+            "src/helper/hooks.php"  
+        ]
     },
     "extra": {
         "branch-alias": {
