@@ -1,5 +1,7 @@
 <?php
 
+use EE\Dispatcher\CommandFactory;
+
 /**
  * Add hook before the invocation of help command to appropriately handle the help for given site-type.
  */

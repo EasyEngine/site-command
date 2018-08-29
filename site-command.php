@@ -1,7 +1,5 @@
 <?php
 
-use EE\Dispatcher\CommandFactory;
-
 if ( ! defined( 'SITE_TEMPLATE_ROOT' ) ) {
 	define( 'SITE_TEMPLATE_ROOT', __DIR__ . '/templates' );
 }
