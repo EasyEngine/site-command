@@ -14,10 +14,10 @@ if ( file_exists( $autoload ) ) {
 }
 
 // Load utility functions.
-require_once 'src/helper/site-utils.php';
+require_once __DIR__ . 'src/helper/site-utils.php';
 
 // Load hooks.
-require_once 'src/helper/hooks.php';
+require_once __DIR__ . 'src/helper/hooks.php';
 
 EE::add_command( 'site', 'Site_Command' );
 Site_Command::add_site_type( 'html', 'EE\Site\Type\HTML' );
