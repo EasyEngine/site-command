@@ -73,9 +73,7 @@ class Site_Command {
 
 		if ( ! isset( $site_types[ $type ] ) ) {
 			$error = sprintf(
-				"'%s' is not a registered site type of 'ee site --type=%s'. See 'ee help site --type=%s' for available subcommands.",
-				$type,
-				$type,
+				'\'%1$s\' is not a registered site type of \'ee site --type=%1$s\'. See \'ee help site --type=%1$s\' for available subcommands.',
 				$type
 			);
 			EE::error( $error );
