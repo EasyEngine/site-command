@@ -3,9 +3,12 @@
 use EE\Dispatcher\CommandFactory;
 
 /**
- * Add hook before the invocation of help command to appropriately handle the help for given site-type.
+ * Callback function of `before_invoke:help` hook: Add routing for "ee help site" command before the invocation of help command.
+ *
+ * @param array $args       Commandline arguments passed to help command.
+ * @param array $assoc_args Associative arguments passed to help command.
  */
-function Before_Help_Command( $args, $assoc_args ) {
+function ee_site_help_cmd_routing( $args, $assoc_args ) {
 
 	if ( isset( $args[0] ) && 'site' === $args[0] ) {
 		$site_types = Site_Command::get_site_types();
@@ -33,4 +36,4 @@ function Before_Help_Command( $args, $assoc_args ) {
 	}
 }
 
-EE::add_hook( 'before_invoke:help', 'Before_Help_Command' );
+EE::add_hook( 'before_invoke:help', 'ee_site_help_cmd_routing' );
