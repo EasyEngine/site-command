@@ -1,6 +1,7 @@
 <?php
 
 namespace EE\Site\Type;
+
 use \Symfony\Component\Filesystem\Filesystem;
 use \EE\Model\Site;
 
@@ -66,8 +67,8 @@ abstract class EE_Site_Command {
 	public function _list( $args, $assoc_args ) {
 
 		\EE\Utils\delem_log( 'site list start' );
-		$format = \EE\Utils\get_flag_value( $assoc_args, 'format' );
-		$enabled = \EE\Utils\get_flag_value( $assoc_args, 'enabled' );
+		$format   = \EE\Utils\get_flag_value( $assoc_args, 'format' );
+		$enabled  = \EE\Utils\get_flag_value( $assoc_args, 'enabled' );
 		$disabled = \EE\Utils\get_flag_value( $assoc_args, 'disabled' );
 
 		$sites = Site::all();
@@ -89,7 +90,7 @@ abstract class EE_Site_Command {
 		} else {
 			$result = array_map(
 				function ( $site ) {
-					$site->site = $site->site_url;
+					$site->site   = $site->site_url;
 					$site->status = $site->site_enabled ? 'enabled' : 'disabled';
 
 					return $site;
@@ -128,7 +129,7 @@ abstract class EE_Site_Command {
 	/**
 	 * Function to delete the given site.
 	 *
-	 * @param int    $level     Level of deletion.
+	 * @param int $level        Level of deletion.
 	 *                          Level - 0: No need of clean-up.
 	 *                          Level - 1: Clean-up only the site-root.
 	 *                          Level - 2: Try to remove network. The network may or may not have been created.
@@ -139,7 +140,7 @@ abstract class EE_Site_Command {
 	 */
 	protected function delete_site( $level, $site_name, $site_root ) {
 
-		$this->fs = new Filesystem();
+		$this->fs   = new Filesystem();
 		$proxy_type = EE_PROXY_TYPE;
 		if ( $level >= 3 ) {
 			if ( \EE::docker()::docker_compose_down( $site_root ) ) {
@@ -177,12 +178,12 @@ abstract class EE_Site_Command {
 		if ( $level > 4 ) {
 			if ( $this->ssl ) {
 				\EE::log( 'Removing ssl certs.' );
-				$crt_file = EE_CONF_ROOT . "/nginx/certs/$site_name.crt";
-				$key_file = EE_CONF_ROOT . "/nginx/certs/$site_name.key";
+				$crt_file   = EE_CONF_ROOT . "/nginx/certs/$site_name.crt";
+				$key_file   = EE_CONF_ROOT . "/nginx/certs/$site_name.key";
 				$conf_certs = EE_CONF_ROOT . "/acme-conf/certs/$site_name";
-				$conf_var = EE_CONF_ROOT . "/acme-conf/var/$site_name";
+				$conf_var   = EE_CONF_ROOT . "/acme-conf/var/$site_name";
 
-				$cert_files = [$conf_certs, $conf_var, $crt_file, $key_file];
+				$cert_files = [ $conf_certs, $conf_var, $crt_file, $key_file ];
 				try {
 					$this->fs->remove( $cert_files );
 				} catch ( \Exception $e ) {
@@ -214,9 +215,9 @@ abstract class EE_Site_Command {
 
 		\EE\Utils\delem_log( 'site enable start' );
 		$force = \EE\Utils\get_flag_value( $assoc_args, 'force' );
-		$args = EE\SiteUtils\auto_site_name( $args, 'site', __FUNCTION__ );
+		$args  = EE\SiteUtils\auto_site_name( $args, 'site', __FUNCTION__ );
 		$this->populate_site_info( $args );
-		$site  = Site::find( $this->site['url'] );
+		$site = Site::find( $this->site['url'] );
 
 		if ( $site->site_enabled && ! $force ) {
 			\EE::error( sprintf( '%s is already enabled!', $site->site_url ) );
@@ -248,7 +249,7 @@ abstract class EE_Site_Command {
 		$args = EE\SiteUtils\auto_site_name( $args, 'site', __FUNCTION__ );
 		$this->populate_site_info( $args );
 
-		$site = Site::find($this->site['url']);
+		$site = Site::find( $this->site['url'] );
 
 		\EE::log( sprintf( 'Disabling site %s.', $site->site_url ) );
 
@@ -279,8 +280,8 @@ abstract class EE_Site_Command {
 	public function restart( $args, $assoc_args, $whitelisted_containers = [] ) {
 
 		\EE\Utils\delem_log( 'site restart start' );
-		$args = EE\SiteUtils\auto_site_name( $args, 'site', __FUNCTION__ );
-		$all = \EE\Utils\get_flag_value( $assoc_args, 'all' );
+		$args                 = EE\SiteUtils\auto_site_name( $args, 'site', __FUNCTION__ );
+		$all                  = \EE\Utils\get_flag_value( $assoc_args, 'all' );
 		$no_service_specified = count( $assoc_args ) === 0;
 
 		$this->populate_site_info( $args );
@@ -317,8 +318,8 @@ abstract class EE_Site_Command {
 
 		\EE\Utils\delem_log( 'site reload start' );
 		$args = EE\SiteUtils\auto_site_name( $args, 'site', __FUNCTION__ );
-		$all = \EE\Utils\get_flag_value( $assoc_args, 'all' );
-		if ( !array_key_exists( 'nginx', $reload_commands ) ) {
+		$all  = \EE\Utils\get_flag_value( $assoc_args, 'all' );
+		if ( ! array_key_exists( 'nginx', $reload_commands ) ) {
 			$reload_commands['nginx'] = 'nginx sh -c \'nginx -t && service openresty reload\'';
 		}
 		$no_service_specified = count( $assoc_args ) === 0;
@@ -344,14 +345,14 @@ abstract class EE_Site_Command {
 	private function reload_services( $services, $reload_commands ) {
 
 		foreach ( $services as $service ) {
-			EE\SiteUtils\run_compose_command( 'exec', $reload_commands[$service], 'reload', $service );
+			EE\SiteUtils\run_compose_command( 'exec', $reload_commands[ $service ], 'reload', $service );
 		}
 	}
 
 	/**
 	 * Runs the acme le registration and authorization.
 	 *
-	 * @param string $site_name      Name of the site for ssl.
+	 * @param string $site_name Name of the site for ssl.
 	 *
 	 * @throws Exception
 	 */
@@ -381,7 +382,7 @@ abstract class EE_Site_Command {
 	 * @param string $site_name Name of the site for ssl.
 	 * @param string $site_root Webroot of the site.
 	 * @param string $ssl_type  Type of ssl cert to issue.
-	 * @param bool   $wildcard  SSL with wildcard or not.
+	 * @param bool $wildcard    SSL with wildcard or not.
 	 *
 	 * @throws \EE\ExitException If --ssl flag has unrecognized value
 	 */
@@ -406,16 +407,16 @@ abstract class EE_Site_Command {
 	 *
 	 * @param string $site_name Name of the site for ssl.
 	 * @param string $site_root Webroot of the site.
-	 * @param bool   $wildcard  SSL with wildcard or not.
+	 * @param bool $wildcard    SSL with wildcard or not.
 	 */
 	protected function init_le( $site_name, $site_root, $wildcard = false ) {
 		\EE::debug( "Wildcard in init_le: $wildcard" );
 
-		$this->site['url'] = $site_name;
+		$this->site['url']  = $site_name;
 		$this->site['root'] = $site_root;
-		$this->wildcard = $wildcard;
-		$client = new Site_Letsencrypt();
-		$this->le_mail = \EE::get_runner()->config['le-mail'] ?? \EE::input( 'Enter your mail id: ' );
+		$this->wildcard     = $wildcard;
+		$client             = new Site_Letsencrypt();
+		$this->le_mail      = \EE::get_runner()->config['le-mail'] ?? \EE::input( 'Enter your mail id: ' );
 		\EE::get_runner()->ensure_present_in_config( 'le-mail', $this->le_mail );
 		if ( ! $client->register( $this->le_mail ) ) {
 			$this->ssl = null;
@@ -441,11 +442,11 @@ abstract class EE_Site_Command {
 	 * Returns all domains required by cert
 	 *
 	 * @param string $site_name Name of site
-	 * @param $wildcard  Wildcard cert required?
+	 * @param $wildcard         Wildcard cert required?
 	 *
 	 * @return array
 	 */
-	private function get_cert_domains( string $site_name, $wildcard ) : array {
+	private function get_cert_domains( string $site_name, $wildcard ): array {
 		$domains = [ $site_name ];
 		$has_www = ( strpos( $site_name, 'www.' ) === 0 );
 
@@ -454,6 +455,7 @@ abstract class EE_Site_Command {
 		} else {
 			$domains[] = $this->get_www_domain( $site_name );
 		}
+
 		return $domains;
 	}
 
@@ -465,13 +467,13 @@ abstract class EE_Site_Command {
 	 *
 	 * @return string Domain name with or without www
 	 */
-	private function get_www_domain( string $site_name ) : string {
+	private function get_www_domain( string $site_name ): string {
 		$has_www = ( strpos( $site_name, 'www.' ) === 0 );
 
 		if ( $has_www ) {
 			return ltrim( $site_name, 'www.' );
 		} else {
-			return  'www.' . $site_name;
+			return 'www.' . $site_name;
 		}
 	}
 
@@ -489,11 +491,11 @@ abstract class EE_Site_Command {
 	 */
 	public function le( $args = [], $assoc_args = [] ) {
 
-		if ( !isset( $this->site['url'] ) ) {
+		if ( ! isset( $this->site['url'] ) ) {
 			$this->populate_site_info( $args );
 		}
 
-		if ( !isset( $this->le_mail ) ) {
+		if ( ! isset( $this->le_mail ) ) {
 			$this->le_mail = \EE::get_config( 'le-mail' ) ?? \EE::input( 'Enter your mail id: ' );
 		}
 
@@ -503,6 +505,7 @@ abstract class EE_Site_Command {
 
 		if ( ! $client->check( $domains, $this->wildcard ) ) {
 			$this->ssl = null;
+
 			return;
 		}
 
@@ -521,7 +524,7 @@ abstract class EE_Site_Command {
 	private function populate_site_info( $args ) {
 
 		$this->site['url'] = \EE\Utils\remove_trailing_slash( $args[0] );
-		$site = Site::find( $this->site['url'] );
+		$site              = Site::find( $this->site['url'] );
 		if ( $site ) {
 
 			$db_select = $site->site_url;

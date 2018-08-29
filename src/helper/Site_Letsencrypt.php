@@ -1,6 +1,7 @@
 <?php
 
 namespace EE\Site\Type;
+
 use AcmePhp\Cli\Repository\Repository;
 use AcmePhp\Cli\Serializer\PemEncoder;
 use AcmePhp\Cli\Serializer\PemNormalizer;
@@ -112,14 +113,14 @@ class Site_Letsencrypt {
 	public function register( $email ) {
 		try {
 			$this->client->registerAccount( null, $email );
-		}
-		catch ( \Exception $e ) {
+		} catch ( \Exception $e ) {
 			\EE::warning( $e->getMessage() );
 			\EE::warning( 'It seems you\'re in local environment or there is some issue with network, please check logs. Skipping letsencrypt.' );
 
 			return false;
 		}
 		\EE::debug( "Account with email id: $email registered successfully!" );
+
 		return true;
 	}
 
@@ -128,8 +129,7 @@ class Site_Letsencrypt {
 		$solverName = $wildcard ? 'dns-01' : 'http-01';
 		try {
 			$order = $this->client->requestOrder( $domains );
-		}
-		catch ( \Exception $e ) {
+		} catch ( \Exception $e ) {
 			\EE::warning( $e->getMessage() );
 			\EE::warning( 'It seems you\'re in local environment or using non-public domain, please check logs. Skipping letsencrypt.' );
 
@@ -178,7 +178,7 @@ class Site_Letsencrypt {
 	}
 
 	public function check( Array $domains, $wildcard = false ) {
-		\EE::debug( ('Starting check with solver ') . ($wildcard ? 'dns' : 'http') );
+		\EE::debug( ( 'Starting check with solver ' ) . ( $wildcard ? 'dns' : 'http' ) );
 		$solver    = $wildcard ? new SimpleDnsSolver( null, new ConsoleOutput() ) : new SimpleHttpSolver();
 		$validator = new ChainValidator(
 			[
@@ -228,8 +228,7 @@ class Site_Letsencrypt {
 				\EE::debug( sprintf( 'Requesting authorization check for domain %s', $domain ) );
 				try {
 					$this->client->challengeAuthorization( $authorizationChallenge );
-				}
-				catch ( \Exception $e ) {
+				} catch ( \Exception $e ) {
 					\EE::debug( $e->getMessage() );
 					\EE::warning( 'Challange Authorization failed. Check logs and check if your domain is pointed correctly to this server.' );
 					$site_name = isset( $domains[1] ) ? $domains[1] : $domains[0];
@@ -251,10 +250,11 @@ class Site_Letsencrypt {
 				$solver->cleanup( $authorizationChallenge );
 			}
 		}
+
 		return true;
 	}
 
-	public function request( $domain, $altNames = [], $email, $force=false ) {
+	public function request( $domain, $altNames = [], $email, $force = false ) {
 		$alternativeNames = array_unique( $altNames );
 		sort( $alternativeNames );
 
@@ -275,7 +275,7 @@ class Site_Letsencrypt {
 	 * Request a first certificate for the given domain.
 	 *
 	 * @param string $domain
-	 * @param array  $alternativeNames
+	 * @param array $alternativeNames
 	 */
 	private function executeFirstRequest( $domain, array $alternativeNames, $email ) {
 		\EE::log( 'Executing first request.' );
@@ -332,8 +332,8 @@ class Site_Letsencrypt {
 	 * Renew a given domain certificate.
 	 *
 	 * @param string $domain
-	 * @param array  $alternativeNames
-	 * @param bool   $force
+	 * @param array $alternativeNames
+	 * @param bool $force
 	 */
 	private function executeRenewal( $domain, array $alternativeNames, $force = false ) {
 		try {
@@ -397,14 +397,12 @@ class Site_Letsencrypt {
 			$this->moveCertsToNginxProxy( $domain );
 			\EE::log( 'Certificate renewed successfully!' );
 
-		}
-		catch ( \Exception $e ) {
+		} catch ( \Exception $e ) {
 			\EE::warning( 'A critical error occured during certificate renewal' );
 			\EE::debug( print_r( $e, true ) );
 
 			throw $e;
-		}
-		catch ( \Throwable $e ) {
+		} catch ( \Throwable $e ) {
 			\EE::warning( 'A critical error occured during certificate renewal' );
 			\EE::debug( print_r( $e, true ) );
 
@@ -436,7 +434,7 @@ class Site_Letsencrypt {
 	 * Retrieve the stored distinguishedName or create a new one if needed.
 	 *
 	 * @param string $domain
-	 * @param array  $alternativeNames
+	 * @param array $alternativeNames
 	 *
 	 * @return DistinguishedName
 	 */
@@ -521,7 +519,7 @@ class Site_Letsencrypt {
 		$table->render();
 	}
 
-	public function cleanup(  $site_root ) {
+	public function cleanup( $site_root ) {
 		$challange_dir = "$site_root/app/src/.well-known";
 		if ( file_exists( "$site_root/app/src/.well-known" ) ) {
 			\EE::debug( 'Cleaning up webroot files.' );

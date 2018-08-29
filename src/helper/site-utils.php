@@ -15,7 +15,7 @@ function get_site_name() {
 	$sites = Site::all( [ 'site_url' ] );
 
 	if ( ! empty( $sites ) ) {
-		$cwd = getcwd();
+		$cwd          = getcwd();
 		$name_in_path = explode( '/', $cwd );
 
 		$site_name = array_intersect( array_column( $sites, 'site_url' ), $name_in_path );
@@ -50,10 +50,10 @@ function auto_site_name( $args, $command, $function, $arg_pos = 0 ) {
 
 	if ( isset( $args[ $arg_pos ] ) ) {
 		$possible_site_name = $args[ $arg_pos ];
-		if( substr( $possible_site_name, 0, 4 ) === 'http' ) {
-			$possible_site_name = str_replace(['https','http'],'',$possible_site_name);
+		if ( substr( $possible_site_name, 0, 4 ) === 'http' ) {
+			$possible_site_name = str_replace( [ 'https', 'http' ], '', $possible_site_name );
 		}
-		$url_path = parse_url(EE\Utils\remove_trailing_slash($possible_site_name), PHP_URL_PATH);
+		$url_path = parse_url( EE\Utils\remove_trailing_slash( $possible_site_name ), PHP_URL_PATH );
 		if ( Site::find( $url_path ) ) {
 			return $args;
 		}
@@ -122,7 +122,7 @@ function init_checks() {
 function generate_global_docker_compose_yml( Filesystem $fs ) {
 	$img_versions = EE\Utils\get_image_versions();
 
-	$data     = [
+	$data = [
 		'services' => [
 			'name'           => 'nginx-proxy',
 			'container_name' => EE_PROXY_TYPE,
@@ -189,8 +189,8 @@ function reload_proxy_configuration() {
  * Adds www to non-www redirection to site
  *
  * @param string $site_name name of the site.
- * @param bool   $ssl       enable ssl or not.
- * @param bool   $inherit   inherit cert or not.
+ * @param bool $ssl         enable ssl or not.
+ * @param bool $inherit     inherit cert or not.
  */
 function add_site_redirects( string $site_name, bool $ssl, bool $inherit ) {
 
@@ -297,8 +297,9 @@ function get_curl_info( $url, $port = 80, $port_info = false ) {
 /**
  * Function to pull the latest images and bring up the site containers.
  *
- * @param string $site_root  Root directory of the site.
- * @param array  $containers The minimum required conatainers to start the site. Default null, leads to starting of all containers.
+ * @param string $site_root Root directory of the site.
+ * @param array $containers The minimum required conatainers to start the site. Default null, leads to starting of all
+ *                          containers.
  *
  * @throws \Exception when docker-compose up fails.
  */

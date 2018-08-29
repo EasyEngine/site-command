@@ -1,6 +1,7 @@
 <?php
 
 namespace EE\Site\Type;
+
 use function \EE\Utils\mustache_render;
 
 class Site_HTML_Docker {

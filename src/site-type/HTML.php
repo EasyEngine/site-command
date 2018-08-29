@@ -14,6 +14,7 @@ declare( ticks=1 );
  */
 
 namespace EE\Site\Type;
+
 use \EE\Model\Site;
 
 use \Symfony\Component\Filesystem\Filesystem;
@@ -62,7 +63,7 @@ class HTML extends EE_Site_Command {
 
 	public function __construct() {
 
-		$this->level   = 0;
+		$this->level = 0;
 		pcntl_signal( SIGTERM, [ $this, "rollback" ] );
 		pcntl_signal( SIGHUP, [ $this, "rollback" ] );
 		pcntl_signal( SIGUSR1, [ $this, "rollback" ] );
@@ -99,7 +100,7 @@ class HTML extends EE_Site_Command {
 		\EE::warning( 'This is a beta version. Please don\'t use it in production.' );
 		$this->logger->debug( 'args:', $args );
 		$this->logger->debug( 'assoc_args:', empty( $assoc_args ) ? [ 'NULL' ] : $assoc_args );
-		$this->site['url'] = strtolower( \EE\Utils\remove_trailing_slash( $args[0] ) );
+		$this->site['url']  = strtolower( \EE\Utils\remove_trailing_slash( $args[0] ) );
 		$this->site['type'] = \EE\Utils\get_flag_value( $assoc_args, 'type', 'html' );
 		if ( 'html' !== $this->site['type'] ) {
 			\EE::error( sprintf( 'Invalid site-type: %s', $this->site['type'] ) );
@@ -111,7 +112,7 @@ class HTML extends EE_Site_Command {
 
 		$this->ssl          = \EE\Utils\get_flag_value( $assoc_args, 'ssl' );
 		$this->ssl_wildcard = \EE\Utils\get_flag_value( $assoc_args, 'wildcard' );
-		$this->skip_chk      = \EE\Utils\get_flag_value( $assoc_args, 'skip-status-check' );
+		$this->skip_chk     = \EE\Utils\get_flag_value( $assoc_args, 'skip-status-check' );
 
 		\EE\Site\Utils\init_checks();
 
@@ -143,7 +144,7 @@ class HTML extends EE_Site_Command {
 		];
 
 		if ( $this->ssl ) {
-			$info[] = [ 'SSL Wildcard', $this->ssl_wildcard ? 'Yes': 'No' ];
+			$info[] = [ 'SSL Wildcard', $this->ssl_wildcard ? 'Yes' : 'No' ];
 		}
 
 		\EE\Utils\format_table( $info );
@@ -252,17 +253,17 @@ class HTML extends EE_Site_Command {
 	 */
 	private function create_site_db_entry() {
 
-		$ssl = $this->ssl ? 1 : 0;
+		$ssl          = $this->ssl ? 1 : 0;
 		$ssl_wildcard = $this->ssl_wildcard ? 1 : 0;
 
-		$site = Site::create([
+		$site = Site::create( [
 			'site_url'          => $this->site['url'],
 			'site_type'         => $this->site['type'],
 			'site_fs_path'      => $this->site['root'],
 			'site_ssl'          => $ssl,
 			'site_ssl_wildcard' => $ssl_wildcard,
 			'created_on'        => date( 'Y-m-d H:i:s', time() ),
-		]);
+		] );
 
 		try {
 			if ( $site ) {

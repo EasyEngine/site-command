@@ -7,7 +7,8 @@ namespace EE\Site\Type;
 class Shutdown_Handler {
 
 	/**
-	 * Handle fatal errors. This function was created as the register_shutdown_function requires the callable function to be public and any public function inside site-command would be callable directly through command-line.
+	 * Handle fatal errors. This function was created as the register_shutdown_function requires the callable function
+	 * to be public and any public function inside site-command would be callable directly through command-line.
 	 *
 	 * @param array $site_command having Site_Command object.
 	 */
