@@ -2,6 +2,9 @@
 
 declare( ticks=1 );
 
+use EE\Model\Site;
+use \Symfony\Component\Filesystem\Filesystem;
+
 /**
  * Creates a simple html Website.
  *
@@ -12,10 +15,6 @@ declare( ticks=1 );
  *
  * @package ee-cli
  */
-
-use EE\Model\Site;
-use \Symfony\Component\Filesystem\Filesystem;
-
 class Site_Command extends EE_Site_Command {
 
 	/**
@@ -51,12 +50,12 @@ class Site_Command extends EE_Site_Command {
 	public function __construct() {
 
 		$this->level   = 0;
-		pcntl_signal( SIGTERM, [ $this, "rollback" ] );
-		pcntl_signal( SIGHUP, [ $this, "rollback" ] );
-		pcntl_signal( SIGUSR1, [ $this, "rollback" ] );
-		pcntl_signal( SIGINT, [ $this, "rollback" ] );
+		pcntl_signal( SIGTERM, [ $this, 'rollback' ] );
+		pcntl_signal( SIGHUP, [ $this, 'rollback' ] );
+		pcntl_signal( SIGUSR1, [ $this, 'rollback' ] );
+		pcntl_signal( SIGINT, [ $this, 'rollback' ] );
 		$shutdown_handler = new Shutdown_Handler();
-		register_shutdown_function( [ $shutdown_handler, "cleanup" ], [ &$this ] );
+		register_shutdown_function( [ $shutdown_handler, 'cleanup' ], [ &$this ] );
 		$this->docker = EE::docker();
 		$this->logger = EE::get_file_logger()->withName( 'site_command' );
 		$this->fs     = new Filesystem();
@@ -128,7 +127,7 @@ class Site_Command extends EE_Site_Command {
 		if ( ! isset( $site_config['url'] ) ) {
 			$args                        = EE\SiteUtils\auto_site_name( $args, 'site', __FUNCTION__ );
 			$site_url                    = \EE\Utils\remove_trailing_slash( $args[0] );
-			$site                        = $this->get_site( $site_url );
+			$site                        = $this->get_site_or_exit( $site_url );
 			$site_config['url']          = $site_url;
 			$site_config['ssl']          = $site->site_ssl;
 			$site_config['ssl_wildcard'] = $site->site_ssl_wildcard;
@@ -205,8 +204,10 @@ class Site_Command extends EE_Site_Command {
 
 	/**
 	 * Function to create the site.
+	 *
+	 * @param $site_config array site build config
 	 */
-	private function create_site( $site_config ) {
+	private function create_site( array $site_config ) {
 
 		$this->level        = 1;
 		try {
@@ -280,14 +281,14 @@ class Site_Command extends EE_Site_Command {
 	}
 
 	/**
-	 * Populate basic site info from db.
+	 * Returns site if found else exits.
 	 *
-	 * @param string $site_url URL of site to find
+	 * @param string $site_url url of site to find
 	 *
 	 * @throws \EE\ExitException
 	 * @return Site
 	 */
-	private function get_site( string $site_url ) : Site {
+	private function get_site_or_exit( string $site_url ) : Site {
 		$site = Site::find( $site_url );
 
 		if ( $site ) {
@@ -320,6 +321,8 @@ class Site_Command extends EE_Site_Command {
 	 *
 	 * @param $e
 	 * @param $site_config array Configuration of current site
+	 *
+	 * @throws \EE\ExitException
 	 */
 	private function catch_clean( Exception $e, array $site_config ) {
 
@@ -350,7 +353,7 @@ class Site_Command extends EE_Site_Command {
 	private function shutDownFunction() {
 
 		$error = error_get_last();
-		if ( isset( $error ) && $error['type'] === E_ERROR ) {
+		if ( isset( $error ) && E_ERROR === $error['type'] ) {
 			EE::warning( 'An Error occurred. Initiating clean-up.' );
 			$this->logger->error( 'Type: ' . $error['type'] );
 			$this->logger->error( 'Message: ' . $error['message'] );
