@@ -12,7 +12,6 @@ function Before_Help_Command( $args, $assoc_args ) {
 		if ( isset( $assoc_args['type'] ) ) {
 			$type = $assoc_args['type'];
 		} else {
-			//TODO: get from config.
 			$type = 'html';
 		}
 

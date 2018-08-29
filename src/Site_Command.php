@@ -104,10 +104,6 @@ class Site_Command {
 		// default site-type
 		$type = 'html';
 
-		// TODO: get type from config file as below
-		// $config_type = EE::get_config('type');
-		// $type        = empty( $config_type ) ? 'html' : $config_type;
-
 		$last_arg = array_pop( $args );
 		if ( substr( $last_arg, 0, 4 ) === 'http' ) {
 			$last_arg = str_replace( [ 'https://', 'http://' ], '', $last_arg );
