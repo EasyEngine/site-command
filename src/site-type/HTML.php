@@ -76,7 +76,7 @@ class HTML extends EE_Site_Command {
 	}
 
 	/**
-	 * Runs the standard WordPress site installation.
+	 * Runs the standard HTML site installation.
 	 *
 	 * ## OPTIONS
 	 *
@@ -89,7 +89,7 @@ class HTML extends EE_Site_Command {
 	 * [--wildcard]
 	 * : Gets wildcard SSL .
 	 * [--type=<type>]
-	 * : Type of the site to be created. Values: html,php,wp.
+	 * : Type of the site to be created. Values: html,php,wp etc.
 	 *
 	 * [--skip-status-check]
 	 * : Skips site status check.
