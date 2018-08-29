@@ -37,6 +37,13 @@ abstract class EE_Site_Command {
 	private $site;
 
 	public function __construct() {
+
+		pcntl_signal( SIGTERM, [ $this, "rollback" ] );
+		pcntl_signal( SIGHUP, [ $this, "rollback" ] );
+		pcntl_signal( SIGUSR1, [ $this, "rollback" ] );
+		pcntl_signal( SIGINT, [ $this, "rollback" ] );
+		$shutdown_handler = new Shutdown_Handler();
+		register_shutdown_function( [ $shutdown_handler, "cleanup" ], [ &$this ] );
 	}
 
 	/**
@@ -538,6 +545,25 @@ abstract class EE_Site_Command {
 		}
 	}
 
+	/**
+	 * Shutdown function to catch and rollback from fatal errors.
+	 */
+	protected function shutDownFunction() {
+
+		$logger = \EE::get_file_logger()->withName( 'site-command' );
+		$error  = error_get_last();
+		if ( isset( $error ) && $error['type'] === E_ERROR ) {
+			\EE::warning( 'An Error occurred. Initiating clean-up.' );
+			$logger->error( 'Type: ' . $error['type'] );
+			$logger->error( 'Message: ' . $error['message'] );
+			$logger->error( 'File: ' . $error['file'] );
+			$logger->error( 'Line: ' . $error['line'] );
+			$this->rollback();
+		}
+	}
+
 	abstract public function create( $args, $assoc_args );
+
+	abstract protected function rollback();
 
 }

@@ -63,15 +63,10 @@ class HTML extends EE_Site_Command {
 
 	public function __construct() {
 
-		$this->level = 0;
-		pcntl_signal( SIGTERM, [ $this, "rollback" ] );
-		pcntl_signal( SIGHUP, [ $this, "rollback" ] );
-		pcntl_signal( SIGUSR1, [ $this, "rollback" ] );
-		pcntl_signal( SIGINT, [ $this, "rollback" ] );
-		$shutdown_handler = new Shutdown_Handler();
-		register_shutdown_function( [ $shutdown_handler, "cleanup" ], [ &$this ] );
+		parent::__construct();
+		$this->level  = 0;
 		$this->docker = \EE::docker();
-		$this->logger = \EE::get_file_logger()->withName( 'site_command' );
+		$this->logger = \EE::get_file_logger()->withName( 'html_type' );
 		$this->fs     = new Filesystem();
 	}
 
@@ -95,7 +90,7 @@ class HTML extends EE_Site_Command {
 	 * : Skips site status check.
 	 */
 	public function create( $args, $assoc_args ) {
-
+		trigger_error("Cannot divide by zero", E_USER_ERROR);
 		\EE\Utils\delem_log( 'site create start' );
 		\EE::warning( 'This is a beta version. Please don\'t use it in production.' );
 		$this->logger->debug( 'args:', $args );
@@ -329,7 +324,7 @@ class HTML extends EE_Site_Command {
 	/**
 	 * Roll back on interrupt.
 	 */
-	private function rollback() {
+	protected function rollback() {
 
 		\EE::warning( 'Exiting gracefully after rolling back. This may take some time.' );
 		if ( $this->level > 0 ) {
@@ -339,19 +334,4 @@ class HTML extends EE_Site_Command {
 		exit;
 	}
 
-	/**
-	 * Shutdown function to catch and rollback from fatal errors.
-	 */
-	private function shutDownFunction() {
-
-		$error = error_get_last();
-		if ( isset( $error ) && $error['type'] === E_ERROR ) {
-			\EE::warning( 'An Error occurred. Initiating clean-up.' );
-			$this->logger->error( 'Type: ' . $error['type'] );
-			$this->logger->error( 'Message: ' . $error['message'] );
-			$this->logger->error( 'File: ' . $error['file'] );
-			$this->logger->error( 'Line: ' . $error['line'] );
-			$this->rollback();
-		}
-	}
 }
