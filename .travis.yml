@@ -8,8 +8,8 @@ env:
     - TEST_COMMAND=$(echo $TRAVIS_REPO_SLUG | cut -d/ -f 2) # Get command name to be tested
 
 before_script:
-   - sudo curl -L https://github.com/docker/compose/releases/download/1.22.0/docker-compose-$(uname -s)-$(uname -m) -o /usr/local/bin/docker-compose
-   - |
+  - sudo curl -L https://github.com/docker/compose/releases/download/1.22.0/docker-compose-$(uname -s)-$(uname -m) -o /usr/local/bin/docker-compose
+  - |
     # Remove Xdebug for a huge performance increase:
     if [ -f ~/.phpenv/versions/$(phpenv version-name)/etc/conf.d/xdebug.ini ]; then
       phpenv config-rm xdebug.ini
