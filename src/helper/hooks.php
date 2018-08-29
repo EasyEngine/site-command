@@ -1,5 +1,9 @@
 <?php
 
+if ( ! class_exists( 'EE' ) ) {
+	return;
+}
+
 use EE\Dispatcher\CommandFactory;
 
 /**
@@ -39,3 +43,5 @@ function ee_site_help_cmd_routing( $args, $assoc_args ) {
 	}
 
 }
+
+EE::add_hook( 'before_invoke:help', 'ee_site_help_cmd_routing' );
