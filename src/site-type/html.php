@@ -90,7 +90,7 @@ class HTML extends EE_Site_Command {
 	 * : Skips site status check.
 	 */
 	public function create( $args, $assoc_args ) {
-		trigger_error("Cannot divide by zero", E_USER_ERROR);
+
 		\EE\Utils\delem_log( 'site create start' );
 		\EE::warning( 'This is a beta version. Please don\'t use it in production.' );
 		$this->logger->debug( 'args:', $args );
