@@ -14,4 +14,5 @@ if ( file_exists( $autoload ) ) {
 }
 
 EE::add_command( 'site', 'Site_Command' );
+EE::add_hook( 'before_invoke:help', 'ee_site_help_cmd_routing' );
 Site_Command::add_site_type( 'html', 'EE\Site\Type\HTML' );
