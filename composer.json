@@ -13,9 +13,9 @@
             "AcmePhp\\Cli\\": "AcmePhp/Cli"
         },
         "files": [
-            "site-command.php",
+            "src/helper/hooks.php",
             "src/helper/site-utils.php",
-            "src/helper/hooks.php"  
+            "site-command.php"
         ]
     },
     "extra": {
