@@ -548,7 +548,7 @@ abstract class EE_Site_Command {
 	/**
 	 * Shutdown function to catch and rollback from fatal errors.
 	 */
-	protected function shutDownFunction() {
+	protected function shut_down_function() {
 
 		$logger = \EE::get_file_logger()->withName( 'site-command' );
 		$error  = error_get_last();

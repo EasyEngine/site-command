@@ -14,7 +14,7 @@ class Shutdown_Handler {
 	 */
 	public function cleanup( $site_command ) {
 		$reflector = new \ReflectionObject( $site_command[0] );
-		$method    = $reflector->getMethod( 'shutDownFunction' );
+		$method    = $reflector->getMethod( 'shut_down_function' );
 		$method->setAccessible( true );
 		$method->invoke( $site_command[0] );
 	}
