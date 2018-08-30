@@ -34,9 +34,7 @@ function ee_site_help_cmd_routing( $args, $assoc_args ) {
 		$command->add_subcommand( 'site', $leaf_command );
 	} else {
 		$error = sprintf(
-			"'%s' is not a registered site type of 'ee site --type=%s'. See 'ee help site --type=%s' for available subcommands.",
-			$type,
-			$type,
+			'\'%1$s\' is not a registered site type of \'ee site --type=%1$s\'. See \'ee help site --type=%1$s\' for available subcommands.',
 			$type
 		);
 		EE::error( $error );
