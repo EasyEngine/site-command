@@ -303,7 +303,7 @@ abstract class EE_Site_Command {
 		}
 
 		foreach ( $containers as $container ) {
-			EE\Siteutils\run_compose_command( 'restart', $container );
+			\EE\Site\Utils\run_compose_command( 'restart', $container );
 		}
 		\EE\Utils\delem_log( 'site restart stop' );
 	}
