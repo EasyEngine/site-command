@@ -2,6 +2,13 @@
 
 declare( ticks=1 );
 
+namespace EE\Site\Type;
+
+use \EE\Model\Site;
+use \Symfony\Component\Filesystem\Filesystem;
+use function \EE\Site\Utils\auto_site_name;
+use function \EE\Site\Utils\get_site_info;
+
 /**
  * Creates a simple html Website.
  *
@@ -12,19 +19,12 @@ declare( ticks=1 );
  *
  * @package ee-cli
  */
-
-namespace EE\Site\Type;
-
-use \EE\Model\Site;
-
-use \Symfony\Component\Filesystem\Filesystem;
-
 class HTML extends EE_Site_Command {
 
 	/**
-	 * @var array $site Associative array containing essential site related information.
+	 * @var array $site_data Associative array containing essential site related information.
 	 */
-	private $site;
+	private $site_data;
 
 	/**
 	 * @var object $docker Object to access `\EE::docker()` functions.
@@ -42,19 +42,9 @@ class HTML extends EE_Site_Command {
 	private $logger;
 
 	/**
-	 * @var bool $ssl Whether the site is has SSL enabled.
+	 * @var bool $skip_status_check To skip site status check pre-installation.
 	 */
-	private $ssl;
-
-	/**
-	 * @var bool $ssl_wildcard Whether the site SSL is wildcard.
-	 */
-	private $ssl_wildcard;
-
-	/**
-	 * @var bool $skip_chk To skip site status check pre-installation.
-	 */
-	private $skip_chk;
+	private $skip_status_check;
 
 	/**
 	 * @var Filesystem $fs Symfony Filesystem object.
@@ -95,19 +85,18 @@ class HTML extends EE_Site_Command {
 		\EE::warning( 'This is a beta version. Please don\'t use it in production.' );
 		$this->logger->debug( 'args:', $args );
 		$this->logger->debug( 'assoc_args:', empty( $assoc_args ) ? [ 'NULL' ] : $assoc_args );
-		$this->site['url']  = strtolower( \EE\Utils\remove_trailing_slash( $args[0] ) );
-		$this->site['type'] = \EE\Utils\get_flag_value( $assoc_args, 'type', 'html' );
-		if ( 'html' !== $this->site['type'] ) {
-			\EE::error( sprintf( 'Invalid site-type: %s', $this->site['type'] ) );
+		$this->site_data['site_url']  = strtolower( \EE\Utils\remove_trailing_slash( $args[0] ) );
+		$this->site_data['site_type'] = \EE\Utils\get_flag_value( $assoc_args, 'type', 'html' );
+		if ( 'html' !== $this->site_data['site_type'] ) {
+			\EE::error( sprintf( 'Invalid site-type: %s', $this->site_data['site_type'] ) );
+		}
+		if ( Site::find( $this->site_data['site_url'] ) ) {
+			\EE::error( sprintf( "Site %1\$s already exists. If you want to re-create it please delete the older one using:\n`ee site delete %1\$s`", $this->site_data['site_url'] ) );
 		}
 
-		if ( Site::find( $this->site['url'] ) ) {
-			\EE::error( sprintf( "Site %1\$s already exists. If you want to re-create it please delete the older one using:\n`ee site delete %1\$s`", $this->site['url'] ) );
-		}
-
-		$this->ssl          = \EE\Utils\get_flag_value( $assoc_args, 'ssl' );
-		$this->ssl_wildcard = \EE\Utils\get_flag_value( $assoc_args, 'wildcard' );
-		$this->skip_chk     = \EE\Utils\get_flag_value( $assoc_args, 'skip-status-check' );
+		$this->site_data['site_ssl']          = \EE\Utils\get_flag_value( $assoc_args, 'ssl' );
+		$this->site_data['site_ssl_wildcard'] = \EE\Utils\get_flag_value( $assoc_args, 'wildcard' );
+		$this->skip_status_check              = \EE\Utils\get_flag_value( $assoc_args, 'skip-status-check' );
 
 		\EE\Site\Utils\init_checks();
 
@@ -126,20 +115,20 @@ class HTML extends EE_Site_Command {
 	public function info( $args, $assoc_args ) {
 
 		\EE\Utils\delem_log( 'site info start' );
-		if ( ! isset( $this->site['url'] ) ) {
-			$args = \EE\Site\Utils\auto_site_name( $args, 'site', __FUNCTION__ );
-			$this->populate_site_info( $args );
+		if ( ! isset( $this->site_data['site_url'] ) ) {
+			$args            = auto_site_name( $args, 'site', __FUNCTION__ );
+			$this->site_data = get_site_info( $args, false );
 		}
-		$ssl    = $this->ssl ? 'Enabled' : 'Not Enabled';
-		$prefix = ( $this->ssl ) ? 'https://' : 'http://';
+		$ssl    = $this->site_data['site_ssl'] ? 'Enabled' : 'Not Enabled';
+		$prefix = ( $this->site_data['site_ssl'] ) ? 'https://' : 'http://';
 		$info   = [
-			[ 'Site', $prefix . $this->site['url'] ],
-			[ 'Site Root', $this->site['root'] ],
+			[ 'Site', $prefix . $this->site_data['site_url'] ],
+			[ 'Site Root', $this->site_data['site_fs_path'] ],
 			[ 'SSL', $ssl ],
 		];
 
-		if ( $this->ssl ) {
-			$info[] = [ 'SSL Wildcard', $this->ssl_wildcard ? 'Yes' : 'No' ];
+		if ( $this->site_data['site_ssl'] ) {
+			$info[] = [ 'SSL Wildcard', $this->site_data['site_ssl_wildcard'] ? 'Yes' : 'No' ];
 		}
 
 		\EE\Utils\format_table( $info );
@@ -153,24 +142,24 @@ class HTML extends EE_Site_Command {
 	 */
 	private function configure_site_files() {
 
-		$site_conf_dir           = $this->site['root'] . '/config';
-		$site_docker_yml         = $this->site['root'] . '/docker-compose.yml';
-		$site_conf_env           = $this->site['root'] . '/.env';
+		$site_conf_dir           = $this->site_data['site_fs_path'] . '/config';
+		$site_docker_yml         = $this->site_data['site_fs_path'] . '/docker-compose.yml';
+		$site_conf_env           = $this->site_data['site_fs_path'] . '/.env';
 		$site_nginx_default_conf = $site_conf_dir . '/nginx/default.conf';
-		$site_src_dir            = $this->site['root'] . '/app/src';
+		$site_src_dir            = $this->site_data['site_fs_path'] . '/app/src';
 		$process_user            = posix_getpwuid( posix_geteuid() );
 
-		\EE::log( sprintf( 'Creating site %s.', $this->site['url'] ) );
+		\EE::log( sprintf( 'Creating site %s.', $this->site_data['site_url'] ) );
 		\EE::log( 'Copying configuration files.' );
 
 		$filter                 = [];
-		$filter[]               = $this->site['type'];
+		$filter[]               = $this->site_data['site_type'];
 		$site_docker            = new Site_HTML_Docker();
 		$docker_compose_content = $site_docker->generate_docker_compose_yml( $filter );
-		$default_conf_content   = $default_conf_content = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx/default.conf.mustache', [ 'server_name' => $this->site['url'] ] );
+		$default_conf_content   = $default_conf_content = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx/default.conf.mustache', [ 'server_name' => $this->site_data['site_url'] ] );
 
 		$env_data    = [
-			'virtual_host' => $this->site['url'],
+			'virtual_host' => $this->site_data['site_url'],
 			'user_id'      => $process_user['uid'],
 			'group_id'     => $process_user['gid'],
 		];
@@ -185,7 +174,7 @@ class HTML extends EE_Site_Command {
 
 			$index_data = [
 				'version'       => 'v' . EE_VERSION,
-				'site_src_root' => $this->site['root'] . '/app/src',
+				'site_src_root' => $this->site_data['site_fs_path'] . '/app/src',
 			];
 			$index_html = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/index.html.mustache', $index_data );
 			$this->fs->mkdir( $site_src_dir );
@@ -202,19 +191,19 @@ class HTML extends EE_Site_Command {
 	 */
 	private function create_site() {
 
-		$this->site['root'] = WEBROOT . $this->site['url'];
-		$this->level        = 1;
+		$this->site_data['site_fs_path'] = WEBROOT . $this->site_data['site_url'];
+		$this->level                     = 1;
 		try {
-			\EE\Site\Utils\create_site_root( $this->site['root'], $this->site['url'] );
+			\EE\Site\Utils\create_site_root( $this->site_data['site_fs_path'], $this->site_data['site_url'] );
 			$this->level = 3;
 			$this->configure_site_files();
 
-			\EE\Site\Utils\start_site_containers( $this->site['root'] );
+			\EE\Site\Utils\start_site_containers( $this->site_data['site_fs_path'] );
 
-			\EE\Site\Utils\create_etc_hosts_entry( $this->site['url'] );
-			if ( ! $this->skip_chk ) {
+			\EE\Site\Utils\create_etc_hosts_entry( $this->site_data['site_url'] );
+			if ( ! $this->skip_status_check ) {
 				$this->level = 4;
-				\EE\Site\Utils\site_status_check( $this->site['url'] );
+				\EE\Site\Utils\site_status_check( $this->site_data['site_url'] );
 			}
 
 			/*
@@ -227,19 +216,19 @@ class HTML extends EE_Site_Command {
 			 * We add redirection config two times in case of ssl as we need http redirection
 			 * when certs are being requested and http+https redirection after we have certs.
 			 */
-			\EE\Site\Utils\add_site_redirects( $this->site['url'], false, 'inherit' === $this->ssl );
+			\EE\Site\Utils\add_site_redirects( $this->site_data['site_url'], false, 'inherit' === $this->site_data['site_ssl'] );
 			\EE\Site\Utils\reload_proxy_configuration();
 
-			if ( $this->ssl ) {
-				$this->init_ssl( $this->site['url'], $this->site['root'], $this->ssl, $this->ssl_wildcard );
-				\EE\Site\Utils\add_site_redirects( $this->site['url'], true, 'inherit' === $this->ssl );
+			if ( $this->site_data['site_ssl'] ) {
+				$this->init_ssl( $this->site_data['site_url'], $this->site_data['site_fs_path'], $this->site_data['site_ssl'], $this->site_data['site_ssl_wildcard'] );
+				\EE\Site\Utils\add_site_redirects( $this->site_data['site_url'], true, 'inherit' === $this->site_data['site_ssl'] );
 				\EE\Site\Utils\reload_proxy_configuration();
 			}
 		} catch ( \Exception $e ) {
 			$this->catch_clean( $e );
 		}
 
-		$this->info( [ $this->site['url'] ], [] );
+		$this->info( [ $this->site_data['site_url'] ], [] );
 		$this->create_site_db_entry();
 	}
 
@@ -248,13 +237,13 @@ class HTML extends EE_Site_Command {
 	 */
 	private function create_site_db_entry() {
 
-		$ssl          = $this->ssl ? 1 : 0;
-		$ssl_wildcard = $this->ssl_wildcard ? 1 : 0;
+		$ssl          = $this->site_data['site_ssl'] ? 1 : 0;
+		$ssl_wildcard = $this->site_data['site_ssl_wildcard'] ? 1 : 0;
 
 		$site = Site::create( [
-			'site_url'          => $this->site['url'],
-			'site_type'         => $this->site['type'],
-			'site_fs_path'      => $this->site['root'],
+			'site_url'          => $this->site_data['site_url'],
+			'site_type'         => $this->site_data['site_type'],
+			'site_fs_path'      => $this->site_data['site_fs_path'],
 			'site_ssl'          => $ssl,
 			'site_ssl_wildcard' => $ssl_wildcard,
 			'created_on'        => date( 'Y-m-d H:i:s', time() ),
@@ -268,25 +257,6 @@ class HTML extends EE_Site_Command {
 			}
 		} catch ( \Exception $e ) {
 			$this->catch_clean( $e );
-		}
-	}
-
-	/**
-	 * Populate basic site info from db.
-	 */
-	private function populate_site_info( $args ) {
-
-		$this->site['url'] = \EE\Utils\remove_trailing_slash( $args[0] );
-
-		$site = Site::find( $this->site['url'] );
-
-		if ( $site ) {
-			$this->site['type'] = $site->site_type;
-			$this->site['root'] = $site->site_fs_path;
-			$this->ssl          = $site->site_ssl;
-			$this->ssl_wildcard = $site->site_ssl_wildcard;
-		} else {
-			\EE::error( sprintf( 'Site %s does not exist.', $this->site['url'] ) );
 		}
 	}
 
@@ -316,7 +286,7 @@ class HTML extends EE_Site_Command {
 		\EE\Utils\delem_log( 'site cleanup start' );
 		\EE::warning( $e->getMessage() );
 		\EE::warning( 'Initiating clean-up.' );
-		$this->delete_site( $this->level, $this->site['url'], $this->site['root'] );
+		$this->delete_site( $this->level, $this->site_data['site_url'], $this->site_data['site_fs_path'] );
 		\EE\Utils\delem_log( 'site cleanup end' );
 		exit;
 	}
@@ -328,7 +298,7 @@ class HTML extends EE_Site_Command {
 
 		\EE::warning( 'Exiting gracefully after rolling back. This may take some time.' );
 		if ( $this->level > 0 ) {
-			$this->delete_site( $this->level, $this->site['url'], $this->site['root'] );
+			$this->delete_site( $this->level, $this->site_data['site_url'], $this->site_data['site_fs_path'] );
 		}
 		\EE::success( 'Rollback complete. Exiting now.' );
 		exit;
