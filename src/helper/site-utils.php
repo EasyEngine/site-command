@@ -283,15 +283,22 @@ function site_status_check( $site_url ) {
 	EE::log( 'Checking and verifying site-up status. This may take some time.' );
 	$httpcode = get_curl_info( $site_url );
 	$i        = 0;
+	$auth     = false;
 	while ( 200 !== $httpcode && 302 !== $httpcode && 301 !== $httpcode ) {
 		EE::debug( "$site_url status httpcode: $httpcode" );
-		$httpcode = get_curl_info( $site_url );
+		if ( 401 === $httpcode ) {
+			$user_pass = get_global_auth();
+			$auth      = $user_pass['username'] . ':' . $user_pass['password'];
+		}
+		$httpcode = get_curl_info( $site_url, 80, false, $auth );
 		echo '.';
 		sleep( 2 );
 		if ( $i ++ > 60 ) {
 			break;
 		}
 	}
+	EE::debug( "$site_url status httpcode: $httpcode" );
+	echo PHP_EOL;
 	if ( 200 !== $httpcode && 302 !== $httpcode && 301 !== $httpcode ) {
 		throw new \Exception( 'Problem connecting to site!' );
 	}
@@ -304,10 +311,11 @@ function site_status_check( $site_url ) {
  * @param string $url     url to get info about.
  * @param int $port       The port to check.
  * @param bool $port_info Return port info or httpcode.
+ * @param mixed $auth     Send http auth with passed value if not false.
  *
  * @return bool|int port occupied or httpcode.
  */
-function get_curl_info( $url, $port = 80, $port_info = false ) {
+function get_curl_info( $url, $port = 80, $port_info = false, $auth = false ) {
 
 	$ch = curl_init( $url );
 	curl_setopt( $ch, CURLOPT_HEADER, true );
@@ -315,6 +323,9 @@ function get_curl_info( $url, $port = 80, $port_info = false ) {
 	curl_setopt( $ch, CURLOPT_NOBODY, true );
 	curl_setopt( $ch, CURLOPT_TIMEOUT, 10 );
 	curl_setopt( $ch, CURLOPT_PORT, $port );
+	if ( $auth ) {
+		curl_setopt( $ch, CURLOPT_USERPWD, $auth );
+	}
 	curl_exec( $ch );
 	if ( $port_info ) {
 		return empty( curl_getinfo( $ch, CURLINFO_PRIMARY_IP ) );
@@ -404,4 +415,28 @@ function configure_postfix( $site_url, $site_fs_path ) {
  */
 function reload_global_nginx_proxy() {
 	\EE::launch( sprintf( 'docker exec %s sh -c "/app/docker-entrypoint.sh /usr/local/bin/docker-gen /app/nginx.tmpl /etc/nginx/conf.d/default.conf; /usr/sbin/nginx -s reload"', EE_PROXY_TYPE ) );
+}
+
+/**
+ * Get global auth if it exists.
+ */
+function get_global_auth() {
+	if ( ! class_exists( '\EE\Model\Auth' ) ) {
+		return false;
+	}
+
+	$auth = \EE\Model\Auth::where( [
+		'site_url' => 'default',
+		'scope'    => 'site',
+	] );
+
+	if ( empty( $auth ) ) {
+		return false;
+	}
+
+	return [
+		'username' => $auth[0]->username,
+		'password' => $auth[0]->password,
+	];
+
 }
