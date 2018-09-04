@@ -12,16 +12,17 @@ use \Symfony\Component\Filesystem\Filesystem;
  * @return bool|String Name of the site or false in failure.
  */
 function get_site_name() {
+
 	$sites = Site::all( [ 'site_url' ] );
 
 	if ( ! empty( $sites ) ) {
 		$cwd          = getcwd();
 		$name_in_path = explode( '/', $cwd );
 
-		$site_name = array_intersect( array_column( $sites, 'site_url' ), $name_in_path );
+		$site_url = array_intersect( array_column( $sites, 'site_url' ), $name_in_path );
 
-		if ( 1 === count( $site_name ) ) {
-			$name = reset( $site_name );
+		if ( 1 === count( $site_url ) ) {
+			$name = reset( $site_url );
 			$path = Site::find( $name );
 			if ( $path ) {
 				$site_path = $path->site_fs_path;
@@ -58,17 +59,45 @@ function auto_site_name( $args, $command, $function, $arg_pos = 0 ) {
 			return $args;
 		}
 	}
-	$site_name = get_site_name();
-	if ( $site_name ) {
+	$site_url = get_site_name();
+	if ( $site_url ) {
 		if ( isset( $args[ $arg_pos ] ) ) {
-			EE::error( $args[ $arg_pos ] . " is not a valid site-name. Did you mean `ee $command $function $site_name`?" );
+			EE::error( $args[ $arg_pos ] . " is not a valid site-name. Did you mean `ee $command $function $site_url`?" );
 		}
-		array_splice( $args, $arg_pos, 0, $site_name );
+		array_splice( $args, $arg_pos, 0, $site_url );
 	} else {
 		EE::error( "Could not find the site you wish to run $command $function command on.\nEither pass it as an argument: `ee $command $function <site-name>` \nor run `ee $command $function` from inside the site folder." );
 	}
 
 	return $args;
+}
+
+/**
+ * Populate basic site info from db.
+ *
+ * @param bool $site_enabled_check Check if site is enabled. Throw error message if not enabled.
+ * @param bool $exit_if_not_found  Check if site exists. Throw error message if not.
+ * @param bool $return_array       Return array of data or object.
+ *
+ * @return mixed $site_data Site data from db.
+ */
+function get_site_info( $args, $site_enabled_check = true, $exit_if_not_found = true, $return_array = true ) {
+
+	$site_url   = \EE\Utils\remove_trailing_slash( $args[0] );
+	$data       = Site::find( $site_url );
+	$array_data = ( array ) $data;
+	$site_data  = $return_array ? reset( $array_data ) : $data;
+
+
+	if ( ! $data->site_enabled && $site_enabled_check ) {
+		\EE::error( sprintf( 'Site %1$s is not enabled. Use `ee site up %1$s` to enable it.', $data->site_url ) );
+	}
+
+	if ( ! $data && $exit_if_not_found ) {
+		\EE::error( sprintf( 'Site %s does not exist.', $data->site_url ) );
+	}
+
+	return $site_data;
 }
 
 
@@ -159,21 +188,21 @@ function generate_global_docker_compose_yml( Filesystem $fs ) {
  * Creates site root directory if does not exist.
  * Throws error if it does exist.
  *
- * @param string $site_root Root directory of the site.
- * @param string $site_name Name of the site.
+ * @param string $site_fs_path Root directory of the site.
+ * @param string $site_url     Name of the site.
  */
-function create_site_root( $site_root, $site_name ) {
+function create_site_root( $site_fs_path, $site_url ) {
 
 	$fs = new Filesystem();
-	if ( $fs->exists( $site_root ) ) {
-		EE::error( "Webroot directory for site $site_name already exists." );
+	if ( $fs->exists( $site_fs_path ) ) {
+		EE::error( "Webroot directory for site $site_url already exists." );
 	}
 
 	$whoami            = EE::launch( 'whoami', false, true );
 	$terminal_username = rtrim( $whoami->stdout );
 
-	$fs->mkdir( $site_root );
-	$fs->chown( $site_root, $terminal_username );
+	$fs->mkdir( $site_fs_path );
+	$fs->chown( $site_fs_path, $terminal_username );
 }
 
 /**
@@ -188,30 +217,30 @@ function reload_proxy_configuration() {
 /**
  * Adds www to non-www redirection to site
  *
- * @param string $site_name name of the site.
- * @param bool $ssl         enable ssl or not.
- * @param bool $inherit     inherit cert or not.
+ * @param string $site_url name of the site.
+ * @param bool $ssl        enable ssl or not.
+ * @param bool $inherit    inherit cert or not.
  */
-function add_site_redirects( string $site_name, bool $ssl, bool $inherit ) {
+function add_site_redirects( string $site_url, bool $ssl, bool $inherit ) {
 
 	$fs               = new Filesystem();
 	$confd_path       = EE_CONF_ROOT . '/nginx/conf.d/';
-	$config_file_path = $confd_path . $site_name . '-redirect.conf';
-	$has_www          = strpos( $site_name, 'www.' ) === 0;
-	$cert_site_name   = $site_name;
+	$config_file_path = $confd_path . $site_url . '-redirect.conf';
+	$has_www          = strpos( $site_url, 'www.' ) === 0;
+	$cert_site_name   = $site_url;
 
 	if ( $inherit ) {
-		$cert_site_name = implode( '.', array_slice( explode( '.', $site_name ), 1 ) );
+		$cert_site_name = implode( '.', array_slice( explode( '.', $site_url ), 1 ) );
 	}
 
 	if ( $has_www ) {
-		$server_name = ltrim( $site_name, '.www' );
+		$server_name = ltrim( $site_url, '.www' );
 	} else {
-		$server_name = 'www.' . $site_name;
+		$server_name = 'www.' . $site_url;
 	}
 
 	$conf_data = [
-		'site_name'      => $site_name,
+		'site_name'      => $site_url,
 		'cert_site_name' => $cert_site_name,
 		'server_name'    => $server_name,
 		'ssl'            => $ssl,
@@ -224,17 +253,17 @@ function add_site_redirects( string $site_name, bool $ssl, bool $inherit ) {
 /**
  * Function to create entry in /etc/hosts.
  *
- * @param string $site_name Name of the site.
+ * @param string $site_url Name of the site.
  */
-function create_etc_hosts_entry( $site_name ) {
+function create_etc_hosts_entry( $site_url ) {
 
-	$host_line = LOCALHOST_IP . "\t$site_name";
+	$host_line = LOCALHOST_IP . "\t$site_url";
 	$etc_hosts = file_get_contents( '/etc/hosts' );
-	if ( ! preg_match( "/\s+$site_name\$/m", $etc_hosts ) ) {
+	if ( ! preg_match( "/\s+$site_url\$/m", $etc_hosts ) ) {
 		if ( EE::exec( "/bin/bash -c 'echo \"$host_line\" >> /etc/hosts'" ) ) {
 			EE::success( 'Host entry successfully added.' );
 		} else {
-			EE::warning( "Failed to add $site_name in host entry, Please do it manually!" );
+			EE::warning( "Failed to add $site_url in host entry, Please do it manually!" );
 		}
 	} else {
 		EE::log( 'Host entry already exists.' );
@@ -245,18 +274,18 @@ function create_etc_hosts_entry( $site_name ) {
 /**
  * Checking site is running or not.
  *
- * @param string $site_name Name of the site.
+ * @param string $site_url Name of the site.
  *
  * @throws \Exception when fails to connect to site.
  */
-function site_status_check( $site_name ) {
+function site_status_check( $site_url ) {
 
 	EE::log( 'Checking and verifying site-up status. This may take some time.' );
-	$httpcode = get_curl_info( $site_name );
+	$httpcode = get_curl_info( $site_url );
 	$i        = 0;
 	while ( 200 !== $httpcode && 302 !== $httpcode && 301 !== $httpcode ) {
-		EE::debug( "$site_name status httpcode: $httpcode" );
-		$httpcode = get_curl_info( $site_name );
+		EE::debug( "$site_url status httpcode: $httpcode" );
+		$httpcode = get_curl_info( $site_url );
 		echo '.';
 		sleep( 2 );
 		if ( $i ++ > 60 ) {
@@ -297,19 +326,19 @@ function get_curl_info( $url, $port = 80, $port_info = false ) {
 /**
  * Function to pull the latest images and bring up the site containers.
  *
- * @param string $site_root Root directory of the site.
- * @param array $containers The minimum required conatainers to start the site. Default null, leads to starting of all
- *                          containers.
+ * @param string $site_fs_path Root directory of the site.
+ * @param array $containers    The minimum required conatainers to start the site. Default null, leads to starting of
+ *                             all containers.
  *
  * @throws \Exception when docker-compose up fails.
  */
-function start_site_containers( $site_root, $containers = [] ) {
+function start_site_containers( $site_fs_path, $containers = [] ) {
 
 	EE::log( 'Pulling latest images. This may take some time.' );
-	chdir( $site_root );
+	chdir( $site_fs_path );
 	EE::exec( 'docker-compose pull' );
 	EE::log( 'Starting site\'s services.' );
-	if ( ! EE::docker()::docker_compose_up( $site_root, $containers ) ) {
+	if ( ! EE::docker()::docker_compose_up( $site_fs_path, $containers ) ) {
 		throw new \Exception( 'There was some error in docker-compose up.' );
 	}
 }
@@ -335,17 +364,17 @@ function run_compose_command( $action, $container, $action_to_display = null, $s
 /**
  * Function to copy and configure files needed for postfix.
  *
- * @param string $site_name     Name of the site to configure postfix files for.
+ * @param string $site_url      Name of the site to configure postfix files for.
  * @param string $site_conf_dir Configuration directory of the site `site_root/config`.
  */
-function set_postfix_files( $site_name, $site_conf_dir ) {
+function set_postfix_files( $site_url, $site_conf_dir ) {
 
 	$fs = new Filesystem();
 	$fs->mkdir( $site_conf_dir . '/postfix' );
 	$fs->mkdir( $site_conf_dir . '/postfix/ssl' );
 	$ssl_dir = $site_conf_dir . '/postfix/ssl';
 
-	if ( ! EE::exec( sprintf( "openssl req -new -x509 -nodes -days 365 -subj \"/CN=smtp.%s\" -out $ssl_dir/server.crt -keyout $ssl_dir/server.key", $site_name ) )
+	if ( ! EE::exec( sprintf( "openssl req -new -x509 -nodes -days 365 -subj \"/CN=smtp.%s\" -out $ssl_dir/server.crt -keyout $ssl_dir/server.key", $site_url ) )
 	     && EE::exec( "chmod 0600 $ssl_dir/server.key" ) ) {
 		throw new Exception( 'Unable to generate ssl key for postfix' );
 	}
@@ -354,18 +383,25 @@ function set_postfix_files( $site_name, $site_conf_dir ) {
 /**
  * Function to execute docker-compose exec calls to postfix to get it configured and running for the site.
  *
- * @param string $site_name Name of the for which postfix has to be configured.
- * @param strin $site_root  Site root.
+ * @param string $site_url     Name of the for which postfix has to be configured.
+ * @param string $site_fs_path Site root.
  */
-function configure_postfix( $site_name, $site_root ) {
+function configure_postfix( $site_url, $site_fs_path ) {
 
-	chdir( $site_root );
+	chdir( $site_fs_path );
 	EE::exec( 'docker-compose exec postfix postconf -e \'relayhost =\'' );
 	EE::exec( 'docker-compose exec postfix postconf -e \'smtpd_recipient_restrictions = permit_mynetworks\'' );
-	$launch      = EE::launch( sprintf( 'docker inspect -f \'{{ with (index .IPAM.Config 0) }}{{ .Subnet }}{{ end }}\' %s', $site_name ) );
+	$launch      = EE::launch( sprintf( 'docker inspect -f \'{{ with (index .IPAM.Config 0) }}{{ .Subnet }}{{ end }}\' %s', $site_url ) );
 	$subnet_cidr = trim( $launch->stdout );
 	EE::exec( sprintf( 'docker-compose exec postfix postconf -e \'mynetworks = %s 127.0.0.0/8\'', $subnet_cidr ) );
-	EE::exec( sprintf( 'docker-compose exec postfix postconf -e \'myhostname = %s\'', $site_name ) );
+	EE::exec( sprintf( 'docker-compose exec postfix postconf -e \'myhostname = %s\'', $site_url ) );
 	EE::exec( 'docker-compose exec postfix postconf -e \'syslog_name = $myhostname\'' );
 	EE::exec( 'docker-compose restart postfix' );
+}
+
+/**
+ * Reload the global nginx proxy.
+ */
+function reload_global_nginx_proxy() {
+	\EE::launch( sprintf( 'docker exec %s sh -c "/app/docker-entrypoint.sh /usr/local/bin/docker-gen /app/nginx.tmpl /etc/nginx/conf.d/default.conf; /usr/sbin/nginx -s reload"', EE_PROXY_TYPE ) );
 }
