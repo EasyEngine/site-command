@@ -183,7 +183,7 @@ class Site_Letsencrypt {
 
 				$fs = new \Symfony\Component\Filesystem\Filesystem();
 				$fs->copy( SITE_TEMPLATE_ROOT . '/vhost.d_default_letsencrypt.mustache', EE_CONF_ROOT . '/nginx/vhost.d/default' );
-				$challange_dir = EE_CONF_ROOT . '/nginx/html';
+				$challange_dir = EE_CONF_ROOT . '/nginx/html/.well-known/acme-challenge';
 				if ( ! $fs->exists( $challange_dir ) ) {
 					$fs->mkdir( $challange_dir );
 				}
@@ -548,18 +548,13 @@ class Site_Letsencrypt {
 
 		$fs = new \Symfony\Component\Filesystem\Filesystem();
 
-		$challange_dir       = EE_CONF_ROOT . '/nginx/html/';
+		$challange_dir = EE_CONF_ROOT . '/nginx/html/.well-known';
 		$challange_rule_file = EE_CONF_ROOT . '/nginx/vhost.d/default';
-		if ( $fs->exsits( $challange_rule_file ) ) {
+		if ( $fs->exists( $challange_rule_file ) ) {
 			$fs->remove( $challange_rule_file );
 		}
-		$files = scandir( $challange_dir );
-		if ( empty( $files ) ) {
-			return;
-		}
-		$challange_files = array_slice( $files, 2 );
-		foreach ( $challange_files as $challange_file ) {
-			$fs->remove( $challange_dir . $challange_file );
+		if ( $fs->exists( $challange_dir ) ) {
+			$fs->remove( $challange_dir );
 		}
 	}
 }
