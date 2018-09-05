@@ -49,6 +49,12 @@ services:
 networks:
   site-network:
     name: ${VIRTUAL_HOST}
+    {{#networks_labels}}
+    labels:
+    {{#label}}
+     - "{{name}}"
+    {{/label}}
+    {{/networks_labels}}
   global-network:
     external:
       name: ee-global-network
