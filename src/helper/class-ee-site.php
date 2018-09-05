@@ -422,7 +422,7 @@ abstract class EE_Site_Command {
 	 */
 	protected function init_le( $site_url, $site_fs_path, $wildcard = false ) {
 
-		\EE::debug( "Wildcard in init_le: $wildcard" );
+		\EE::debug( 'Wildcard in init_le: ' . ( bool ) $wildcard );
 
 		$this->site_data['site_url']          = $site_url;
 		$this->site_data['site_fs_path']      = $site_fs_path;
@@ -438,7 +438,7 @@ abstract class EE_Site_Command {
 
 		$domains = $this->get_cert_domains( $site_url, $wildcard );
 
-		if ( ! $client->authorize( $domains, $this->site_data['site_fs_path'], $wildcard ) ) {
+		if ( ! $client->authorize( $domains, $wildcard ) ) {
 			return;
 		}
 		if ( $wildcard ) {
@@ -523,7 +523,7 @@ abstract class EE_Site_Command {
 		$client->request( $this->site_data['site_url'], $san, $this->le_mail, $force );
 
 		if ( ! $this->site_data['site_ssl_wildcard'] ) {
-			$client->cleanup( $this->site_data['site_fs_path'] );
+			$client->cleanup();
 		}
 		reload_global_nginx_proxy();
 	}
