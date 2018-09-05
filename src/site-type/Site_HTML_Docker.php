@@ -62,7 +62,14 @@ class Site_HTML_Docker {
 
 		$binding = [
 			'services' => $base,
-			'network'  => true,
+			'network'  => [
+				'networks_labels' => [
+					'label' => [
+						[ 'name' => 'org.label-schema.vendor=EasyEngine' ],
+						[ 'name' => 'io.easyengine.site=${VIRTUAL_HOST}' ],
+					],
+				],
+			],
 		];
 
 		$docker_compose_yml = mustache_render( SITE_TEMPLATE_ROOT . '/docker-compose.mustache', $binding );
