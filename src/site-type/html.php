@@ -217,12 +217,12 @@ class HTML extends EE_Site_Command {
 			 * when certs are being requested and http+https redirection after we have certs.
 			 */
 			\EE\Site\Utils\add_site_redirects( $this->site_data['site_url'], false, 'inherit' === $this->site_data['site_ssl'] );
-			\EE\Site\Utils\reload_proxy_configuration();
+			\EE\Site\Utils\reload_global_nginx_proxy();
 
 			if ( $this->site_data['site_ssl'] ) {
 				$this->init_ssl( $this->site_data['site_url'], $this->site_data['site_fs_path'], $this->site_data['site_ssl'], $this->site_data['site_ssl_wildcard'] );
 				\EE\Site\Utils\add_site_redirects( $this->site_data['site_url'], true, 'inherit' === $this->site_data['site_ssl'] );
-				\EE\Site\Utils\reload_proxy_configuration();
+				\EE\Site\Utils\reload_global_nginx_proxy();
 			}
 		} catch ( \Exception $e ) {
 			$this->catch_clean( $e );
