@@ -165,17 +165,20 @@ class Site_Command {
 			}
 		}
 
-		// ee3 backward compatibility flags
-		$wp_compat_array_map = [
-			'user'  => 'admin-user',
-			'pass'  => 'admin-pass',
-			'email' => 'admin-email',
-		];
+		if ( ! empty( $assoc_args['type'] ) && 'wp' === $assoc_args['type'] ) {
 
-		foreach ( $wp_compat_array_map as $from => $to ) {
-			if ( isset( $assoc_args[ $from ] ) ) {
-				$assoc_args[ $to ] = $assoc_args[ $from ];
-				unset( $assoc_args[ $from ] );
+			// ee3 backward compatibility flags
+			$wp_compat_array_map = [
+				'user'  => 'admin-user',
+				'pass'  => 'admin-pass',
+				'email' => 'admin-email',
+			];
+
+			foreach ( $wp_compat_array_map as $from => $to ) {
+				if ( isset( $assoc_args[ $from ] ) ) {
+					$assoc_args[ $to ] = $assoc_args[ $from ];
+					unset( $assoc_args[ $from ] );
+				}
 			}
 		}
 
