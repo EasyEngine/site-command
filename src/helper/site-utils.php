@@ -206,15 +206,6 @@ function create_site_root( $site_fs_path, $site_url ) {
 }
 
 /**
- * Reloads configuration of global-proxy container
- *
- * @return bool
- */
-function reload_proxy_configuration() {
-	return EE::exec( sprintf( 'docker exec %s sh -c "/app/docker-entrypoint.sh /usr/local/bin/docker-gen /app/nginx.tmpl /etc/nginx/conf.d/default.conf; /usr/sbin/nginx -s reload"', EE_PROXY_TYPE ) );
-}
-
-/**
  * Adds www to non-www redirection to site
  *
  * @param string $site_url name of the site.
