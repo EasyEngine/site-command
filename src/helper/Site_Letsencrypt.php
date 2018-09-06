@@ -34,6 +34,7 @@ use League\Flysystem\Filesystem;
 use League\Flysystem\Adapter\Local;
 use League\Flysystem\Adapter\NullAdapter;
 use GuzzleHttp\Client;
+use function \EE\Site\Utils\reload_global_nginx_proxy;
 
 
 class Site_Letsencrypt {
@@ -109,13 +110,19 @@ class Site_Letsencrypt {
 		);
 	}
 
-
+	/**
+	 * Function to register mail to letsencrypt.
+	 *
+	 * @param string $email Mail id to be registered.
+	 *
+	 * @return bool Success.
+	 */
 	public function register( $email ) {
 		try {
 			$this->client->registerAccount( null, $email );
 		} catch ( \Exception $e ) {
 			\EE::warning( $e->getMessage() );
-			\EE::warning( 'It seems you\'re in local environment or there is some issue with network, please check logs. Skipping letsencrypt.' );
+			\EE::warning( 'It seems you\'re in local environment or used invalid email or there is some issue with network, please check logs. Skipping letsencrypt.' );
 
 			return false;
 		}
@@ -124,7 +131,15 @@ class Site_Letsencrypt {
 		return true;
 	}
 
-	public function authorize( Array $domains, $site_root, $wildcard = false ) {
+	/**
+	 * Function to authorize the letsencrypt request and get the token for challenge.
+	 *
+	 * @param array $domains Domains to be authorized.
+	 * @param bool $wildcard Is the authorization for wildcard or not.
+	 *
+	 * @return bool Success.
+	 */
+	public function authorize( Array $domains, $wildcard = false ) {
 		$solver     = $wildcard ? new SimpleDnsSolver( null, new ConsoleOutput() ) : new SimpleHttpSolver();
 		$solverName = $wildcard ? 'dns-01' : 'http-01';
 		try {
@@ -165,10 +180,17 @@ class Site_Letsencrypt {
 			if ( ! $wildcard ) {
 				$token   = $authorizationChallenge->toArray()['token'];
 				$payload = $authorizationChallenge->toArray()['payload'];
-				\EE::launch( "mkdir -p $site_root/app/src/.well-known/acme-challenge/" );
-				\EE::debug( "Creating challange file $site_root/app/src/.well-known/acme-challenge/$token" );
-				file_put_contents( "$site_root/app/src/.well-known/acme-challenge/$token", $payload );
-				\EE::launch( "chown www-data: $site_root/app/src/.well-known/acme-challenge/$token" );
+
+				$fs = new \Symfony\Component\Filesystem\Filesystem();
+				$fs->copy( SITE_TEMPLATE_ROOT . '/vhost.d_default_letsencrypt.mustache', EE_CONF_ROOT . '/nginx/vhost.d/default' );
+				$challange_dir = EE_CONF_ROOT . '/nginx/html/.well-known/acme-challenge';
+				if ( ! $fs->exists( $challange_dir ) ) {
+					$fs->mkdir( $challange_dir );
+				}
+				$challange_file = $challange_dir . '/' . $token;
+				\EE::debug( 'Creating challange file ' . $challange_file );
+				$fs->dumpFile( $challange_file, $payload );
+				reload_global_nginx_proxy();
 			}
 		}
 
@@ -519,11 +541,20 @@ class Site_Letsencrypt {
 		$table->render();
 	}
 
-	public function cleanup( $site_root ) {
-		$challange_dir = "$site_root/app/src/.well-known";
-		if ( file_exists( "$site_root/app/src/.well-known" ) ) {
-			\EE::debug( 'Cleaning up webroot files.' );
-			\EE\Utils\delete_dir( $challange_dir );
+	/**
+	 * Cleanup created challenge files and specific rule sets for it.
+	 */
+	public function cleanup() {
+
+		$fs = new \Symfony\Component\Filesystem\Filesystem();
+
+		$challange_dir = EE_CONF_ROOT . '/nginx/html/.well-known';
+		$challange_rule_file = EE_CONF_ROOT . '/nginx/vhost.d/default';
+		if ( $fs->exists( $challange_rule_file ) ) {
+			$fs->remove( $challange_rule_file );
+		}
+		if ( $fs->exists( $challange_dir ) ) {
+			$fs->remove( $challange_dir );
 		}
 	}
 }
