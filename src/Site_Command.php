@@ -63,6 +63,7 @@ class Site_Command {
 	public function __invoke( $args, $assoc_args ) {
 
 		$site_types = self::get_site_types();
+		$assoc_args = $this->convert_old_args_to_new_args( $args, $assoc_args );
 
 		if ( isset( $assoc_args['type'] ) ) {
 			$type = $assoc_args['type'];
@@ -133,5 +134,69 @@ class Site_Command {
 		}
 
 		return $type;
+	}
+
+	/**
+	 * Convert EE v3 args to the newer syntax of arguments.
+	 *
+	 * @param array $args       Commandline arguments passed.
+	 * @param array $assoc_args Commandline associative arguments passed.
+	 *
+	 * @return array Updated $assoc_args.
+	 */
+	private function convert_old_args_to_new_args( $args, $assoc_args ) {
+
+		$ee3_compat_array_map_to_type = [
+			'wp'          => [ 'type' => 'wp' ],
+			'wpsubdom'    => [ 'type' => 'wp', 'mu' => 'subdom' ],
+			'wpsubdir'    => [ 'type' => 'wp', 'mu' => 'subdir' ],
+			'wpredis'     => [ 'type' => 'wp', 'cache' => true ],
+			'html'        => [ 'type' => 'html' ],
+			'php'         => [ 'type' => 'php' ],
+			'mysql'       => [ 'type' => 'php', 'with-db' => true ],
+			'le'          => [ 'ssl' => 'le' ],
+			'letsencrypt' => [ 'ssl' => 'le' ],
+		];
+
+		foreach ( $ee3_compat_array_map_to_type as $from => $to ) {
+			if ( isset( $assoc_args[ $from ] ) ) {
+				$assoc_args = array_merge( $assoc_args, $to );
+				unset( $assoc_args[ $from ] );
+			}
+		}
+
+		if ( ! empty( $assoc_args['type'] ) && 'wp' === $assoc_args['type'] ) {
+
+			// ee3 backward compatibility flags
+			$wp_compat_array_map = [
+				'user'  => 'admin-user',
+				'pass'  => 'admin-pass',
+				'email' => 'admin-email',
+			];
+
+			foreach ( $wp_compat_array_map as $from => $to ) {
+				if ( isset( $assoc_args[ $from ] ) ) {
+					$assoc_args[ $to ] = $assoc_args[ $from ];
+					unset( $assoc_args[ $from ] );
+				}
+			}
+		}
+
+		// backward compatibility error for deprecated flags.
+		$unsupported_create_old_args = array(
+			'w3tc',
+			'wpsc',
+			'wpfc',
+			'pagespeed',
+		);
+
+		$old_arg = array_intersect( $unsupported_create_old_args, array_keys( $assoc_args ) );
+
+		$old_args = implode( ' --', $old_arg );
+		if ( isset( $args[1] ) && 'create' === $args[1] && ! empty ( $old_arg ) ) {
+			\EE::error( "Sorry, --$old_args flag/s is/are no longer supported in EE v4.\nPlease run `ee help " . implode( ' ', $args ) . '`.' );
+		}
+
+		return $assoc_args;
 	}
 }
