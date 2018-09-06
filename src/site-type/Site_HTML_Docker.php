@@ -1,8 +1,10 @@
 <?php
 
+namespace EE\Site\Type;
+
 use function \EE\Utils\mustache_render;
 
-class Site_Docker {
+class Site_HTML_Docker {
 
 	/**
 	 * Generate docker-compose.yml according to requirement.
@@ -12,14 +14,19 @@ class Site_Docker {
 	 * @return String docker-compose.yml content string.
 	 */
 	public function generate_docker_compose_yml( array $filters = [] ) {
-		$base = [];
+		$img_versions = \EE\Utils\get_image_versions();
+		$base         = [];
 
 		$restart_default = [ 'name' => 'always' ];
-		$network_default = [ 'name' => 'site-network' ];
+		$network_default = [
+			'net' => [
+				[ 'name' => 'site-network' ]
+			]
+		];
 
 		// nginx configuration.
 		$nginx['service_name'] = [ 'name' => 'nginx' ];
-		$nginx['image']        = [ 'name' => 'easyengine/nginx:v' . EE_VERSION ];
+		$nginx['image']        = [ 'name' => 'easyengine/nginx:' . $img_versions['easyengine/nginx'] ];
 		$nginx['restart']      = $restart_default;
 
 		$v_host = 'VIRTUAL_HOST';
@@ -44,13 +51,25 @@ class Site_Docker {
 				'name' => 'io.easyengine.site=${VIRTUAL_HOST}',
 			],
 		];
-		$nginx['networks']    = $network_default;
+		$nginx['networks']    = [
+			'net' => [
+				[ 'name' => 'site-network' ],
+				[ 'name' => 'global-network' ],
+			]
+		];
 
 		$base[] = $nginx;
 
 		$binding = [
 			'services' => $base,
-			'network'  => true,
+			'network'  => [
+				'networks_labels' => [
+					'label' => [
+						[ 'name' => 'org.label-schema.vendor=EasyEngine' ],
+						[ 'name' => 'io.easyengine.site=${VIRTUAL_HOST}' ],
+					],
+				],
+			],
 		];
 
 		$docker_compose_yml = mustache_render( SITE_TEMPLATE_ROOT . '/docker-compose.mustache', $binding );

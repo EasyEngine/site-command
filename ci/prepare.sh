@@ -10,17 +10,21 @@ rm ee
 cd ..
 git clone https://github.com/EasyEngine/easyengine.git easyengine --depth=1
 cd easyengine
-echo 'travis_test' > VERSION
 
 # Copy tests to EE repo
 rm -r features
 cp -R ../$TEST_COMMAND/features .
 
+# Update repo branches
+if [[ "$TRAVIS_BRANCH" != "master" ]]; then
+    sed -i 's/\(easyengine\/.*\):\ \".*\"/\1:\ \"dev-develop\"/' composer.json
+fi
+
 # Install composer dependencies and update them for tests
 composer update
 
 # Place the command inside EE repo
-rm -r vendor/easyengine/$TEST_COMMAND
+sudo rm -rf vendor/easyengine/$TEST_COMMAND
 cp -R ../$TEST_COMMAND vendor/easyengine/
 
 # Create phar and test it

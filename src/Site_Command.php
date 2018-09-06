@@ -1,341 +1,202 @@
 <?php
 
-declare( ticks=1 );
+use EE\Dispatcher\CommandFactory;
+use EE\Model\Site;
 
-/**
- * Creates a simple html Website.
- *
- * ## EXAMPLES
- *
- *     # Create simple html site
- *     $ ee site create example.com
- *
- * @package ee-cli
- */
-
-use \Symfony\Component\Filesystem\Filesystem;
-
-class Site_Command extends EE_Site_Command {
+class Site_Command {
 
 	/**
-	 * @var string $command Name of the command being run.
+	 * @var array $site_types Array to hold all the registered site types and their callback classes.
 	 */
-	private $command;
+	protected static $site_types = [];
 
 	/**
-	 * @var array $site Associative array containing essential site related information.
+	 * @var Object $instance Hold an instance of the class.
 	 */
-	private $site;
+	private static $instance;
 
 	/**
-	 * @var object $docker Object to access `EE::docker()` functions.
+	 * The singleton method to hold the instance of site-command.
+	 *
+	 * @return Object|Site_Command
 	 */
-	private $docker;
+	public static function instance() {
 
-	/**
-	 * @var int $level The level of creation in progress. Essential for rollback in case of failure.
-	 */
-	private $level;
+		if ( ! isset( self::$instance ) ) {
+			self::$instance = new Site_Command();
+		}
 
-	/**
-	 * @var object $logger Object of logger.
-	 */
-	private $logger;
-
-	/**
-	 * @var bool $le Whether the site is letsencrypt or not.
-	 */
-	private $le;
-
-	/**
-	 * @var bool $skip_chk To skip site status check pre-installation.
-	 */
-	private $skip_chk;
-
-	/**
-	 * @var Filesystem $fs Symfony Filesystem object.
-	 */
-	private $fs;
-
-	/**
-	 * @var Object $db Object to access `EE::db()` functions.
-	 */
-	private $db;
-
-	public function __construct() {
-
-		$this->level   = 0;
-		$this->command = 'site';
-		pcntl_signal( SIGTERM, [ $this, "rollback" ] );
-		pcntl_signal( SIGHUP, [ $this, "rollback" ] );
-		pcntl_signal( SIGUSR1, [ $this, "rollback" ] );
-		pcntl_signal( SIGINT, [ $this, "rollback" ] );
-		$shutdown_handler = new Shutdown_Handler();
-		register_shutdown_function( [ $shutdown_handler, "cleanup" ], [ &$this ] );
-		$this->db     = EE::db();
-		$this->docker = EE::docker();
-		$this->logger = EE::get_file_logger()->withName( 'site_command' );
-		$this->fs     = new Filesystem();
+		return self::$instance;
 	}
 
 	/**
-	 * Runs the standard WordPress Site installation.
+	 * Function to register different site-types.
 	 *
-	 * ## OPTIONS
-	 *
-	 * <site-name>
-	 * : Name of website.
-	 *
-	 * [--letsencrypt]
-	 * : Enables ssl via letsencrypt certificate.
-	 *
-	 * [--type=<type>]
-	 * : Type of the site to be created. Values: html,php,wp.
-	 *
-	 * [--skip-status-check]
-	 * : Skips site status check.
+	 * @param string $name     Name of the site-type.
+	 * @param string $callback The callback function/class for that type.
 	 */
-	public function create( $args, $assoc_args ) {
+	public static function add_site_type( $name, $callback ) {
 
-		EE\Utils\delem_log( 'site create start' );
-		EE::warning( 'This is a beta version. Please don\'t use it in production.' );
-		$this->logger->debug( 'args:', $args );
-		$this->logger->debug( 'assoc_args:', empty( $assoc_args ) ? [ 'NULL' ] : $assoc_args );
-		$this->site['name'] = strtolower( EE\Utils\remove_trailing_slash( $args[0] ) );
-		$this->site['type'] = EE\Utils\get_flag_value( $assoc_args, 'type', 'html' );
-		if ( 'html' !== $this->site['type'] ) {
-			EE::error( sprintf( 'Invalid site-type: %s', $this->site['type'] ) );
+		if ( isset( self::$instance->site_types[ $name ] ) ) {
+			EE::warning( sprintf( '%s site-type had already been previously registered by %s. It is overridden by the new package class %s. Please update your packages to resolve this.', $name, self::$instance->site_types[ $name ], $callback ) );
 		}
-
-		if ( $this->db::site_in_db( $this->site['name'] ) ) {
-			EE::error( sprintf( "Site %1\$s already exists. If you want to re-create it please delete the older one using:\n`ee site delete %1\$s`", $this->site['name'] ) );
-		}
-
-		$this->le       = EE\Utils\get_flag_value( $assoc_args, 'letsencrypt' );
-		$this->skip_chk = EE\Utils\get_flag_value( $assoc_args, 'skip-status-check' );
-
-		EE\SiteUtils\init_checks();
-
-		EE::log( 'Configuring project.' );
-
-		$this->create_site();
-		EE\Utils\delem_log( 'site create end' );
+		self::$instance->site_types[ $name ] = $callback;
 	}
 
 	/**
-	 * Display all the relevant site information, credentials and useful links.
+	 * Method to get the list of registered site-types.
 	 *
-	 * [<site-name>]
-	 * : Name of the website whose info is required.
+	 * @return array associative array of site-types and their callbacks.
 	 */
-	public function info( $args, $assoc_args ) {
-
-		EE\Utils\delem_log( 'site info start' );
-		if ( ! isset( $this->site['name'] ) ) {
-			$args = EE\SiteUtils\auto_site_name( $args, $this->command, __FUNCTION__ );
-			$this->populate_site_info( $args );
-		}
-		$ssl    = $this->le ? 'Enabled' : 'Not Enabled';
-		$prefix = ( $this->le ) ? 'https://' : 'http://';
-		$info   = [
-			[ 'Site', $prefix . $this->site['name'] ],
-			[ 'Site Root', $this->site['root'] ],
-			[ 'SSL', $ssl ],
-		];
-
-		EE\Utils\format_table( $info );
-
-		EE\Utils\delem_log( 'site info end' );
-	}
-
-
-	/**
-	 * Function to configure site and copy all the required files.
-	 */
-	private function configure_site_files() {
-
-		$site_conf_dir           = $this->site['root'] . '/config';
-		$site_docker_yml         = $this->site['root'] . '/docker-compose.yml';
-		$site_conf_env           = $this->site['root'] . '/.env';
-		$site_nginx_default_conf = $site_conf_dir . '/nginx/default.conf';
-		$site_src_dir            = $this->site['root'] . '/app/src';
-		$process_user            = posix_getpwuid( posix_geteuid() );
-
-		EE::log( sprintf( 'Creating site %s.', $this->site['name'] ) );
-		EE::log( 'Copying configuration files.' );
-
-		$filter                 = [];
-		$filter[]               = $this->site['type'];
-		$filter[]               = $this->le;
-		$site_docker            = new Site_Docker();
-		$docker_compose_content = $site_docker->generate_docker_compose_yml( $filter );
-		$default_conf_content   = $default_conf_content = EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx/default.conf.mustache', [ 'server_name' => $this->site['name'] ] );
-
-		$env_data    = [
-			'virtual_host' => $this->site['name'],
-			'user_id'      => $process_user['uid'],
-			'group_id'     => $process_user['gid'],
-		];
-		$env_content = EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/.env.mustache', $env_data );
-
-		try {
-			$this->fs->dumpFile( $site_docker_yml, $docker_compose_content );
-			$this->fs->dumpFile( $site_conf_env, $env_content );
-			$this->fs->mkdir( $site_conf_dir );
-			$this->fs->mkdir( $site_conf_dir . '/nginx' );
-			$this->fs->dumpFile( $site_nginx_default_conf, $default_conf_content );
-
-			$index_data = [
-				'version'       => 'v' . EE_VERSION,
-				'site_src_root' => $this->site['root'] . '/app/src',
-			];
-			$index_html = EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/index.html.mustache', $index_data );
-			$this->fs->mkdir( $site_src_dir );
-			$this->fs->dumpFile( $site_src_dir . '/index.html', $index_html );
-
-			EE\Siteutils\add_site_redirects( $this->site['name'], $this->le );
-
-			EE::success( 'Configuration files copied.' );
-		} catch ( Exception $e ) {
-			$this->catch_clean( $e );
-		}
+	public static function get_site_types() {
+		return self::$instance->site_types;
 	}
 
 	/**
-	 * Function to create the site.
+	 * Performs site operations. Check `ee help site` for more info.
+	 * Invoked function of site-type routing. Called when `ee site` is invoked.
+	 * Performs the routing to respective site-type passed using either `--type=`,
+	 * Or discovers the type from the site-name and fetches the type from it,
+	 * Or falls down to the default site-type defined by the user,
+	 * Or finally the most basic site-type and the default included in this package, type=html.
 	 */
-	private function create_site() {
+	public function __invoke( $args, $assoc_args ) {
 
-		$this->site['root'] = WEBROOT . $this->site['name'];
-		$this->level        = 1;
-		try {
-			EE\Siteutils\create_site_root( $this->site['root'], $this->site['name'] );
-			$this->level = 2;
-			EE\Siteutils\setup_site_network( $this->site['name'] );
-			$this->level = 3;
-			$this->configure_site_files();
+		$site_types = self::get_site_types();
+		$assoc_args = $this->convert_old_args_to_new_args( $args, $assoc_args );
 
-			EE\Siteutils\start_site_containers( $this->site['root'] );
-
-			EE\Siteutils\create_etc_hosts_entry( $this->site['name'] );
-			if ( ! $this->skip_chk ) {
-				$this->level = 4;
-				EE\Siteutils\site_status_check( $this->site['name'] );
-			}
-		} catch ( Exception $e ) {
-			$this->catch_clean( $e );
-		}
-
-		if ( $this->le ) {
-			$this->init_le( $this->site['name'], $this->site['root'], false );
-		}
-		$this->info( [ $this->site['name'] ], [] );
-		$this->create_site_db_entry();
-	}
-
-	/**
-	 * Function to save the site configuration entry into database.
-	 */
-	private function create_site_db_entry() {
-
-		$ssl  = $this->le ? 1 : 0;
-		$data = [
-			'sitename'     => $this->site['name'],
-			'site_type'    => $this->site['type'],
-			'site_path'    => $this->site['root'],
-			'site_command' => $this->command,
-			'is_ssl'       => $ssl,
-			'created_on'   => date( 'Y-m-d H:i:s', time() ),
-		];
-
-		try {
-			if ( $this->db::insert( $data ) ) {
-				EE::log( 'Site entry created.' );
-			} else {
-				throw new Exception( 'Error creating site entry in database.' );
-			}
-		} catch ( Exception $e ) {
-			$this->catch_clean( $e );
-		}
-	}
-
-	/**
-	 * Populate basic site info from db.
-	 */
-	private function populate_site_info( $args ) {
-
-		$this->site['name'] = EE\Utils\remove_trailing_slash( $args[0] );
-
-		if ( $this->db::site_in_db( $this->site['name'] ) ) {
-
-			$db_select = $this->db::select( [], [ 'sitename' => $this->site['name'] ], 'sites', 1 );
-
-			$this->site['type'] = $db_select['site_type'];
-			$this->site['root'] = $db_select['site_path'];
-			$this->le           = $db_select['is_ssl'];
-
+		if ( isset( $assoc_args['type'] ) ) {
+			$type = $assoc_args['type'];
+			unset( $assoc_args['type'] );
 		} else {
-			EE::error( sprintf( 'Site %s does not exist.', $this->site['name'] ) );
+			$type = $this->determine_type( $args );
 		}
+		array_unshift( $args, 'site' );
+
+		if ( ! isset( $site_types[ $type ] ) ) {
+			$error = sprintf(
+				'\'%1$s\' is not a registered site type of \'ee site --type=%1$s\'. See \'ee help site --type=%1$s\' for available subcommands.',
+				$type
+			);
+			EE::error( $error );
+		}
+
+		$callback = $site_types[ $type ];
+
+		$command      = EE::get_root_command();
+		$leaf_command = CommandFactory::create( 'site', $callback, $command );
+		$command->add_subcommand( 'site', $leaf_command );
+
+		EE::run_command( $args, $assoc_args );
 	}
 
 	/**
-	 * @inheritdoc
-	 */
-	public function restart( $args, $assoc_args, $whitelisted_containers = [] ) {
-		$whitelisted_containers = [ 'nginx' ];
-		parent::restart( $args, $assoc_args, $whitelisted_containers );
-	}
-
-	/**
-	 * @inheritdoc
-	 */
-	public function reload( $args, $assoc_args, $whitelisted_containers = [], $reload_commands = [] ) {
-		$whitelisted_containers = [ 'nginx' ];
-		parent::reload( $args, $assoc_args, $whitelisted_containers, $reload_commands = [] );
-	}
-
-	/**
-	 * Catch and clean exceptions.
+	 * Function to determine type.
 	 *
-	 * @param Exception $e
+	 * Discovers the type from the site-name and fetches the type from it,
+	 * Or falls down to the default site-type defined by the user,
+	 * Or finally the most basic site-type and the default included in this package, type=html.
+	 *
+	 * @param array $args Command line arguments passed to site-command.
+	 *
+	 * @return string site-type.
 	 */
-	private function catch_clean( $e ) {
+	private function determine_type( $args ) {
 
-		EE\Utils\delem_log( 'site cleanup start' );
-		EE::warning( $e->getMessage() );
-		EE::warning( 'Initiating clean-up.' );
-		$this->delete_site( $this->level, $this->site['name'], $this->site['root'] );
-		EE\Utils\delem_log( 'site cleanup end' );
-		exit;
+		// default site-type
+		$type = 'html';
+
+		$last_arg = array_pop( $args );
+		if ( substr( $last_arg, 0, 4 ) === 'http' ) {
+			$last_arg = str_replace( [ 'https://', 'http://' ], '', $last_arg );
+		}
+		$url_path = EE\Utils\remove_trailing_slash( $last_arg );
+
+		$arg_search = Site::find( $url_path, [ 'site_type' ] );
+
+		if ( $arg_search ) {
+			return $arg_search->site_type;
+		}
+
+		$site_name = EE\Site\Utils\get_site_name();
+		if ( $site_name ) {
+			if ( strpos( $url_path, '.' ) !== false ) {
+				$args[] = $site_name;
+				EE::error(
+					sprintf(
+						'%s is not a valid site-name. Did you mean `ee site %s`?',
+						$last_arg,
+						implode( ' ', $args )
+					)
+				);
+			}
+			$type = Site::find( $site_name, [ 'site_type' ] )->site_type;
+		}
+
+		return $type;
 	}
 
 	/**
-	 * Roll back on interrupt.
+	 * Convert EE v3 args to the newer syntax of arguments.
+	 *
+	 * @param array $args       Commandline arguments passed.
+	 * @param array $assoc_args Commandline associative arguments passed.
+	 *
+	 * @return array Updated $assoc_args.
 	 */
-	private function rollback() {
+	private function convert_old_args_to_new_args( $args, $assoc_args ) {
 
-		EE::warning( 'Exiting gracefully after rolling back. This may take some time.' );
-		if ( $this->level > 0 ) {
-			$this->delete_site( $this->level, $this->site['name'], $this->site['root'] );
+		$ee3_compat_array_map_to_type = [
+			'wp'          => [ 'type' => 'wp' ],
+			'wpsubdom'    => [ 'type' => 'wp', 'mu' => 'subdom' ],
+			'wpsubdir'    => [ 'type' => 'wp', 'mu' => 'subdir' ],
+			'wpredis'     => [ 'type' => 'wp', 'cache' => true ],
+			'html'        => [ 'type' => 'html' ],
+			'php'         => [ 'type' => 'php' ],
+			'mysql'       => [ 'type' => 'php', 'with-db' => true ],
+			'le'          => [ 'ssl' => 'le' ],
+			'letsencrypt' => [ 'ssl' => 'le' ],
+		];
+
+		foreach ( $ee3_compat_array_map_to_type as $from => $to ) {
+			if ( isset( $assoc_args[ $from ] ) ) {
+				$assoc_args = array_merge( $assoc_args, $to );
+				unset( $assoc_args[ $from ] );
+			}
 		}
-		EE::success( 'Rollback complete. Exiting now.' );
-		exit;
-	}
 
-	/**
-	 * Shutdown function to catch and rollback from fatal errors.
-	 */
-	private function shutDownFunction() {
+		if ( ! empty( $assoc_args['type'] ) && 'wp' === $assoc_args['type'] ) {
 
-		$error = error_get_last();
-		if ( isset( $error ) && $error['type'] === E_ERROR ) {
-			EE::warning( 'An Error occurred. Initiating clean-up.' );
-			$this->logger->error( 'Type: ' . $error['type'] );
-			$this->logger->error( 'Message: ' . $error['message'] );
-			$this->logger->error( 'File: ' . $error['file'] );
-			$this->logger->error( 'Line: ' . $error['line'] );
-			$this->rollback();
+			// ee3 backward compatibility flags
+			$wp_compat_array_map = [
+				'user'  => 'admin-user',
+				'pass'  => 'admin-pass',
+				'email' => 'admin-email',
+			];
+
+			foreach ( $wp_compat_array_map as $from => $to ) {
+				if ( isset( $assoc_args[ $from ] ) ) {
+					$assoc_args[ $to ] = $assoc_args[ $from ];
+					unset( $assoc_args[ $from ] );
+				}
+			}
 		}
+
+		// backward compatibility error for deprecated flags.
+		$unsupported_create_old_args = array(
+			'w3tc',
+			'wpsc',
+			'wpfc',
+			'pagespeed',
+		);
+
+		$old_arg = array_intersect( $unsupported_create_old_args, array_keys( $assoc_args ) );
+
+		$old_args = implode( ' --', $old_arg );
+		if ( isset( $args[1] ) && 'create' === $args[1] && ! empty ( $old_arg ) ) {
+			\EE::error( "Sorry, --$old_args flag/s is/are no longer supported in EE v4.\nPlease run `ee help " . implode( ' ', $args ) . '`.' );
+		}
+
+		return $assoc_args;
 	}
 }

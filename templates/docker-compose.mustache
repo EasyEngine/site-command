@@ -1,4 +1,4 @@
-version: '3'
+version: '3.5'
 
 services:
 
@@ -20,7 +20,7 @@ services:
     command: {{name}}
     {{/command}}
     {{#labels}}
-    labels: 
+    labels:
     {{#label}}
       - "{{name}}"
     {{/label}}
@@ -39,14 +39,23 @@ services:
     {{/environment}}
     {{#networks}}
     networks:
+    {{#net}}
       - {{name}}
+    {{/net}}
     {{/networks}}
-    
 {{/services}}
 
 {{#network}}
 networks:
   site-network:
+    name: ${VIRTUAL_HOST}
+    {{#networks_labels}}
+    labels:
+    {{#label}}
+     - "{{name}}"
+    {{/label}}
+    {{/networks_labels}}
+  global-network:
     external:
-      name: ${VIRTUAL_HOST}
-{{/network}}  
+      name: ee-global-network
+{{/network}}
