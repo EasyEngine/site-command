@@ -4,18 +4,13 @@ declare( ticks=1 );
 
 namespace EE\Site\Type;
 
-use \EE\Model\Site;
-use \Symfony\Component\Filesystem\Filesystem;
-use function \EE\Site\Utils\auto_site_name;
-use function \EE\Site\Utils\get_site_info;
+use EE\Model\Site;
+use Symfony\Component\Filesystem\Filesystem;
+use function EE\Site\Utils\auto_site_name;
+use function EE\Site\Utils\get_site_info;
 
 /**
- * Creates a simple html Website.
- *
- * ## EXAMPLES
- *
- *     # Create simple html site
- *     $ ee site create example.com
+ * Adds html site type to `site` command.
  *
  * @package ee-cli
  */
@@ -73,11 +68,24 @@ class HTML extends EE_Site_Command {
 	 *
 	 * [--wildcard]
 	 * : Gets wildcard SSL .
+	 *
 	 * [--type=<type>]
 	 * : Type of the site to be created. Values: html,php,wp etc.
 	 *
 	 * [--skip-status-check]
 	 * : Skips site status check.
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     # Create html site
+	 *     $ ee site create example.com
+	 *
+	 *     # Create html site with ssl from letsencrypt
+	 *     $ ee site create example.com --ssl=le
+	 *
+	 *     # Create html site with wildcard ssl
+	 *     $ ee site create example.com --ssl=le --wildcard
+	 *
 	 */
 	public function create( $args, $assoc_args ) {
 
@@ -111,6 +119,12 @@ class HTML extends EE_Site_Command {
 	 *
 	 * [<site-name>]
 	 * : Name of the website whose info is required.
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     # Display site info
+	 *     $ ee site info example.com
+	 *
 	 */
 	public function info( $args, $assoc_args ) {
 

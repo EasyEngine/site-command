@@ -2,12 +2,11 @@
 
 namespace EE\Site\Type;
 
-use function EE\Site\Utils\reload_global_nginx;
-use \Symfony\Component\Filesystem\Filesystem;
-use \EE\Model\Site;
-use function \EE\Site\Utils\auto_site_name;
-use function \EE\Site\Utils\get_site_info;
-use function \EE\Site\Utils\reload_global_nginx_proxy;
+use EE\Model\Site;
+use Symfony\Component\Filesystem\Filesystem;
+use function EE\Site\Utils\auto_site_name;
+use function EE\Site\Utils\get_site_info;
+use function EE\Site\Utils\reload_global_nginx_proxy;
 
 /**
  * Base class for Site command
@@ -73,6 +72,23 @@ abstract class EE_Site_Command {
 	 *   - text
 	 * ---
 	 *
+	 * ## EXAMPLES
+	 *
+	 *     # List all sites
+	 *     $ ee site list
+	 *
+	 *     # List enabled sites
+	 *     $ ee site list --enabled
+	 *
+	 *     # List disabled sites
+	 *     $ ee site list --disabled
+	 *
+	 *     # List all sites in JSON
+	 *     $ ee site list --format=json
+	 *
+	 *     # Count all sites
+	 *     $ ee site list --format=count
+	 *
 	 * @subcommand list
 	 */
 	public function _list( $args, $assoc_args ) {
@@ -127,6 +143,12 @@ abstract class EE_Site_Command {
 	 *
 	 * [--yes]
 	 * : Do not prompt for confirmation.
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     # Delete site
+	 *     $ ee site delete example.com
+	 *
 	 */
 	public function delete( $args, $assoc_args ) {
 
@@ -140,7 +162,7 @@ abstract class EE_Site_Command {
 	/**
 	 * Function to delete the given site.
 	 *
-	 * @param int $level           Level of deletion.
+	 * @param int    $level        Level of deletion.
 	 *                             Level - 0: No need of clean-up.
 	 *                             Level - 1: Clean-up only the site-root.
 	 *                             Level - 2: Try to remove network. The network may or may not have been created.
@@ -148,6 +170,8 @@ abstract class EE_Site_Command {
 	 *                             may not have been created. Level - 4: Remove containers. Level - 5: Remove db entry.
 	 * @param string $site_url     Name of the site to be deleted.
 	 * @param string $site_fs_path Webroot of the site.
+	 *
+	 * @throws \EE\ExitException
 	 */
 	protected function delete_site( $level, $site_url, $site_fs_path ) {
 
@@ -221,6 +245,12 @@ abstract class EE_Site_Command {
 	 *
 	 * [--force]
 	 * : Force execution of site up.
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     # Enable site
+	 *     $ ee site up example.com
+	 *
 	 */
 	public function up( $args, $assoc_args ) {
 
@@ -252,6 +282,12 @@ abstract class EE_Site_Command {
 	 *
 	 * [<site-name>]
 	 * : Name of website to be disabled.
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     # Disable site
+	 *     $ ee site down example.com
+	 *
 	 */
 	public function down( $args, $assoc_args ) {
 
@@ -284,6 +320,12 @@ abstract class EE_Site_Command {
 	 *
 	 * [--nginx]
 	 * : Restart nginx container of site.
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     # Restart all containers of site
+	 *     $ ee site restart example.com
+	 *
 	 */
 	public function restart( $args, $assoc_args, $whitelisted_containers = [] ) {
 
@@ -320,6 +362,11 @@ abstract class EE_Site_Command {
 	 *
 	 * [--nginx]
 	 * : Reload nginx service in container.
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     # Reload all containers of site
+	 *     $ ee site reload example.com
 	 *
 	 */
 	public function reload( $args, $assoc_args, $whitelisted_containers = [], $reload_commands = [] ) {
