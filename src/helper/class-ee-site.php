@@ -6,7 +6,6 @@ use EE\Model\Site;
 use Symfony\Component\Filesystem\Filesystem;
 use function EE\Site\Utils\auto_site_name;
 use function EE\Site\Utils\get_site_info;
-use function EE\Site\Utils\reload_global_nginx;
 use function EE\Site\Utils\reload_global_nginx_proxy;
 
 /**
