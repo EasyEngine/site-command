@@ -3,6 +3,9 @@
 use EE\Dispatcher\CommandFactory;
 use EE\Model\Site;
 
+/**
+ * Adds site related functionality to EasyEngine
+ */
 class Site_Command {
 
 	/**
@@ -11,14 +14,14 @@ class Site_Command {
 	protected static $site_types = [];
 
 	/**
-	 * @var Object $instance Hold an instance of the class.
+	 * @var Site_Command $instance Hold an instance of the class.
 	 */
 	private static $instance;
 
 	/**
 	 * The singleton method to hold the instance of site-command.
 	 *
-	 * @return Object|Site_Command
+	 * @return Site_Command
 	 */
 	public static function instance() {
 
@@ -98,6 +101,8 @@ class Site_Command {
 	 * Or finally the most basic site-type and the default included in this package, type=html.
 	 *
 	 * @param array $args Command line arguments passed to site-command.
+	 *
+	 * @throws \EE\ExitException
 	 *
 	 * @return string site-type.
 	 */
