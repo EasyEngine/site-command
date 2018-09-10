@@ -19,6 +19,11 @@ class CreateTableSiteMigration extends Base {
 
 	}
 
+	/**
+	 * Execute create table query for site and sitemeta table.
+	 *
+	 * @throws EE\ExitException
+	 */
 	public function up() {
 
 		$query = 'CREATE TABLE IF NOT EXISTS sites (
@@ -69,10 +74,15 @@ class CreateTableSiteMigration extends Base {
 		try {
 			self::$pdo->exec( $query );
 		} catch ( PDOException $exception ) {
-			EE::error( 'Encountered Error while creating table: ' . $exception->getMessage() );
+			EE::error( 'Encountered Error while creating table: ' . $exception->getMessage(), false );
 		}
 	}
 
+	/**
+	 * Execute drop table query for site and sitemeta table.
+	 *
+	 * @throws EE\ExitException
+	 */
 	public function down() {
 
 		$query = 'DROP TABLE IF EXISTS sites;';
@@ -82,7 +92,7 @@ class CreateTableSiteMigration extends Base {
 		try {
 			self::$pdo->exec( $query );
 		} catch ( PDOException $exception ) {
-			EE::error( 'Encountered Error while dropping table: ' . $exception->getMessage() );
+			EE::error( 'Encountered Error while dropping table: ' . $exception->getMessage(), false );
 		}
 	}
 }
