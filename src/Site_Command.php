@@ -65,6 +65,12 @@ class Site_Command {
 	 */
 	public function __invoke( $args, $assoc_args ) {
 
+		if ( ! empty( $args[0] ) && 'cmd-dump' === $args[0] ) {
+			$this->cmd_dump();
+
+			return;
+		}
+
 		$site_types = self::get_site_types();
 		$assoc_args = $this->convert_old_args_to_new_args( $args, $assoc_args );
 
@@ -203,5 +209,109 @@ class Site_Command {
 		}
 
 		return $assoc_args;
+	}
+
+	private function cmd_dump() {
+
+		$site_types = self::get_site_types();
+		$command    = EE::get_root_command();
+		foreach ( $site_types as $name => $callback ) {
+			$site_type_name = 'site_type_' . $name;
+			$leaf_command   = CommandFactory::create( $site_type_name, $callback, $command );
+			$command->add_subcommand( $site_type_name, $leaf_command );
+		}
+		$command_doc      = $this->command_to_array( $command );
+		$site_command_key = array_search( 'site', array_column( $command_doc['subcommands'], 'name' ) );
+
+		$site_subcommands = [];
+		foreach ( $command_doc['subcommands'] as $key => $subcommand ) {
+			if ( strpos( $subcommand['name'], 'site_type_' ) !== false ) {
+				$get_type = explode( '_', $subcommand['name'] );
+				if ( empty( $get_type[2] ) ) {
+					continue;
+				}
+				$site_subcommands[ $subcommand['name'] ] = $subcommand['subcommands'];
+				unset( $command_doc['subcommands'][ $key ] );
+
+			}
+		}
+		$common_commands  = reset( $site_subcommands );
+		$total_site_types = count( $site_subcommands );
+
+		$comparator = [];
+		foreach ( $common_commands as $command ) {
+			$comparator[ $command['name'] ] = [ 'longdesc' => $command['longdesc'], 'common_count' => 0 ];
+		}
+		foreach ( $site_subcommands as $site_type_sub_commands ) {
+			foreach ( $site_type_sub_commands as $site_type_sub_command ) {
+				if ( ! empty( $comparator[ $site_type_sub_command['name'] ] ) && ( 0 === strcmp( $comparator[ $site_type_sub_command['name'] ]['longdesc'], $site_type_sub_command['longdesc'] ) ) ) {
+					$comparator[ $site_type_sub_command['name'] ]['common_count'] ++;
+				}
+			}
+		}
+
+		foreach ( $comparator as $command_name => $data ) {
+			if ( $total_site_types !== $data['common_count'] ) {
+				$key_to_unset = array_search( $command_name, array_column( $common_commands, 'name' ) );
+				if ( isset( $common_commands[ $key_to_unset ] ) ) {
+					unset( $common_commands[ $key_to_unset ] );
+					$common_commands = array_values( $common_commands );
+				}
+			}
+		}
+		$site_type_specific_commands = [];
+		foreach ( $site_subcommands as $key_type => $sub_commands ) {
+			$get_type = explode( '_', $key_type );
+			if ( empty( $get_type[2] ) ) {
+				continue;
+			}
+			$type = $get_type[2];
+
+			$specific_commands           = array_udiff( $site_subcommands[ $key_type ], $common_commands, [
+				$this,
+				'compare_command_names'
+			] );
+			$mapped_array                = array_map( function ( $cmd ) use ( $type ) {
+				$cmd['name'] = $cmd['name'] . ' --type=' . $type;
+
+				return $cmd;
+			}, $specific_commands );
+			$site_type_specific_commands = array_merge( $site_type_specific_commands, $mapped_array );
+		}
+
+		$final_site_sub_commands = array_merge( $common_commands, $site_type_specific_commands );
+
+		$names = array_column( $final_site_sub_commands, 'name' );
+		array_multisort( $names, SORT_ASC, $final_site_sub_commands );
+
+		$command_doc['subcommands'][ $site_command_key ]['subcommands'] = $final_site_sub_commands;
+
+		echo json_encode( $command_doc );
+	}
+
+	private function compare_command_names( $a, $b ) {
+
+		if ( $a['name'] === $b['name'] ) {
+			return 0;
+		} else {
+			return ( $a['name'] < $b['name'] ? - 1 : 1 );
+		}
+	}
+
+	private function command_to_array( $command ) {
+
+		$dump = array(
+			'name'        => $command->get_name(),
+			'description' => $command->get_shortdesc(),
+			'longdesc'    => $command->get_longdesc(),
+		);
+		foreach ( $command->get_subcommands() as $subcommand ) {
+			$dump['subcommands'][] = $this->command_to_array( $subcommand );
+		}
+		if ( empty( $dump['subcommands'] ) ) {
+			$dump['synopsis'] = (string) $command->get_synopsis();
+		}
+
+		return $dump;
 	}
 }
