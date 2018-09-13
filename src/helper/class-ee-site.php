@@ -198,7 +198,7 @@ abstract class EE_Site_Command {
 			\EE::log( "[$site_url] site root removed." );
 		}
 
-		$config_file_path = EE_CONF_ROOT . '/nginx/conf.d/' . $site_url . '-redirect.conf';
+		$config_file_path = EE_OPT_ROOT . '/nginx/conf.d/' . $site_url . '-redirect.conf';
 
 		if ( $this->fs->exists( $config_file_path ) ) {
 			try {
@@ -213,10 +213,10 @@ abstract class EE_Site_Command {
 		if ( $level > 4 ) {
 			if ( $this->site_data['site_ssl'] ) {
 				\EE::log( 'Removing ssl certs.' );
-				$crt_file   = EE_CONF_ROOT . "/nginx/certs/$site_url.crt";
-				$key_file   = EE_CONF_ROOT . "/nginx/certs/$site_url.key";
-				$conf_certs = EE_CONF_ROOT . "/acme-conf/certs/$site_url";
-				$conf_var   = EE_CONF_ROOT . "/acme-conf/var/$site_url";
+				$crt_file   = EE_OPT_ROOT . "/nginx/certs/$site_url.crt";
+				$key_file   = EE_OPT_ROOT . "/nginx/certs/$site_url.key";
+				$conf_certs = EE_OPT_ROOT . "/acme-conf/certs/$site_url";
+				$conf_var   = EE_OPT_ROOT . "/acme-conf/var/$site_url";
 
 				$cert_files = [ $conf_certs, $conf_var, $crt_file, $key_file ];
 				try {

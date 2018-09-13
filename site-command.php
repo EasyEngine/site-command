@@ -1,5 +1,13 @@
 <?php
 
+$sites_path = EE_OPT_ROOT . '/sites';
+
+if ( ! is_dir( $sites_path ) ) {
+	mkdir( $sites_path );
+}
+
+define( 'WEBROOT', \EE\Utils\trailingslashit( $sites_path ) );
+
 if ( ! defined( 'SITE_TEMPLATE_ROOT' ) ) {
 	define( 'SITE_TEMPLATE_ROOT', __DIR__ . '/templates' );
 }
