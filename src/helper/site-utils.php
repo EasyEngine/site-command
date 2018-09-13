@@ -123,7 +123,7 @@ function init_checks() {
 
 			$fs = new Filesystem();
 
-			if ( ! $fs->exists( EE_OPT_ROOT . '/docker-compose.yml' ) ) {
+			if ( ! $fs->exists( EE_OPT_ROOT . '/services/docker-compose.yml' ) ) {
 				generate_global_docker_compose_yml( $fs );
 			}
 
@@ -181,7 +181,7 @@ function generate_global_docker_compose_yml( Filesystem $fs ) {
 	];
 
 	$contents = EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/global_docker_compose.yml.mustache', $data );
-	$fs->dumpFile( EE_OPT_ROOT . '/docker-compose.yml', $contents );
+	$fs->dumpFile( EE_OPT_ROOT . '/services/docker-compose.yml', $contents );
 }
 
 /**
