@@ -133,7 +133,7 @@ function init_checks() {
 					EE::error( 'Unable to create network ee-global-network' );
 				}
 			}
-			if ( EE::docker()::docker_compose_up( EE_ROOT_DIR, [ 'nginx-proxy' ] ) ) {
+			if ( EE::docker()::docker_compose_up( EE_ROOT_DIR . '/services', [ 'nginx-proxy' ] ) ) {
 				$fs->dumpFile( "$EE_ROOT_DIR/nginx/conf.d/custom.conf", file_get_contents( EE_ROOT . '/templates/custom.conf.mustache' ) );
 				EE::success( "$proxy_type container is up." );
 			} else {
