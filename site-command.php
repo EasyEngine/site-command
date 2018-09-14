@@ -1,6 +1,6 @@
 <?php
 
-$sites_path = EE_OPT_ROOT . '/sites';
+$sites_path = EE_ROOT_DIR . '/sites';
 
 if ( ! is_dir( $sites_path ) ) {
 	mkdir( $sites_path );

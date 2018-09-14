@@ -123,18 +123,18 @@ function init_checks() {
 
 			$fs = new Filesystem();
 
-			if ( ! $fs->exists( EE_OPT_ROOT . '/services/docker-compose.yml' ) ) {
+			if ( ! $fs->exists( EE_ROOT_DIR . '/services/docker-compose.yml' ) ) {
 				generate_global_docker_compose_yml( $fs );
 			}
 
-			$EE_OPT_ROOT = EE_OPT_ROOT;
+			$EE_ROOT_DIR = EE_ROOT_DIR;
 			if ( ! EE::docker()::docker_network_exists( 'ee-global-network' ) ) {
 				if ( ! EE::docker()::create_network( 'ee-global-network' ) ) {
 					EE::error( 'Unable to create network ee-global-network' );
 				}
 			}
-			if ( EE::docker()::docker_compose_up( EE_OPT_ROOT, [ 'nginx-proxy' ] ) ) {
-				$fs->dumpFile( "$EE_OPT_ROOT/nginx/conf.d/custom.conf", file_get_contents( EE_ROOT . '/templates/custom.conf.mustache' ) );
+			if ( EE::docker()::docker_compose_up( EE_ROOT_DIR, [ 'nginx-proxy' ] ) ) {
+				$fs->dumpFile( "$EE_ROOT_DIR/nginx/conf.d/custom.conf", file_get_contents( EE_ROOT . '/templates/custom.conf.mustache' ) );
 				EE::success( "$proxy_type container is up." );
 			} else {
 				EE::error( "There was some error in starting $proxy_type container. Please check logs." );
@@ -144,7 +144,7 @@ function init_checks() {
 }
 
 /**
- * Generates global docker-compose.yml at EE_OPT_ROOT
+ * Generates global docker-compose.yml at EE_ROOT_DIR
  *
  * @param Filesystem $fs Filesystem object to write file
  */
@@ -166,12 +166,12 @@ function generate_global_docker_compose_yml( Filesystem $fs ) {
 				'LOCAL_GROUP_ID=' . posix_getegid(),
 			],
 			'volumes'        => [
-				EE_OPT_ROOT . '/nginx/certs:/etc/nginx/certs',
-				EE_OPT_ROOT . '/nginx/dhparam:/etc/nginx/dhparam',
-				EE_OPT_ROOT . '/nginx/conf.d:/etc/nginx/conf.d',
-				EE_OPT_ROOT . '/nginx/htpasswd:/etc/nginx/htpasswd',
-				EE_OPT_ROOT . '/nginx/vhost.d:/etc/nginx/vhost.d',
-				EE_OPT_ROOT . '/nginx/html:/usr/share/nginx/html',
+				EE_ROOT_DIR . '/nginx/certs:/etc/nginx/certs',
+				EE_ROOT_DIR . '/nginx/dhparam:/etc/nginx/dhparam',
+				EE_ROOT_DIR . '/nginx/conf.d:/etc/nginx/conf.d',
+				EE_ROOT_DIR . '/nginx/htpasswd:/etc/nginx/htpasswd',
+				EE_ROOT_DIR . '/nginx/vhost.d:/etc/nginx/vhost.d',
+				EE_ROOT_DIR . '/nginx/html:/usr/share/nginx/html',
 				'/var/run/docker.sock:/tmp/docker.sock:ro',
 			],
 			'networks'       => [
@@ -181,7 +181,7 @@ function generate_global_docker_compose_yml( Filesystem $fs ) {
 	];
 
 	$contents = EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/global_docker_compose.yml.mustache', $data );
-	$fs->dumpFile( EE_OPT_ROOT . '/services/docker-compose.yml', $contents );
+	$fs->dumpFile( EE_ROOT_DIR . '/services/docker-compose.yml', $contents );
 }
 
 /**
@@ -215,7 +215,7 @@ function create_site_root( $site_fs_path, $site_url ) {
 function add_site_redirects( string $site_url, bool $ssl, bool $inherit ) {
 
 	$fs               = new Filesystem();
-	$confd_path       = EE_OPT_ROOT . '/nginx/conf.d/';
+	$confd_path       = EE_ROOT_DIR . '/nginx/conf.d/';
 	$config_file_path = $confd_path . $site_url . '-redirect.conf';
 	$has_www          = strpos( $site_url, 'www.' ) === 0;
 	$cert_site_name   = $site_url;
