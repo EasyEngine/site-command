@@ -159,7 +159,8 @@ class HTML extends EE_Site_Command {
 		$site_conf_dir           = $this->site_data['site_fs_path'] . '/config';
 		$site_docker_yml         = $this->site_data['site_fs_path'] . '/docker-compose.yml';
 		$site_conf_env           = $this->site_data['site_fs_path'] . '/.env';
-		$site_nginx_default_conf = $site_conf_dir . '/nginx/default.conf';
+		$site_nginx_default_conf = $site_conf_dir . '/nginx/main.conf';
+		$site_nginx_custom_conf  = $site_conf_dir . '/nginx/user/custom.conf';
 		$site_src_dir            = $this->site_data['site_fs_path'] . '/app/src';
 		$process_user            = posix_getpwuid( posix_geteuid() );
 
@@ -170,7 +171,8 @@ class HTML extends EE_Site_Command {
 		$filter[]               = $this->site_data['site_type'];
 		$site_docker            = new Site_HTML_Docker();
 		$docker_compose_content = $site_docker->generate_docker_compose_yml( $filter );
-		$default_conf_content   = $default_conf_content = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx/default.conf.mustache', [ 'server_name' => $this->site_data['site_url'] ] );
+		$default_conf_content   = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx/main.conf.mustache', [ 'server_name' => $this->site_data['site_url'] ] );
+		$custom_conf_content    = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx/custom.conf.mustache', [] );
 
 		$env_data    = [
 			'virtual_host' => $this->site_data['site_url'],
@@ -182,16 +184,14 @@ class HTML extends EE_Site_Command {
 		try {
 			$this->fs->dumpFile( $site_docker_yml, $docker_compose_content );
 			$this->fs->dumpFile( $site_conf_env, $env_content );
-			$this->fs->mkdir( $site_conf_dir );
-			$this->fs->mkdir( $site_conf_dir . '/nginx' );
 			$this->fs->dumpFile( $site_nginx_default_conf, $default_conf_content );
+			$this->fs->dumpFile( $site_nginx_custom_conf, $custom_conf_content );
 
 			$index_data = [
 				'version'       => 'v' . EE_VERSION,
 				'site_src_root' => $this->site_data['site_fs_path'] . '/app/src',
 			];
 			$index_html = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/index.html.mustache', $index_data );
-			$this->fs->mkdir( $site_src_dir );
 			$this->fs->dumpFile( $site_src_dir . '/index.html', $index_html );
 
 			\EE::success( 'Configuration files copied.' );
