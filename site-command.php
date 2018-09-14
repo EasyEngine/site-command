@@ -1,13 +1,5 @@
 <?php
 
-$sites_path = EE_ROOT_DIR . '/sites';
-
-if ( ! is_dir( $sites_path ) ) {
-	mkdir( $sites_path );
-}
-
-define( 'WEBROOT', \EE\Utils\trailingslashit( $sites_path ) );
-
 if ( ! defined( 'SITE_TEMPLATE_ROOT' ) ) {
 	define( 'SITE_TEMPLATE_ROOT', __DIR__ . '/templates' );
 }
@@ -15,6 +7,14 @@ if ( ! defined( 'SITE_TEMPLATE_ROOT' ) ) {
 if ( ! class_exists( 'EE' ) ) {
 	return;
 }
+
+$sites_path = EE_ROOT_DIR . '/sites';
+
+if ( ! is_dir( $sites_path ) ) {
+	mkdir( $sites_path );
+}
+
+define( 'WEBROOT', \EE\Utils\trailingslashit( $sites_path ) );
 
 $autoload = dirname( __FILE__ ) . '/vendor/autoload.php';
 if ( file_exists( $autoload ) ) {
