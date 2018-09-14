@@ -320,4 +320,3 @@ class HTML extends EE_Site_Command {
 	}
 
 }
-
