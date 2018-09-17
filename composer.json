@@ -22,7 +22,19 @@
         "branch-alias": {
             "dev-master": "1.x-dev"
         },
-        "bundled": true
+        "bundled": true,
+        "commands": [
+            "site delete",
+            "site create --type=html",
+            "site info --type=html",
+            "site up",
+            "site down",
+            "site info",
+            "site le",
+            "site list",
+            "site reload --type=html",
+            "site restart --type=html"
+        ]
     },
     "require": {
         "acmephp/core": "dev-master",
