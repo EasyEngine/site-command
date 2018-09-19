@@ -7,34 +7,32 @@ use AcmePhp\Cli\Serializer\PemEncoder;
 use AcmePhp\Cli\Serializer\PemNormalizer;
 use AcmePhp\Core\AcmeClient;
 use AcmePhp\Core\Challenge\ChainValidator;
-use AcmePhp\Core\Challenge\WaitingValidator;
-use AcmePhp\Core\Challenge\Http\SimpleHttpSolver;
-use AcmePhp\Core\Challenge\Http\HttpValidator;
-use AcmePhp\Core\Challenge\Dns\SimpleDnsSolver;
 use AcmePhp\Core\Challenge\Dns\DnsValidator;
+use AcmePhp\Core\Challenge\Dns\SimpleDnsSolver;
+use AcmePhp\Core\Challenge\Http\HttpValidator;
+use AcmePhp\Core\Challenge\Http\SimpleHttpSolver;
+use AcmePhp\Core\Challenge\WaitingValidator;
 use AcmePhp\Core\Exception\Protocol\ChallengeNotSupportedException;
-use AcmePhp\Core\Http\SecureHttpClient;
 use AcmePhp\Core\Http\Base64SafeEncoder;
+use AcmePhp\Core\Http\SecureHttpClient;
 use AcmePhp\Core\Http\ServerErrorHandler;
-use AcmePhp\Ssl\Certificate;
 use AcmePhp\Ssl\CertificateRequest;
-use AcmePhp\Ssl\CertificateResponse;
 use AcmePhp\Ssl\DistinguishedName;
-use AcmePhp\Ssl\Parser\KeyParser;
-use AcmePhp\Ssl\Parser\CertificateParser;
 use AcmePhp\Ssl\Generator\KeyPairGenerator;
+use AcmePhp\Ssl\Parser\CertificateParser;
+use AcmePhp\Ssl\Parser\KeyParser;
 use AcmePhp\Ssl\Signer\CertificateRequestSigner;
 use AcmePhp\Ssl\Signer\DataSigner;
+use GuzzleHttp\Client;
+use League\Flysystem\Adapter\Local;
+use League\Flysystem\Adapter\NullAdapter;
+use League\Flysystem\Filesystem;
 use Symfony\Component\Console\Helper\Table;
 use Symfony\Component\Console\Output\ConsoleOutput;
 use Symfony\Component\Serializer\Encoder\JsonEncoder;
 use Symfony\Component\Serializer\Normalizer\GetSetMethodNormalizer;
 use Symfony\Component\Serializer\Serializer;
-use League\Flysystem\Filesystem;
-use League\Flysystem\Adapter\Local;
-use League\Flysystem\Adapter\NullAdapter;
-use GuzzleHttp\Client;
-use function \EE\Site\Utils\reload_global_nginx_proxy;
+use function EE\Site\Utils\reload_global_nginx_proxy;
 
 
 class Site_Letsencrypt {
@@ -115,16 +113,15 @@ class Site_Letsencrypt {
 	 *
 	 * @param string $email Mail id to be registered.
 	 *
+	 * @throws \Exception
 	 * @return bool Success.
 	 */
 	public function register( $email ) {
 		try {
 			$this->client->registerAccount( null, $email );
 		} catch ( \Exception $e ) {
-			\EE::warning( $e->getMessage() );
 			\EE::warning( 'It seems you\'re in local environment or used invalid email or there is some issue with network, please check logs. Skipping letsencrypt.' );
-
-			return false;
+			throw  $e;
 		}
 		\EE::debug( "Account with email id: $email registered successfully!" );
 
@@ -134,9 +131,10 @@ class Site_Letsencrypt {
 	/**
 	 * Function to authorize the letsencrypt request and get the token for challenge.
 	 *
-	 * @param array $domains Domains to be authorized.
-	 * @param bool $wildcard Is the authorization for wildcard or not.
+	 * @param array $domains  Domains to be authorized.
+	 * @param bool  $wildcard Is the authorization for wildcard or not.
 	 *
+	 * @throws \Exception
 	 * @return bool Success.
 	 */
 	public function authorize( Array $domains, $wildcard = false ) {
@@ -145,10 +143,8 @@ class Site_Letsencrypt {
 		try {
 			$order = $this->client->requestOrder( $domains );
 		} catch ( \Exception $e ) {
-			\EE::warning( $e->getMessage() );
 			\EE::warning( 'It seems you\'re in local environment or using non-public domain, please check logs. Skipping letsencrypt.' );
-
-			return false;
+			throw $e;
 		}
 
 		$authorizationChallengesToSolve = [];
@@ -244,7 +240,9 @@ class Site_Letsencrypt {
 			if ( ! $authorizationChallenge->isValid() ) {
 				\EE::debug( sprintf( 'Testing the challenge for domain %s', $domain ) );
 				if ( ! $validator->isValid( $authorizationChallenge ) ) {
-					\EE::warning( sprintf( 'Can not valid challenge for domain %s', $domain ) );
+					$message = sprintf( 'Can not validate challenge for domain %s', $domain );
+					\EE::warning( $message  );
+					throw new \Exception( $message );
 				}
 
 				\EE::debug( sprintf( 'Requesting authorization check for domain %s', $domain ) );
@@ -253,10 +251,10 @@ class Site_Letsencrypt {
 				} catch ( \Exception $e ) {
 					\EE::debug( $e->getMessage() );
 					\EE::warning( 'Challange Authorization failed. Check logs and check if your domain is pointed correctly to this server.' );
+
 					$site_name = isset( $domains[1] ) ? $domains[1] : $domains[0];
 					\EE::log( "Re-run `ee site le $site_name` after fixing the issue." );
-
-					return false;
+					throw $e;
 				}
 				$authorizationChallengeToCleanup[] = $authorizationChallenge;
 			}
