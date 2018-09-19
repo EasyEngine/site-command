@@ -2,6 +2,7 @@
 
 namespace EE\Site\Type;
 
+use EE;
 use EE\Model\Site;
 use Symfony\Component\Filesystem\Filesystem;
 use function EE\Site\Utils\auto_site_name;
@@ -489,7 +490,7 @@ abstract class EE_Site_Command {
 			return;
 		}
 		if ( $wildcard ) {
-			echo \cli\Colors::colorize( '%YIMPORTANT:%n Run `ee site le ' . $this->site_data['site_url'] . '` once the dns changes have propogated to complete the certification generation and installation.', null );
+			echo \cli\Colors::colorize( '%YIMPORTANT:%n Run `ee site ssl ' . $this->site_data['site_url'] . '` once the dns changes have propogated to complete the certification generation and installation.', null );
 		} else {
 			$this->ssl( [], [] );
 		}
@@ -548,7 +549,12 @@ abstract class EE_Site_Command {
 	 */
 	public function ssl( $args = [], $assoc_args = [] ) {
 
-		if ( ! isset( $this->site_data['site_url'] ) ) {
+		EE::log( 'Starting SSL verification.' );
+
+		// This checks if this method was called internally by ee or by user
+		$called_by_ee = isset( $this->site_data['site_url'] );
+
+		if ( ! $called_by_ee ) {
 			$this->site_data = get_site_info( $args );
 		}
 
@@ -560,9 +566,14 @@ abstract class EE_Site_Command {
 		$domains = $this->get_cert_domains( $this->site_data['site_url'], $this->site_data['site_ssl_wildcard'] );
 		$client  = new Site_Letsencrypt();
 
-		if ( ! $client->check( $domains, $this->site_data['site_ssl_wildcard'] ) ) {
-			$this->site_data['site_ssl'] = null;
+		try {
+			$client->check( $domains, $this->site_data['site_ssl_wildcard'] );
+		} catch ( \Exception $e ) {
+			if ( $called_by_ee ) {
+				throw $e;
+			}
 
+			$this->delete_site( 5, $this->site_data['site_url'], $this->site_data['site_fs_path'] );
 			return;
 		}
 
@@ -572,7 +583,10 @@ abstract class EE_Site_Command {
 		if ( ! $this->site_data['site_ssl_wildcard'] ) {
 			$client->cleanup();
 		}
+
 		reload_global_nginx_proxy();
+
+		EE::log( 'SSL verification completed.' );
 	}
 
 	/**
