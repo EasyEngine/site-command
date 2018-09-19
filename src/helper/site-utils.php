@@ -2,9 +2,9 @@
 
 namespace EE\Site\Utils;
 
-use \EE;
+use EE;
 use EE\Model\Site;
-use \Symfony\Component\Filesystem\Filesystem;
+use Symfony\Component\Filesystem\Filesystem;
 
 /**
  * Get the site-name from the path from where ee is running if it is a valid site path.
@@ -88,14 +88,14 @@ function get_site_info( $args, $site_enabled_check = true, $exit_if_not_found = 
 	$array_data = ( array ) $data;
 	$site_data  = $return_array ? reset( $array_data ) : $data;
 
+	if ( ! $data && $exit_if_not_found ) {
+		\EE::error( sprintf( 'Site %s does not exist.', $site_url ) );
+	}
 
 	if ( ! $data->site_enabled && $site_enabled_check ) {
 		\EE::error( sprintf( 'Site %1$s is not enabled. Use `ee site up %1$s` to enable it.', $data->site_url ) );
 	}
 
-	if ( ! $data && $exit_if_not_found ) {
-		\EE::error( sprintf( 'Site %s does not exist.', $data->site_url ) );
-	}
 
 	return $site_data;
 }
