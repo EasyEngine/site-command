@@ -378,7 +378,7 @@ function set_postfix_files( $site_url, $site_conf_dir ) {
 
 	if ( ! EE::exec( sprintf( "openssl req -new -x509 -nodes -days 365 -subj \"/CN=smtp.%s\" -out $ssl_dir/server.crt -keyout $ssl_dir/server.key", $site_url ) )
 	     && EE::exec( "chmod 0600 $ssl_dir/server.key" ) ) {
-		throw new Exception( 'Unable to generate ssl key for postfix' );
+		throw new \Exception( 'Unable to generate ssl key for postfix' );
 	}
 }
 
