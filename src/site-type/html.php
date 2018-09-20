@@ -160,9 +160,10 @@ class HTML extends EE_Site_Command {
 		$site_docker_yml         = $this->site_data['site_fs_path'] . '/docker-compose.yml';
 		$site_conf_env           = $this->site_data['site_fs_path'] . '/.env';
 		$site_nginx_default_conf = $site_conf_dir . '/nginx/main.conf';
-		$site_nginx_custom_conf  = $site_conf_dir . '/nginx/user/custom.conf';
 		$site_src_dir            = $this->site_data['site_fs_path'] . '/app/src';
 		$process_user            = posix_getpwuid( posix_geteuid() );
+		$custom_conf_dest        = $site_conf_dir . '/nginx/user/custom.conf';
+		$custom_conf_source      = SITE_TEMPLATE_ROOT . '/config/nginx/custom.conf.mustache';
 
 		\EE::log( sprintf( 'Creating site %s.', $this->site_data['site_url'] ) );
 		\EE::log( 'Copying configuration files.' );
@@ -172,7 +173,6 @@ class HTML extends EE_Site_Command {
 		$site_docker            = new Site_HTML_Docker();
 		$docker_compose_content = $site_docker->generate_docker_compose_yml( $filter );
 		$default_conf_content   = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx/main.conf.mustache', [ 'server_name' => $this->site_data['site_url'] ] );
-		$custom_conf_content    = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx/custom.conf.mustache', [] );
 
 		$env_data    = [
 			'virtual_host' => $this->site_data['site_url'],
@@ -185,7 +185,7 @@ class HTML extends EE_Site_Command {
 			$this->fs->dumpFile( $site_docker_yml, $docker_compose_content );
 			$this->fs->dumpFile( $site_conf_env, $env_content );
 			$this->fs->dumpFile( $site_nginx_default_conf, $default_conf_content );
-			$this->fs->dumpFile( $site_nginx_custom_conf, $custom_conf_content );
+			$this->fs->copy( $custom_conf_source, $custom_conf_dest );
 
 			$index_data = [
 				'version'       => 'v' . EE_VERSION,
