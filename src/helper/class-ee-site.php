@@ -392,6 +392,54 @@ abstract class EE_Site_Command {
 	}
 
 	/**
+	 * Update between site types.
+	 *
+	 * [<site-name>]
+	 * : Name of the site.
+	 *
+	 * [--ssl=<ssl>]
+	 * : Enable ssl on site
+	 *
+	 * [--wildcard]
+	 * : Enable wildcard SSL on site.
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     # Add SSL to site
+	 *     $ ee site update example.com --ssl=le
+	 *
+	 */
+	public function update( $args, $assoc_args ) {
+		\EE\Utils\delem_log( 'site reload start' );
+		$args            = auto_site_name( $args, 'site', __FUNCTION__ );
+		$this->site_data = get_site_info( $args );
+		$site            = Site::find( $this->site_data['site_url'] );
+
+		$ssl      = $assoc_args['ssl'] ?? false;
+		$wildcard = $assoc_args['wildcard'] ?? false;
+
+		if ( $ssl ) {
+			if ( $this->site_data['site_ssl'] ) {
+				\EE::error( 'Site ' . $this->site_data['site_url'] . ' already contains SSL' );
+			}
+
+			try {
+				$this->init_ssl( $this->site_data['site_url'], $this->site_data['site_fs_path'], $ssl, $wildcard );
+				$site->site_ssl          = $ssl;
+				$site->site_ssl_wildcard = $wildcard;
+			} catch ( \Exception $e ) {
+				\EE::error( 'Unable to enable SSL on ' . $this->site_data['site_url'] . '. Please check logs for more info' );
+			}
+		}
+
+		$site->save();
+
+		\EE::success( 'Updated site ' . $this->site_data['site_ssl'] );
+
+		\EE\Utils\delem_log( 'site reload end' );
+	}
+
+	/**
 	 * Executes reload commands. It needs separate handling as commands to reload each service is different.
 	 *
 	 * @param array $services        Services to reload.
