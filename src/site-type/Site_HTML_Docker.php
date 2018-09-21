@@ -44,7 +44,6 @@ class Site_HTML_Docker {
 				[ 'name' => './config/nginx/main.conf:/etc/nginx/conf.d/default.conf' ],
 				[ 'name' => './config/nginx/custom:/etc/nginx/custom' ],
 				[ 'name' => './logs/nginx:/var/log/nginx' ],
-				[ 'name' => './config/nginx/common:/usr/local/openresty/nginx/conf/common' ],
 			],
 		];
 		$nginx['labels']      = [
