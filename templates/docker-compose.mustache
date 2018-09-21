@@ -40,7 +40,13 @@ services:
     {{#networks}}
     networks:
     {{#net}}
-      - {{name}}
+      {{name}}:
+      {{#aliases}}
+        aliases:
+        {{#alias}}
+          - {{name}}
+        {{/alias}}
+      {{/aliases}}
     {{/net}}
     {{/networks}}
 {{/services}}

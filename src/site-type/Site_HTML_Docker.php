@@ -53,7 +53,14 @@ class Site_HTML_Docker {
 		];
 		$nginx['networks']    = [
 			'net' => [
-				[ 'name' => 'site-network' ],
+				[
+					'name' => 'site-network',
+					'aliases' => [
+						'alias' => [
+							'name' => '${VIRTUAL_HOST}',
+						],
+					],
+				],
 				[ 'name' => 'global-network' ],
 			]
 		];
