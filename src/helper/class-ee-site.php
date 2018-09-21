@@ -249,10 +249,10 @@ abstract class EE_Site_Command {
 	 * ## EXAMPLES
 	 *
 	 *     # Enable site
-	 *     $ ee site up example.com
+	 *     $ ee site enable example.com
 	 *
 	 */
-	public function up( $args, $assoc_args ) {
+	public function enable( $args, $assoc_args ) {
 
 		\EE\Utils\delem_log( 'site enable start' );
 		$force           = \EE\Utils\get_flag_value( $assoc_args, 'force' );
@@ -286,10 +286,10 @@ abstract class EE_Site_Command {
 	 * ## EXAMPLES
 	 *
 	 *     # Disable site
-	 *     $ ee site down example.com
+	 *     $ ee site disable example.com
 	 *
 	 */
-	public function down( $args, $assoc_args ) {
+	public function disable( $args, $assoc_args ) {
 
 		\EE\Utils\delem_log( 'site disable start' );
 		$args            = auto_site_name( $args, 'site', __FUNCTION__ );
@@ -491,7 +491,7 @@ abstract class EE_Site_Command {
 		if ( $wildcard ) {
 			echo \cli\Colors::colorize( '%YIMPORTANT:%n Run `ee site le ' . $this->site_data['site_url'] . '` once the dns changes have propogated to complete the certification generation and installation.', null );
 		} else {
-			$this->le( [], [] );
+			$this->ssl( [], [] );
 		}
 	}
 
@@ -536,7 +536,7 @@ abstract class EE_Site_Command {
 
 
 	/**
-	 * Runs the acme le.
+	 * Verifies ssl challenge and also renews certificates(if expired).
 	 *
 	 * ## OPTIONS
 	 *
@@ -546,7 +546,7 @@ abstract class EE_Site_Command {
 	 * [--force]
 	 * : Force renewal.
 	 */
-	public function le( $args = [], $assoc_args = [] ) {
+	public function ssl( $args = [], $assoc_args = [] ) {
 
 		if ( ! isset( $this->site_data['site_url'] ) ) {
 			$this->site_data = get_site_info( $args );
