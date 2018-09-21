@@ -162,8 +162,8 @@ class HTML extends EE_Site_Command {
 		$site_nginx_default_conf = $site_conf_dir . '/nginx/main.conf';
 		$site_src_dir            = $this->site_data['site_fs_path'] . '/app/src';
 		$process_user            = posix_getpwuid( posix_geteuid() );
-		$custom_conf_dest        = $site_conf_dir . '/nginx/custom/custom.conf';
-		$custom_conf_source      = SITE_TEMPLATE_ROOT . '/config/nginx/custom.conf.mustache';
+		$custom_conf_dest        = $site_conf_dir . '/nginx/custom/user.conf';
+		$custom_conf_source      = SITE_TEMPLATE_ROOT . '/config/nginx/user.conf.mustache';
 
 		\EE::log( sprintf( 'Creating site %s.', $this->site_data['site_url'] ) );
 		\EE::log( 'Copying configuration files.' );
