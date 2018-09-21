@@ -24,13 +24,13 @@
         },
         "bundled": true,
         "commands": [
-            "site delete",
             "site create --type=html",
+            "site delete",
             "site info --type=html",
-            "site up",
-            "site down",
+            "site enable",
+            "site disable",
             "site info",
-            "site le",
+            "site ssl",
             "site list",
             "site reload --type=html",
             "site restart --type=html"
