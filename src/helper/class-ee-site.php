@@ -434,9 +434,10 @@ abstract class EE_Site_Command {
 
 		$site->save();
 
-		\EE::success( 'Updated site ' . $this->site_data['site_ssl'] );
-
-		\EE\Utils\delem_log( 'site reload end' );
+		if ( __CLASS__ === get_class( $this ) ) {
+			\EE::success( 'Updated site ' . $this->site_data['site_ssl'] );
+			\EE\Utils\delem_log( 'site reload end' );
+		}
 	}
 
 	/**
