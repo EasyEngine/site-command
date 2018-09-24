@@ -155,15 +155,22 @@ abstract class EE_Site_Command {
 
 		\EE\Utils\delem_log( 'site delete start' );
 		$this->site_data = get_site_info( $args, false );
+
+		$db_data = ( empty( $this->site_data['db_host'] ) || 'db' === $this->site_data['db_host'] ) ? [] : [
+			'db_host' => $this->site_data['db_host'],
+			'db_user' => $this->site_data['db_user'],
+			'db_name' => $this->site_data['db_name'],
+		];
+
 		\EE::confirm( sprintf( 'Are you sure you want to delete %s?', $this->site_data['site_url'] ), $assoc_args );
-		$this->delete_site( 5, $this->site_data['site_url'], $this->site_data['site_fs_path'] );
+		$this->delete_site( 5, $this->site_data['site_url'], $this->site_data['site_fs_path'], $db_data );
 		\EE\Utils\delem_log( 'site delete end' );
 	}
 
 	/**
 	 * Function to delete the given site.
 	 *
-	 * @param int    $level        Level of deletion.
+	 * @param int $level           Level of deletion.
 	 *                             Level - 0: No need of clean-up.
 	 *                             Level - 1: Clean-up only the site-root.
 	 *                             Level - 2: Try to remove network. The network may or may not have been created.
@@ -171,10 +178,11 @@ abstract class EE_Site_Command {
 	 *                             may not have been created. Level - 4: Remove containers. Level - 5: Remove db entry.
 	 * @param string $site_url     Name of the site to be deleted.
 	 * @param string $site_fs_path Webroot of the site.
+	 * @param array $db_data       Database host, user and password to cleanup db.
 	 *
 	 * @throws \EE\ExitException
 	 */
-	protected function delete_site( $level, $site_url, $site_fs_path ) {
+	protected function delete_site( $level, $site_url, $site_fs_path, $db_data = [] ) {
 
 		$this->fs = new Filesystem();
 
@@ -187,6 +195,11 @@ abstract class EE_Site_Command {
 					\EE::warning( 'Error in removing docker containers.' );
 				}
 			}
+		}
+
+		if ( ! empty( $db_data['db_host'] ) ) {
+			\EE\Site\Utils\cleanup_db( $db_data['db_host'], $db_data['db_name'] );
+			\EE\Site\Utils\cleanup_db_user( $db_data['db_host'], $db_data['db_user'] );
 		}
 
 		if ( $this->fs->exists( $site_fs_path ) ) {
@@ -452,12 +465,12 @@ abstract class EE_Site_Command {
 			$this->init_le( $site_url, $site_fs_path, $wildcard );
 		} elseif ( 'inherit' === $ssl_type ) {
 			if ( $wildcard ) {
-				\EE::error( 'Cannot use --wildcard with --ssl=inherit', false );
+				throw new \Exception( 'Cannot use --wildcard with --ssl=inherit', false );
 			}
 			\EE::debug( 'Inheriting certs' );
 			$this->inherit_certs( $site_url );
 		} else {
-			\EE::error( "Unrecognized value in --ssl flag: $ssl_type" );
+			throw new \Exception( "Unrecognized value in --ssl flag: $ssl_type" );
 		}
 	}
 

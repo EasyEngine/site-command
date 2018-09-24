@@ -4,6 +4,18 @@ if ( ! defined( 'SITE_TEMPLATE_ROOT' ) ) {
 	define( 'SITE_TEMPLATE_ROOT', __DIR__ . '/templates' );
 }
 
+if ( ! defined( 'GLOBAL_DB' ) ) {
+	define( 'GLOBAL_DB', 'global-db' );
+}
+
+if ( ! defined( 'GLOBAL_DB_CONTAINER' ) ) {
+	define( 'GLOBAL_DB_CONTAINER', 'ee-global-db' );
+}
+
+if ( ! defined( 'GLOBAL_NETWORK' ) ) {
+	define( 'GLOBAL_NETWORK', 'ee-global-network' );
+}
+
 if ( ! class_exists( 'EE' ) ) {
 	return;
 }
