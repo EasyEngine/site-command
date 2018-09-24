@@ -1,4 +1,4 @@
-# Add your custom config in custom.conf
+# Add your custom config in custom/user.conf
 # ALL CHANGES IN THIS FILE WILL BE LOST AFTER EasyEngine Update
 
 server {
@@ -41,7 +41,7 @@ server {
 		access_log off;
 		log_not_found off;
 	}
-	
+
 	# Deny backup extensions & log files
 	location ~* ^.+\.(bak|log|old|orig|original|php#|php~|php_bak|save|swo|swp|sql)$ {
 		deny all;
@@ -65,4 +65,6 @@ server {
 	{{! /locations.conf }}
 
 	client_max_body_size 100m;
+
+	include custom/*.conf;
 }
