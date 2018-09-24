@@ -131,9 +131,9 @@ function init_checks() {
 			}
 
 			$EE_CONF_ROOT = EE_CONF_ROOT;
-			if ( ! EE::docker()::docker_network_exists( 'ee-global-network' ) ) {
-				if ( ! EE::docker()::create_network( 'ee-global-network' ) ) {
-					EE::error( 'Unable to create network ee-global-network' );
+			if ( ! EE::docker()::docker_network_exists( GLOBAL_NETWORK ) ) {
+				if ( ! EE::docker()::create_network( GLOBAL_NETWORK ) ) {
+					EE::error( 'Unable to create network ' . GLOBAL_NETWORK );
 				}
 			}
 			if ( EE::docker()::docker_compose_up( EE_CONF_ROOT, [ 'nginx-proxy' ] ) ) {
@@ -147,6 +147,17 @@ function init_checks() {
 }
 
 /**
+ * Function to start global db if it is not running.
+ */
+function init_global_db() {
+
+	if ( 'running' !== EE::docker()::container_status( GLOBAL_DB ) ) {
+		chdir( EE_CONF_ROOT );
+		EE::docker()::boot_container( GLOBAL_DB, 'docker-compose up -d ' . GLOBAL_DB );
+	}
+}
+
+/**
  * Generates global docker-compose.yml at EE_CONF_ROOT
  *
  * @param Filesystem $fs Filesystem object to write file
@@ -156,35 +167,149 @@ function generate_global_docker_compose_yml( Filesystem $fs ) {
 
 	$data = [
 		'services' => [
-			'name'           => 'nginx-proxy',
-			'container_name' => EE_PROXY_TYPE,
-			'image'          => 'easyengine/nginx-proxy:' . $img_versions['easyengine/nginx-proxy'],
-			'restart'        => 'always',
-			'ports'          => [
-				'80:80',
-				'443:443',
+			[
+				'name'           => 'nginx-proxy',
+				'container_name' => EE_PROXY_TYPE,
+				'image'          => 'easyengine/nginx-proxy:' . $img_versions['easyengine/nginx-proxy'],
+				'restart'        => 'always',
+				'ports'          => [
+					'80:80',
+					'443:443',
+				],
+				'environment'    => [
+					'LOCAL_USER_ID=' . posix_geteuid(),
+					'LOCAL_GROUP_ID=' . posix_getegid(),
+				],
+				'volumes'        => [
+					EE_CONF_ROOT . '/nginx/certs:/etc/nginx/certs',
+					EE_CONF_ROOT . '/nginx/dhparam:/etc/nginx/dhparam',
+					EE_CONF_ROOT . '/nginx/conf.d:/etc/nginx/conf.d',
+					EE_CONF_ROOT . '/nginx/htpasswd:/etc/nginx/htpasswd',
+					EE_CONF_ROOT . '/nginx/vhost.d:/etc/nginx/vhost.d',
+					EE_CONF_ROOT . '/nginx/html:/usr/share/nginx/html',
+					'/var/run/docker.sock:/tmp/docker.sock:ro',
+				],
+				'networks'       => [
+					'global-network',
+				],
 			],
-			'environment'    => [
-				'LOCAL_USER_ID=' . posix_geteuid(),
-				'LOCAL_GROUP_ID=' . posix_getegid(),
-			],
-			'volumes'        => [
-				EE_CONF_ROOT . '/nginx/certs:/etc/nginx/certs',
-				EE_CONF_ROOT . '/nginx/dhparam:/etc/nginx/dhparam',
-				EE_CONF_ROOT . '/nginx/conf.d:/etc/nginx/conf.d',
-				EE_CONF_ROOT . '/nginx/htpasswd:/etc/nginx/htpasswd',
-				EE_CONF_ROOT . '/nginx/vhost.d:/etc/nginx/vhost.d',
-				EE_CONF_ROOT . '/nginx/html:/usr/share/nginx/html',
-				'/var/run/docker.sock:/tmp/docker.sock:ro',
-			],
-			'networks'       => [
-				'global-network',
+			[
+				'name'           => GLOBAL_DB,
+				'container_name' => GLOBAL_DB_CONTAINER,
+				'image'          => 'easyengine/mariadb:' . $img_versions['easyengine/mariadb'],
+				'restart'        => 'always',
+				'environment'    => [
+					'MYSQL_ROOT_PASSWORD=' . \EE\Utils\random_password(),
+				],
+				'volumes'        => [ './app/db:/var/lib/mysql' ],
+				'networks'       => [
+					'global-network',
+				],
 			],
 		],
 	];
 
 	$contents = EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/global_docker_compose.yml.mustache', $data );
 	$fs->dumpFile( EE_CONF_ROOT . '/docker-compose.yml', $contents );
+}
+
+/**
+ * Create user in remote or global db.
+ *
+ * @param string $db_host        Database Hostname.
+ * @param string $db_name        Database name to be created.
+ * @param string $db_user        Database user to be created.
+ * @param string $db_pass        Database password to be created.
+ * @param string $db_user_suffix Suffix to be added to username.
+ * @param string $db_name_suffix Suffix to be added to database name.
+ *
+ * @return array Finally created database name, user and password.
+ */
+function create_user_in_db( $db_host, $db_name = '', $db_user = '', $db_pass = '', $db_user_suffix = '', $db_name_suffix = '' ) {
+
+	$db_name_suffix = empty( $db_name_suffix ) ? \EE\Utils\random_password( 5 ) : $db_name_suffix;
+	$db_name        = empty( $db_name ) ? \EE\Utils\random_password( 5 ) : $db_name;
+	$db_user_suffix = empty( $db_user_suffix ) ? \EE\Utils\random_password( 5 ) : $db_user_suffix;
+	$db_user        = empty( $db_user ) ? \EE\Utils\random_password( 5 ) : $db_user;
+	$db_pass        = empty( $db_pass ) ? \EE\Utils\random_password() : $db_pass;
+	$db_user        = $db_user . '_' . $db_user_suffix;
+	$db_name        = $db_name . '_' . $db_name_suffix;
+
+	$create_string = sprintf( "CREATE USER '%1\$s'@'%%' IDENTIFIED BY '%2\$s'; CREATE DATABASE %3\$s; GRANT ALL PRIVILEGES ON %3\$s.* TO '%1\$s'@'%%'; FLUSH PRIVILEGES;", $db_user, $db_pass, $db_name );
+
+	if ( GLOBAL_DB === $db_host ) {
+
+		$health_script  = 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e"exit"';
+		$db_script_path = \EE\Utils\get_temp_dir() . 'db_exec';
+		file_put_contents( $db_script_path, $health_script );
+		$mysql_unhealthy = true;
+		EE::exec( sprintf( 'docker cp %s ee-global-db:/db_exec', $db_script_path ) );
+		$count = 0;
+		while ( $mysql_unhealthy ) {
+			$mysql_unhealthy = ! EE::exec( 'docker exec ee-global-db sh db_exec' );
+			if ( $count ++ > 60 ) {
+				break;
+			}
+			sleep( 1 );
+		}
+
+		$db_script_path = \EE\Utils\get_temp_dir() . 'db_exec';
+		file_put_contents( $db_script_path, sprintf( 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e"%s"', $create_string ) );
+
+		EE::exec( sprintf( 'docker cp %s ee-global-db:/db_exec', $db_script_path ) );
+		EE::exec( 'docker exec ee-global-db sh db_exec' );
+	} else {
+		//TODO: Handle remote case.
+	}
+
+	return [
+		'db_name' => $db_name,
+		'db_user' => $db_user,
+		'db_pass' => $db_pass,
+	];
+}
+
+/**
+ * Function to cleanup database.
+ *
+ * @param string $db_host Database host from which database is to be removed.
+ * @param string $db_name Database name to be removed.
+ * @param string $db_user Database user to remove the host.
+ * @param string $db_pass Database password of the user.
+ */
+function cleanup_db( $db_host, $db_name, $db_user = '', $db_pass = '' ) {
+
+	$cleanup_string = sprintf( 'DROP DATABASE %s;', $db_name );
+
+	if ( GLOBAL_DB === $db_host ) {
+		$db_script_path = \EE\Utils\get_temp_dir() . 'db_exec';
+		file_put_contents( $db_script_path, sprintf( 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e"%s"', $cleanup_string ) );
+
+		EE::exec( sprintf( 'docker cp %s ee-global-db:/db_exec', $db_script_path ) );
+		EE::exec( 'docker exec ee-global-db sh db_exec' );
+	}
+
+}
+
+/**
+ * Function to cleanup database user.
+ *
+ * @param string $db_host               Database host from which user is to be removed.
+ * @param string $db_user_to_be_cleaned Database user to be removed.
+ * @param string $db_privileged_pass    User having sufficient privilege to delete the given user.
+ * @param string $db_privileged_user    Password of that privileged user.
+ */
+function cleanup_db_user( $db_host, $db_user_to_be_cleaned, $db_privileged_pass = '', $db_privileged_user = 'root' ) {
+
+	$cleanup_string = sprintf( 'DROP USER \'%s\'@\'%%\';', $db_user_to_be_cleaned );
+
+	if ( GLOBAL_DB === $db_host ) {
+		$db_script_path = \EE\Utils\get_temp_dir() . 'db_exec';
+		file_put_contents( $db_script_path, sprintf( 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e"%s"', $cleanup_string ) );
+
+		EE::exec( sprintf( 'docker cp %s ee-global-db:/db_exec', $db_script_path ) );
+		EE::exec( 'docker exec ee-global-db sh db_exec' );
+	}
 }
 
 /**
