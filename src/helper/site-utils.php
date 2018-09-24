@@ -76,7 +76,7 @@ function auto_site_name( $args, $command, $function, $arg_pos = 0 ) {
  * Populate basic site info from db.
  *
  * @param bool $site_enabled_check Check if site is enabled. Throw error message if not enabled.
- * @param bool $exit_if_not_found  Check if site exists. Throw error message if not.
+ * @param bool $exit_if_not_found  Check if site exists. Throw error message if not, else return false.
  * @param bool $return_array       Return array of data or object.
  *
  * @return mixed $site_data Site data from db.
@@ -88,8 +88,12 @@ function get_site_info( $args, $site_enabled_check = true, $exit_if_not_found = 
 	$array_data = ( array ) $data;
 	$site_data  = $return_array ? reset( $array_data ) : $data;
 
-	if ( ! $data && $exit_if_not_found ) {
-		\EE::error( sprintf( 'Site %s does not exist.', $site_url ) );
+	if ( ! $data ) {
+		if ( $exit_if_not_found ) {
+			\EE::error( sprintf( 'Site %s does not exist.', $site_url ) );
+		}
+
+		return false;
 	}
 
 	if ( ! $data->site_enabled && $site_enabled_check ) {
