@@ -464,12 +464,12 @@ abstract class EE_Site_Command {
 			$this->init_le( $site_url, $site_fs_path, $wildcard );
 		} elseif ( 'inherit' === $ssl_type ) {
 			if ( $wildcard ) {
-				\EE::error( 'Cannot use --wildcard with --ssl=inherit', false );
+				throw new \Exception( 'Cannot use --wildcard with --ssl=inherit', false );
 			}
 			\EE::debug( 'Inheriting certs' );
 			$this->inherit_certs( $site_url );
 		} else {
-			\EE::error( "Unrecognized value in --ssl flag: $ssl_type" );
+			throw new \Exception( "Unrecognized value in --ssl flag: $ssl_type" );
 		}
 	}
 
