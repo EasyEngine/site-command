@@ -572,8 +572,7 @@ abstract class EE_Site_Command {
 			if ( $called_by_ee ) {
 				throw $e;
 			}
-
-			$this->delete_site( 5, $this->site_data['site_url'], $this->site_data['site_fs_path'] );
+			EE::error( 'Failed to verify SSL: ' . $e->getMessage() );
 			return;
 		}
 

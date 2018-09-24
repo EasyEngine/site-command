@@ -240,9 +240,7 @@ class Site_Letsencrypt {
 			if ( ! $authorizationChallenge->isValid() ) {
 				\EE::debug( sprintf( 'Testing the challenge for domain %s', $domain ) );
 				if ( ! $validator->isValid( $authorizationChallenge ) ) {
-					$message = sprintf( 'Can not validate challenge for domain %s', $domain );
-					\EE::warning( $message  );
-					throw new \Exception( $message );
+					throw new \Exception( sprintf( 'Can not validate challenge for domain %s', $domain ) );
 				}
 
 				\EE::debug( sprintf( 'Requesting authorization check for domain %s', $domain ) );
