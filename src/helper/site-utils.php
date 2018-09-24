@@ -88,6 +88,7 @@ function get_site_info( $args, $site_enabled_check = true, $exit_if_not_found = 
 	$array_data = ( array ) $data;
 	$site_data  = $return_array ? reset( $array_data ) : $data;
 
+
 	if ( ! $data->site_enabled && $site_enabled_check ) {
 		\EE::error( sprintf( 'Site %1$s is not enabled. Use `ee site up %1$s` to enable it.', $data->site_url ) );
 	}
