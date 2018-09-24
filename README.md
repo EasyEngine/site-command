@@ -1,102 +1,338 @@
-# EasyEngine/site-command
+easyengine/site-command
+=======================
 
-Performs basic site functions in easyengine.
 
-`site` command contains following subcommand
- * [create](#create)
- * [delete](#delete)
- * [disable](#disable)
- * [enable](#enable)
- * [info](#info)
- * [list](#list)
- * [up](#up)
- * [down](#down)
- * [restart](#restart)
- * [reload](#reload)
 
-## create
-Runs the site creation.
-Check [this](https://github.com/EasyEngine/site-wp-command) for `--type=wp` support package.
-```bash
-ee site create example.com            # install html site (default)
-ee site create example.com --type=wp  # install wp site 
-```
+[![Build Status](https://travis-ci.org/easyengine/site-command.svg?branch=master)](https://travis-ci.org/easyengine/site-command)
 
-Let's Encrypt SSL
-```bash
-# Enable SSL using Let’s Encrypt (You can add --letsencrypt along with any other flag.)
-ee site create example.com [--letsencrypt|--le]
-ee site create example.com --le                 # install wordpress without any page caching + letsencrypt ssl
-```
+Quick links: [Using](#using) | [Contributing](#contributing) | [Support](#support)
 
-## delete
-Deletes an existing EasyEngine site including the webroot and the database.
+## Using
 
-```bash
-ee site delete example.com          # Asks for confirmation.
-ee site delete example.com --yes    # Skips the confirmation prompt.
-```
+This package implements the following commands:
 
-## disable
-Disables a website. It will stop all containers which will free up resources used by this site. The site's data stored in the disk will still be safe.
+### ee site create --type=html
 
-```bash
-ee site disable example.com
-```
+Runs the standard HTML site installation.
 
-## enable
+~~~
+ee site create --type=html <site-name> [--ssl=<value>] [--wildcard] [--type=<type>] [--skip-status-check]
+~~~
+
+**OPTIONS**
+
+	<site-name>
+		Name of website.
+
+	[--ssl=<value>]
+		Enables ssl via letsencrypt certificate.
+
+	[--wildcard]
+		Gets wildcard SSL .
+
+	[--type=<type>]
+		Type of the site to be created. Values: html,php,wp etc.
+
+	[--skip-status-check]
+		Skips site status check.
+
+**EXAMPLES**
+
+    # Create html site
+    $ ee site create example.com
+
+    # Create html site with ssl from letsencrypt
+    $ ee site create example.com --ssl=le
+
+    # Create html site with wildcard ssl
+    $ ee site create example.com --ssl=le --wildcard
+
+
+
+### ee site delete
+
+Deletes a website.
+
+~~~
+ee site delete <site-name> [--yes]
+~~~
+
+**OPTIONS**
+
+	<site-name>
+		Name of website to be deleted.
+
+	[--yes]
+		Do not prompt for confirmation.
+
+**EXAMPLES**
+
+    # Delete site
+    $ ee site delete example.com
+
+
+
+### ee site info --type=html
+
+Runs the standard HTML site installation.
+
+~~~
+ee site info --type=html <site-name> [--ssl=<value>] [--wildcard] [--type=<type>] [--skip-status-check]
+~~~
+
+**OPTIONS**
+
+	<site-name>
+		Name of website.
+
+	[--ssl=<value>]
+		Enables ssl via letsencrypt certificate.
+
+	[--wildcard]
+		Gets wildcard SSL .
+
+	[--type=<type>]
+		Type of the site to be created. Values: html,php,wp etc.
+
+	[--skip-status-check]
+		Skips site status check.
+
+**EXAMPLES**
+
+    # Create html site
+    $ ee site create example.com
+
+    # Create html site with ssl from letsencrypt
+    $ ee site create example.com --ssl=le
+
+    # Create html site with wildcard ssl
+    $ ee site create example.com --ssl=le --wildcard
+
+
+
+### ee site enable
+
 Enables a website. It will start the docker containers of the website if they are stopped.
 
-```bash
-ee site enable example.com
-```
+~~~
+ee site enable [<site-name>] [--force]
+~~~
 
-## info
+**OPTIONS**
+
+	[<site-name>]
+		Name of website to be enabled.
+
+	[--force]
+		Force execution of site up.
+
+**EXAMPLES**
+
+    # Enable site
+    $ ee site enable example.com
+
+
+
+### ee site disable
+
+Disables a website. It will stop and remove the docker containers of the website if they are running.
+
+~~~
+ee site disable [<site-name>]
+~~~
+
+**OPTIONS**
+
+	[<site-name>]
+		Name of website to be disabled.
+
+**EXAMPLES**
+
+    # Disable site
+    $ ee site disable example.com
+
+
+
+### ee site info
+
 Display all the relevant site information, credentials and useful links.
 
-```bash
-ee site info example.com
-```
+~~~
+ee site info [<site-name>]
+~~~
 
-## list
+	[<site-name>]
+		Name of the website whose info is required.
+
+**EXAMPLES**
+
+    # Display site info
+    $ ee site info example.com
+
+
+
+### ee site ssl
+
+Verifies ssl challenge and also renews certificates(if expired).
+
+~~~
+ee site ssl <site-name> [--force]
+~~~
+
+**OPTIONS**
+
+	<site-name>
+		Name of website.
+
+	[--force]
+		Force renewal.
+
+
+
+### ee site list
+
 Lists the created websites.
 
-```bash
-ee site list                                           # Lists all sites (default: tabular format) 
-ee site list --format=[count|csv|json|table|text|yaml] # Lists all sites in a particular format
-ee site list --enabled                                 # List enabled sites 
-ee site list --disabled                                # List disabled sites 
-```
+~~~
+ee site list [--enabled] [--disabled] [--format=<format>]
+~~~
 
-## up
-Starts services associated with site.
+abstract list
 
-```bash
-ee site up example.com		# Defaults to all services
-ee site up example.com --nginx
-```
+	[--enabled]
+		List only enabled sites.
 
-## down
-Stops services associated with site.
+	[--disabled]
+		List only disabled sites.
 
-```bash
-ee site down example.com		# Defaults to all services
-ee site down example.com --mailhog
-```
+	[--format=<format>]
+		Render output in a particular format.
+		---
+		default: table
+		options:
+		  - table
+		  - csv
+		  - yaml
+		  - json
+		  - count
+		  - text
+		---
 
-## restart
-Restarts containers associated with site. This action will have a few seconds of downtime.
+**EXAMPLES**
 
-```bash
-ee site restart example.com		# Defaults to all services
-ee site restart example.com --nginx
-```
+    # List all sites
+    $ ee site list
 
-## reload
-Reload services in containers without restarting container(s) associated with site.
+    # List enabled sites
+    $ ee site list --enabled
 
-```bash
-ee site reload example.com		# Defaults to all services
-ee site reload example.com --nginx
-```
+    # List disabled sites
+    $ ee site list --disabled
 
+    # List all sites in JSON
+    $ ee site list --format=json
+
+    # Count all sites
+    $ ee site list --format=count
+
+
+
+### ee site reload --type=html
+
+Runs the standard HTML site installation.
+
+~~~
+ee site reload --type=html <site-name> [--ssl=<value>] [--wildcard] [--type=<type>] [--skip-status-check]
+~~~
+
+**OPTIONS**
+
+	<site-name>
+		Name of website.
+
+	[--ssl=<value>]
+		Enables ssl via letsencrypt certificate.
+
+	[--wildcard]
+		Gets wildcard SSL .
+
+	[--type=<type>]
+		Type of the site to be created. Values: html,php,wp etc.
+
+	[--skip-status-check]
+		Skips site status check.
+
+**EXAMPLES**
+
+    # Create html site
+    $ ee site create example.com
+
+    # Create html site with ssl from letsencrypt
+    $ ee site create example.com --ssl=le
+
+    # Create html site with wildcard ssl
+    $ ee site create example.com --ssl=le --wildcard
+
+
+
+### ee site restart --type=html
+
+Runs the standard HTML site installation.
+
+~~~
+ee site restart --type=html <site-name> [--ssl=<value>] [--wildcard] [--type=<type>] [--skip-status-check]
+~~~
+
+**OPTIONS**
+
+	<site-name>
+		Name of website.
+
+	[--ssl=<value>]
+		Enables ssl via letsencrypt certificate.
+
+	[--wildcard]
+		Gets wildcard SSL .
+
+	[--type=<type>]
+		Type of the site to be created. Values: html,php,wp etc.
+
+	[--skip-status-check]
+		Skips site status check.
+
+**EXAMPLES**
+
+    # Create html site
+    $ ee site create example.com
+
+    # Create html site with ssl from letsencrypt
+    $ ee site create example.com --ssl=le
+
+    # Create html site with wildcard ssl
+    $ ee site create example.com --ssl=le --wildcard
+
+## Contributing
+
+We appreciate you taking the initiative to contribute to this project.
+
+Contributing isn’t limited to just code. We encourage you to contribute in the way that best fits your abilities, by writing tutorials, giving a demo at your local meetup, helping other users with their support questions, or revising our documentation.
+
+
+### Reporting a bug
+
+Think you’ve found a bug? We’d love for you to help us get it fixed.
+
+Before you create a new issue, you should [search existing issues](https://github.com/easyengine/site-command/issues?q=label%3Abug%20) to see if there’s an existing resolution to it, or if it’s already been fixed in a newer version.
+
+Once you’ve done a bit of searching and discovered there isn’t an open or fixed issue for your bug, please [create a new issue](https://github.com/easyengine/site-command/issues/new). Include as much detail as you can, and clear steps to reproduce if possible.
+
+### Creating a pull request
+
+Want to contribute a new feature? Please first [open a new issue](https://github.com/easyengine/site-command/issues/new) to discuss whether the feature is a good fit for the project.
+
+## Support
+
+Github issues aren't for general support questions, but there are other venues you can try: https://easyengine.io/support/
+
+
+*This README.md is generated dynamically from the project's codebase using `ee scaffold package-readme` ([doc](https://github.com/EasyEngine/scaffold-command)). To suggest changes, please submit a pull request against the corresponding part of the codebase.*
