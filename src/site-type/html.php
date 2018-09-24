@@ -267,7 +267,7 @@ class HTML extends EE_Site_Command {
 			if ( $site ) {
 				\EE::log( 'Site entry created.' );
 			} else {
-				throw new Exception( 'Error creating site entry in database.' );
+				throw new \Exception( 'Error creating site entry in database.' );
 			}
 		} catch ( \Exception $e ) {
 			$this->catch_clean( $e );
