@@ -3,7 +3,6 @@
 namespace EE\Site\Type;
 
 use EE\Model\Site;
-use function Sodium\add;
 use Symfony\Component\Filesystem\Filesystem;
 use function EE\Site\Utils\auto_site_name;
 use function EE\Site\Utils\get_site_info;
@@ -453,7 +452,7 @@ abstract class EE_Site_Command {
 	 * @param string $site_fs_path Webroot of the site.
 	 * @param string $ssl_type     Type of ssl cert to issue.
 	 * @param bool $wildcard       SSL with wildcard or not.
-	 * @param bool $allow_le       allow lets encrypt.
+	 * @param bool $allow_le       allow LetsEncrypt
 	 *
 	 * @throws \EE\ExitException If --ssl flag has unrecognized value.
 	 * @throws \Exception
@@ -481,7 +480,7 @@ abstract class EE_Site_Command {
 	 * @param string $site_url     Name of the site for ssl.
 	 * @param string $site_fs_path Webroot of the site.
 	 * @param bool $wildcard       SSL with wildcard or not.
-	 * @param bool $allow_le       allow lets encrypt
+	 * @param bool $allow_le       allow LetsEncrypt
 	 */
 	protected function init_le( $site_url, $site_fs_path, $wildcard = false, $allow_le = false ) {
 
@@ -516,7 +515,7 @@ abstract class EE_Site_Command {
 	 *
 	 * @param string $site_url  Name of site
 	 * @param $wildcard         Wildcard cert required?
-	 * @param bool   $allow_le  Allow lets encrypt.
+	 * @param bool   $allow_le  Allow LetsEncrypt
 	 *
 	 * @return array
 	 */
