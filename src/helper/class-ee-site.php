@@ -3,6 +3,7 @@
 namespace EE\Site\Type;
 
 use EE\Model\Site;
+use function Sodium\add;
 use Symfony\Component\Filesystem\Filesystem;
 use function EE\Site\Utils\auto_site_name;
 use function EE\Site\Utils\get_site_info;
@@ -452,16 +453,17 @@ abstract class EE_Site_Command {
 	 * @param string $site_fs_path Webroot of the site.
 	 * @param string $ssl_type     Type of ssl cert to issue.
 	 * @param bool $wildcard       SSL with wildcard or not.
+	 * @param bool $allow_le       allow lets encrypt.
 	 *
 	 * @throws \EE\ExitException If --ssl flag has unrecognized value.
 	 * @throws \Exception
 	 */
-	protected function init_ssl( $site_url, $site_fs_path, $ssl_type, $wildcard = false ) {
+	protected function init_ssl( $site_url, $site_fs_path, $ssl_type, $wildcard = false, $allow_le = false ) {
 
 		\EE::debug( 'Starting SSL procedure' );
 		if ( 'le' === $ssl_type ) {
 			\EE::debug( 'Initializing LE' );
-			$this->init_le( $site_url, $site_fs_path, $wildcard );
+			$this->init_le( $site_url, $site_fs_path, $wildcard, $allow_le );
 		} elseif ( 'inherit' === $ssl_type ) {
 			if ( $wildcard ) {
 				throw new \Exception( 'Cannot use --wildcard with --ssl=inherit', false );
@@ -479,8 +481,9 @@ abstract class EE_Site_Command {
 	 * @param string $site_url     Name of the site for ssl.
 	 * @param string $site_fs_path Webroot of the site.
 	 * @param bool $wildcard       SSL with wildcard or not.
+	 * @param bool $allow_le       allow lets encrypt
 	 */
-	protected function init_le( $site_url, $site_fs_path, $wildcard = false ) {
+	protected function init_le( $site_url, $site_fs_path, $wildcard = false, $allow_le = false ) {
 
 		\EE::debug( 'Wildcard in init_le: ' . ( bool ) $wildcard );
 
@@ -496,7 +499,7 @@ abstract class EE_Site_Command {
 			return;
 		}
 
-		$domains = $this->get_cert_domains( $site_url, $wildcard );
+		$domains = $this->get_cert_domains( $site_url, $wildcard, $allow_le );
 
 		if ( ! $client->authorize( $domains, $wildcard ) ) {
 			return;
@@ -513,16 +516,20 @@ abstract class EE_Site_Command {
 	 *
 	 * @param string $site_url  Name of site
 	 * @param $wildcard         Wildcard cert required?
+	 * @param bool   $allow_le  Allow lets encrypt.
 	 *
 	 * @return array
 	 */
-	private function get_cert_domains( string $site_url, $wildcard ): array {
+	private function get_cert_domains( string $site_url, $wildcard, $allow_le = false ): array {
 
 		$domains = [ $site_url ];
 		if ( $wildcard ) {
 			$domains[] = "*.{$site_url}";
 		} else {
-			$domains[] = $this->get_www_domain( $site_url );
+
+			if ( true === $allow_le ) {
+				$domains[] = $this->get_www_domain( $site_url );
+			}
 		}
 
 		return $domains;
