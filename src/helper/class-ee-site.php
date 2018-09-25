@@ -502,7 +502,7 @@ abstract class EE_Site_Command {
 			return;
 		}
 		if ( $wildcard ) {
-			echo \cli\Colors::colorize( '%YIMPORTANT:%n Run `ee site le ' . $this->site_data['site_url'] . '` once the dns changes have propogated to complete the certification generation and installation.', null );
+			echo \cli\Colors::colorize( '%YIMPORTANT:%n Run `ee site ssl ' . $this->site_data['site_url'] . '` once the DNS changes have propagated to complete the certification generation and installation.', null );
 		} else {
 			$this->ssl( [], [] );
 		}
