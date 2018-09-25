@@ -134,7 +134,7 @@ function init_checks() {
 				}
 			}
 			if ( EE::docker()::docker_compose_up( EE_ROOT_DIR . '/services', [ 'nginx-proxy' ] ) ) {
-				$fs->dumpFile( "$EE_ROOT_DIR/nginx/conf.d/custom.conf", file_get_contents( EE_ROOT . '/templates/custom.conf.mustache' ) );
+				$fs->dumpFile( "$EE_ROOT_DIR/services/nginx-proxy/conf.d/custom.conf", file_get_contents( EE_ROOT . '/templates/custom.conf.mustache' ) );
 				EE::success( "$proxy_type container is up." );
 			} else {
 				EE::error( "There was some error in starting $proxy_type container. Please check logs." );
@@ -155,7 +155,7 @@ function init_global_db() {
 }
 
 /**
- * Generates global docker-compose.yml at EE_ROOT_DIR
+ * Generates global docker-compose.yml at EE_ROOT_DIR/services
  *
  * @param Filesystem $fs Filesystem object to write file
  */
@@ -178,12 +178,12 @@ function generate_global_docker_compose_yml( Filesystem $fs ) {
 					'LOCAL_GROUP_ID=' . posix_getegid(),
 				],
 				'volumes'        => [
-					EE_ROOT_DIR . '/nginx/certs:/etc/nginx/certs',
-					EE_ROOT_DIR . '/nginx/dhparam:/etc/nginx/dhparam',
-					EE_ROOT_DIR . '/nginx/conf.d:/etc/nginx/conf.d',
-					EE_ROOT_DIR . '/nginx/htpasswd:/etc/nginx/htpasswd',
-					EE_ROOT_DIR . '/nginx/vhost.d:/etc/nginx/vhost.d',
-					EE_ROOT_DIR . '/nginx/html:/usr/share/nginx/html',
+					EE_ROOT_DIR . '/services/nginx-proxy/certs:/etc/nginx/certs',
+					EE_ROOT_DIR . '/services/nginx-proxy/dhparam:/etc/nginx/dhparam',
+					EE_ROOT_DIR . '/services/nginx-proxy/conf.d:/etc/nginx/conf.d',
+					EE_ROOT_DIR . '/services/nginx-proxy/htpasswd:/etc/nginx/htpasswd',
+					EE_ROOT_DIR . '/services/nginx-proxy/vhost.d:/etc/nginx/vhost.d',
+					EE_ROOT_DIR . '/services/nginx-proxy/html:/usr/share/nginx/html',
 					'/var/run/docker.sock:/tmp/docker.sock:ro',
 				],
 				'networks'       => [
@@ -340,7 +340,7 @@ function create_site_root( $site_fs_path, $site_url ) {
 function add_site_redirects( string $site_url, bool $ssl, bool $inherit ) {
 
 	$fs               = new Filesystem();
-	$confd_path       = EE_ROOT_DIR . '/nginx/conf.d/';
+	$confd_path       = EE_ROOT_DIR . '/services/nginx-proxy/conf.d/';
 	$config_file_path = $confd_path . $site_url . '-redirect.conf';
 	$has_www          = strpos( $site_url, 'www.' ) === 0;
 	$cert_site_name   = $site_url;
