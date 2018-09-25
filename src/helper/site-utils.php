@@ -133,9 +133,9 @@ function init_checks() {
 					EE::error( 'Unable to create network ' . GLOBAL_BACKEND_NETWORK );
 				}
 			}
-			if ( ! EE::docker()::docker_network_exists( GLOBAL_NETWORK ) ) {
-				if ( ! EE::docker()::create_network( GLOBAL_NETWORK ) ) {
-					EE::error( 'Unable to create network ' . GLOBAL_NETWORK );
+			if ( ! EE::docker()::docker_network_exists( GLOBAL_FRONTEND_NETWORK ) ) {
+				if ( ! EE::docker()::create_network( GLOBAL_FRONTEND_NETWORK ) ) {
+					EE::error( 'Unable to create network ' . GLOBAL_FRONTEND_NETWORK );
 				}
 			}
 			if ( EE::docker()::docker_compose_up( EE_CONF_ROOT, [ 'nginx-proxy' ] ) ) {
