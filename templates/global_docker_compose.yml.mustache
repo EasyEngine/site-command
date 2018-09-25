@@ -49,6 +49,9 @@ services:
 {{/services}}
 
 networks:
-  global-network:
+  global-frontend-network:
     external:
-      name: ee-global-network
+      name: ee-global-frontend-network
+  global-backend-network:
+    external:
+      name: ee-global-backend-network

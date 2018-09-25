@@ -126,11 +126,16 @@ function init_checks() {
 			if ( ! $fs->exists( EE_ROOT_DIR . '/services/docker-compose.yml' ) ) {
 				generate_global_docker_compose_yml( $fs );
 			}
-
+			
 			$EE_ROOT_DIR = EE_ROOT_DIR;
-			if ( ! EE::docker()::docker_network_exists( GLOBAL_NETWORK ) ) {
-				if ( ! EE::docker()::create_network( GLOBAL_NETWORK ) ) {
-					EE::error( 'Unable to create network ' . GLOBAL_NETWORK );
+			if ( ! EE::docker()::docker_network_exists( GLOBAL_BACKEND_NETWORK ) ) {
+				if ( ! EE::docker()::create_network( GLOBAL_BACKEND_NETWORK ) ) {
+					EE::error( 'Unable to create network ' . GLOBAL_BACKEND_NETWORK );
+				}
+			}
+			if ( ! EE::docker()::docker_network_exists( GLOBAL_FRONTEND_NETWORK ) ) {
+				if ( ! EE::docker()::create_network( GLOBAL_FRONTEND_NETWORK ) ) {
+					EE::error( 'Unable to create network ' . GLOBAL_FRONTEND_NETWORK );
 				}
 			}
 			if ( EE::docker()::docker_compose_up( EE_ROOT_DIR . '/services', [ 'nginx-proxy' ] ) ) {
@@ -147,6 +152,12 @@ function init_checks() {
  * Function to start global db if it is not running.
  */
 function init_global_db() {
+
+	if ( ! EE::docker()::docker_network_exists( GLOBAL_BACKEND_NETWORK ) ) {
+		if ( ! EE::docker()::create_network( GLOBAL_BACKEND_NETWORK ) ) {
+			EE::error( 'Unable to create network ' . GLOBAL_BACKEND_NETWORK );
+		}
+	}
 
 	if ( 'running' !== EE::docker()::container_status( GLOBAL_DB ) ) {
 		chdir( EE_ROOT_DIR );
@@ -187,7 +198,7 @@ function generate_global_docker_compose_yml( Filesystem $fs ) {
 					'/var/run/docker.sock:/tmp/docker.sock:ro',
 				],
 				'networks'       => [
-					'global-network',
+					'global-frontend-network',
 				],
 			],
 			[
@@ -200,7 +211,7 @@ function generate_global_docker_compose_yml( Filesystem $fs ) {
 				],
 				'volumes'        => [ './app/db:/var/lib/mysql' ],
 				'networks'       => [
-					'global-network',
+					'global-backend-network',
 				],
 			],
 		],

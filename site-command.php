@@ -12,8 +12,11 @@ if ( ! defined( 'GLOBAL_DB_CONTAINER' ) ) {
 	define( 'GLOBAL_DB_CONTAINER', 'ee-global-db' );
 }
 
-if ( ! defined( 'GLOBAL_NETWORK' ) ) {
-	define( 'GLOBAL_NETWORK', 'ee-global-network' );
+if ( ! defined( 'GLOBAL_FRONTEND_NETWORK' ) ) {
+	define( 'GLOBAL_FRONTEND_NETWORK', 'ee-global-frontend-network' );
+}
+if ( ! defined( 'GLOBAL_BACKEND_NETWORK' ) ) {
+	define( 'GLOBAL_BACKEND_NETWORK', 'ee-global-backend-network' );
 }
 
 if ( ! class_exists( 'EE' ) ) {
