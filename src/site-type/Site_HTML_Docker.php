@@ -59,7 +59,7 @@ class Site_HTML_Docker {
 						],
 					],
 				],
-				[ 'name' => 'global-network' ],
+				[ 'name' => 'global-frontend-network' ],
 			]
 		];
 
