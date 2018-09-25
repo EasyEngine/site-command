@@ -18,11 +18,6 @@ class Site_HTML_Docker {
 		$base         = [];
 
 		$restart_default = [ 'name' => 'always' ];
-		$network_default = [
-			'net' => [
-				[ 'name' => 'site-network' ]
-			]
-		];
 
 		// nginx configuration.
 		$nginx['service_name'] = [ 'name' => 'nginx' ];
@@ -38,7 +33,10 @@ class Site_HTML_Docker {
 				[ 'name' => 'HSTS=off' ],
 			],
 		];
-		$nginx['volumes']     = [
+		if ( ! empty( $filters['nohttps'] ) ) {
+			$nginx['environment']['env'][] = [ 'name' => 'HTTPS_METHOD=nohttps' ];
+		}
+		$nginx['volumes']  = [
 			'vol' => [
 				[ 'name' => './app/src:/var/www/htdocs' ],
 				[ 'name' => './config/nginx/main.conf:/etc/nginx/conf.d/default.conf' ],
@@ -46,15 +44,15 @@ class Site_HTML_Docker {
 				[ 'name' => './logs/nginx:/var/log/nginx' ],
 			],
 		];
-		$nginx['labels']      = [
+		$nginx['labels']   = [
 			'label' => [
 				'name' => 'io.easyengine.site=${VIRTUAL_HOST}',
 			],
 		];
-		$nginx['networks']    = [
+		$nginx['networks'] = [
 			'net' => [
 				[
-					'name' => 'site-network',
+					'name'    => 'site-network',
 					'aliases' => [
 						'alias' => [
 							'name' => '${VIRTUAL_HOST}',
