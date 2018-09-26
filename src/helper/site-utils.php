@@ -100,71 +100,6 @@ function get_site_info( $args, $site_enabled_check = true, $exit_if_not_found = 
 	return $site_data;
 }
 
-
-/**
- * Function to check all the required configurations needed to create the site.
- *
- * Boots up the container if it is stopped or not running.
- */
-function init_checks() {
-
-	$proxy_type = EE_PROXY_TYPE;
-	if ( 'running' !== EE::docker()::container_status( $proxy_type ) ) {
-		/**
-		 * Checking ports.
-		 */
-		$port_80_status  = get_curl_info( 'localhost', 80, true );
-		$port_443_status = get_curl_info( 'localhost', 443, true );
-
-		// if any/both the port/s is/are occupied.
-		if ( ! ( $port_80_status && $port_443_status ) ) {
-			EE::error( 'Cannot create/start proxy container. Please make sure port 80 and 443 are free.' );
-		} else {
-
-			$fs = new Filesystem();
-
-			if ( ! $fs->exists( EE_ROOT_DIR . '/services/docker-compose.yml' ) ) {
-				generate_global_docker_compose_yml( $fs );
-			}
-			
-			$EE_ROOT_DIR = EE_ROOT_DIR;
-			if ( ! EE::docker()::docker_network_exists( GLOBAL_BACKEND_NETWORK ) ) {
-				if ( ! EE::docker()::create_network( GLOBAL_BACKEND_NETWORK ) ) {
-					EE::error( 'Unable to create network ' . GLOBAL_BACKEND_NETWORK );
-				}
-			}
-			if ( ! EE::docker()::docker_network_exists( GLOBAL_FRONTEND_NETWORK ) ) {
-				if ( ! EE::docker()::create_network( GLOBAL_FRONTEND_NETWORK ) ) {
-					EE::error( 'Unable to create network ' . GLOBAL_FRONTEND_NETWORK );
-				}
-			}
-			if ( EE::docker()::docker_compose_up( EE_ROOT_DIR . '/services', [ 'nginx-proxy' ] ) ) {
-				$fs->dumpFile( "$EE_ROOT_DIR/services/nginx-proxy/conf.d/custom.conf", file_get_contents( EE_ROOT . '/templates/custom.conf.mustache' ) );
-				EE::success( "$proxy_type container is up." );
-			} else {
-				EE::error( "There was some error in starting $proxy_type container. Please check logs." );
-			}
-		}
-	}
-}
-
-/**
- * Function to start global db if it is not running.
- */
-function init_global_db() {
-
-	if ( ! EE::docker()::docker_network_exists( GLOBAL_BACKEND_NETWORK ) ) {
-		if ( ! EE::docker()::create_network( GLOBAL_BACKEND_NETWORK ) ) {
-			EE::error( 'Unable to create network ' . GLOBAL_BACKEND_NETWORK );
-		}
-	}
-
-	if ( 'running' !== EE::docker()::container_status( GLOBAL_DB ) ) {
-		chdir( EE_ROOT_DIR );
-		EE::docker()::boot_container( GLOBAL_DB, 'docker-compose up -d ' . GLOBAL_DB );
-	}
-}
-
 /**
  * Generates global docker-compose.yml at EE_ROOT_DIR/services
  *
@@ -408,7 +343,7 @@ function create_etc_hosts_entry( $site_url ) {
 function site_status_check( $site_url ) {
 
 	EE::log( 'Checking and verifying site-up status. This may take some time.' );
-	$httpcode = get_curl_info( $site_url );
+	$httpcode = \EE\Utils\get_curl_info( $site_url );
 	$i        = 0;
 	$auth     = false;
 	while ( 200 !== $httpcode && 302 !== $httpcode && 301 !== $httpcode ) {
@@ -417,7 +352,7 @@ function site_status_check( $site_url ) {
 			$user_pass = get_global_auth();
 			$auth      = $user_pass['username'] . ':' . $user_pass['password'];
 		}
-		$httpcode = get_curl_info( $site_url, 80, false, $auth );
+		$httpcode = \EE\Utils\get_curl_info( $site_url, 80, false, $auth );
 		echo '.';
 		sleep( 2 );
 		if ( $i ++ > 60 ) {
@@ -430,35 +365,6 @@ function site_status_check( $site_url ) {
 		throw new \Exception( 'Problem connecting to site!' );
 	}
 
-}
-
-/**
- * Function to get httpcode or port occupancy info.
- *
- * @param string $url     url to get info about.
- * @param int $port       The port to check.
- * @param bool $port_info Return port info or httpcode.
- * @param mixed $auth     Send http auth with passed value if not false.
- *
- * @return bool|int port occupied or httpcode.
- */
-function get_curl_info( $url, $port = 80, $port_info = false, $auth = false ) {
-
-	$ch = curl_init( $url );
-	curl_setopt( $ch, CURLOPT_HEADER, true );
-	curl_setopt( $ch, CURLOPT_RETURNTRANSFER, 1 );
-	curl_setopt( $ch, CURLOPT_NOBODY, true );
-	curl_setopt( $ch, CURLOPT_TIMEOUT, 10 );
-	curl_setopt( $ch, CURLOPT_PORT, $port );
-	if ( $auth ) {
-		curl_setopt( $ch, CURLOPT_USERPWD, $auth );
-	}
-	curl_exec( $ch );
-	if ( $port_info ) {
-		return empty( curl_getinfo( $ch, CURLINFO_PRIMARY_IP ) );
-	}
-
-	return curl_getinfo( $ch, CURLINFO_HTTP_CODE );
 }
 
 /**
