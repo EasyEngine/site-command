@@ -107,7 +107,7 @@ class HTML extends EE_Site_Command {
 		$this->site_data['site_ssl_wildcard'] = \EE\Utils\get_flag_value( $assoc_args, 'wildcard' );
 		$this->skip_status_check              = \EE\Utils\get_flag_value( $assoc_args, 'skip-status-check' );
 
-		\EE\Site\Utils\init_checks();
+		\EE\Service\Utils\nginx_proxy_check();
 
 		\EE::log( 'Configuring project.' );
 
