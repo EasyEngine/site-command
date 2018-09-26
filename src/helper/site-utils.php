@@ -113,8 +113,8 @@ function init_checks() {
 		/**
 		 * Checking ports.
 		 */
-		$port_80_status  = get_curl_info( 'localhost', 80, true );
-		$port_443_status = get_curl_info( 'localhost', 443, true );
+		$port_80_status  = \EE\Utils\get_curl_info( 'localhost', 80, true );
+		$port_443_status = \EE\Utils\get_curl_info( 'localhost', 443, true );
 
 		// if any/both the port/s is/are occupied.
 		if ( ! ( $port_80_status && $port_443_status ) ) {
@@ -408,7 +408,7 @@ function create_etc_hosts_entry( $site_url ) {
 function site_status_check( $site_url ) {
 
 	EE::log( 'Checking and verifying site-up status. This may take some time.' );
-	$httpcode = get_curl_info( $site_url );
+	$httpcode = \EE\Utils\get_curl_info( $site_url );
 	$i        = 0;
 	$auth     = false;
 	while ( 200 !== $httpcode && 302 !== $httpcode && 301 !== $httpcode ) {
@@ -417,7 +417,7 @@ function site_status_check( $site_url ) {
 			$user_pass = get_global_auth();
 			$auth      = $user_pass['username'] . ':' . $user_pass['password'];
 		}
-		$httpcode = get_curl_info( $site_url, 80, false, $auth );
+		$httpcode = \EE\Utils\get_curl_info( $site_url, 80, false, $auth );
 		echo '.';
 		sleep( 2 );
 		if ( $i ++ > 60 ) {
@@ -430,35 +430,6 @@ function site_status_check( $site_url ) {
 		throw new \Exception( 'Problem connecting to site!' );
 	}
 
-}
-
-/**
- * Function to get httpcode or port occupancy info.
- *
- * @param string $url     url to get info about.
- * @param int $port       The port to check.
- * @param bool $port_info Return port info or httpcode.
- * @param mixed $auth     Send http auth with passed value if not false.
- *
- * @return bool|int port occupied or httpcode.
- */
-function get_curl_info( $url, $port = 80, $port_info = false, $auth = false ) {
-
-	$ch = curl_init( $url );
-	curl_setopt( $ch, CURLOPT_HEADER, true );
-	curl_setopt( $ch, CURLOPT_RETURNTRANSFER, 1 );
-	curl_setopt( $ch, CURLOPT_NOBODY, true );
-	curl_setopt( $ch, CURLOPT_TIMEOUT, 10 );
-	curl_setopt( $ch, CURLOPT_PORT, $port );
-	if ( $auth ) {
-		curl_setopt( $ch, CURLOPT_USERPWD, $auth );
-	}
-	curl_exec( $ch );
-	if ( $port_info ) {
-		return empty( curl_getinfo( $ch, CURLINFO_PRIMARY_IP ) );
-	}
-
-	return curl_getinfo( $ch, CURLINFO_HTTP_CODE );
 }
 
 /**
