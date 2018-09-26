@@ -2,9 +2,9 @@
 
 namespace EE\Site\Utils;
 
-use \EE;
+use EE;
 use EE\Model\Site;
-use \Symfony\Component\Filesystem\Filesystem;
+use Symfony\Component\Filesystem\Filesystem;
 
 /**
  * Get the site-name from the path from where ee is running if it is a valid site path.
