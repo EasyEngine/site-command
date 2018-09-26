@@ -536,6 +536,29 @@ abstract class EE_Site_Command {
 	}
 
 	/**
+	 * Check www is working with site domain.
+	 *
+	 * @return bool
+	 */
+	protected function check_www_subdomain():bool {
+		$random_string = random_password();
+		file_put_contents( $this->site_data['site_fs_path'] . '/app/src/ssl_check.php', $random_string );
+
+		$site_url = 'www.' . $this->site_data['site_url'] . '/ssl_check.php';
+		$curl     = curl_init();
+		curl_setopt( $curl, CURLOPT_URL, $site_url );
+		curl_setopt( $curl, CURLOPT_RETURNTRANSFER, true );
+		curl_setopt( $curl, CURLOPT_HEADER, false );
+		$data = curl_exec( $curl );
+		curl_close( $curl );
+
+		if ( ! empty( $data ) && $random_string === $data ) {
+			return true;
+		}
+		return false;
+	}
+
+	/**
 	 * If the domain has www in it, returns a domain without www in it.
 	 * Else returns a domain with www in it.
 	 *
