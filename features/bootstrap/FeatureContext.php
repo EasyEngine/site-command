@@ -50,7 +50,7 @@ use Behat\Behat\Hook\Scope\AfterScenarioScope;
 use Behat\Gherkin\Node\PyStringNode,
 	Behat\Gherkin\Node\TableNode;
 
-define( 'EE_SITE_ROOT', getenv('HOME') . '/ee-sites/' );
+define( 'EE_SITE_ROOT', EE_ROOT_DIR . '/sites' );
 
 class FeatureContext implements Context
 {
