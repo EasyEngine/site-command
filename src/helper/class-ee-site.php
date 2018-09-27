@@ -537,14 +537,18 @@ abstract class EE_Site_Command {
 
 	/**
 	 * Check www is working with site domain.
+	 * @param string Site url.
+	 * @param string Absolute path of site.
 	 *
 	 * @return bool
 	 */
-	protected function check_www_subdomain():bool {
-		$random_string = random_password();
-		file_put_contents( $this->site_data['site_fs_path'] . '/app/src/ssl_check.php', $random_string );
+	protected function check_www_subdomain( $site_url,  $site_path ): bool {
+		$random_string = EE\Utils\random_password();
+		$sucessfull    = false;
+		$file_path     = $site_path . '/app/src/ssl-check.txt';
+		file_put_contents( $file_path, $random_string );
 
-		$site_url = 'www.' . $this->site_data['site_url'] . '/ssl_check.php';
+		$site_url = 'www.' . $site_url . '/ssl-check.txt';
 		$curl     = curl_init();
 		curl_setopt( $curl, CURLOPT_URL, $site_url );
 		curl_setopt( $curl, CURLOPT_RETURNTRANSFER, true );
@@ -553,9 +557,13 @@ abstract class EE_Site_Command {
 		curl_close( $curl );
 
 		if ( ! empty( $data ) && $random_string === $data ) {
-			return true;
+			$sucessfull = true;
 		}
-		return false;
+
+		if ( file_exists( $file_path ) ) {
+			unlink( $file_path );
+		}
+		return $sucessfull;
 	}
 
 	/**
