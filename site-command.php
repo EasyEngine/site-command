@@ -23,6 +23,14 @@ if ( ! class_exists( 'EE' ) ) {
 	return;
 }
 
+$sites_path = EE_ROOT_DIR . '/sites';
+
+if ( ! is_dir( $sites_path ) ) {
+	mkdir( $sites_path );
+}
+
+define( 'WEBROOT', \EE\Utils\trailingslashit( $sites_path ) );
+
 $autoload = dirname( __FILE__ ) . '/vendor/autoload.php';
 if ( file_exists( $autoload ) ) {
 	require_once $autoload;
