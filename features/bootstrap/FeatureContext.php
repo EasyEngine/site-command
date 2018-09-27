@@ -209,7 +209,7 @@ class FeatureContext implements Context
 	 */
 	public function theSiteShouldBeMultisite( $site, $type )
 	{
-		$result = EE::launch("cd " . EE_SITE_ROOT . "$site && docker-compose exec --user='www-data' php sh -c 'wp config get SUBDOMAIN_INSTALL'", false, true );
+		$result = EE::launch( "cd " . EE_SITE_ROOT . "/$site && docker-compose exec --user='www-data' php sh -c 'wp config get SUBDOMAIN_INSTALL'", false, true );
 
 		if( $result->stderr ) {
 			throw new Exception("Found error while executing command: $result->stderr");
@@ -243,7 +243,7 @@ class FeatureContext implements Context
 	 */
 	public function theWebrootShouldBeRemoved($site)
 	{
-		if (file_exists(EE_SITE_ROOT . $site)) {
+		if ( file_exists( EE_SITE_ROOT . '/' . $site ) ) {
 			throw new Exception("Webroot has not been removed!");
 		}
 	}
@@ -273,7 +273,7 @@ class FeatureContext implements Context
 	 */
 	public function theSiteShouldHaveWebroot($site)
 	{
-		if (!file_exists(EE_SITE_ROOT . $site)) {
+		if ( ! file_exists( EE_SITE_ROOT . '/' . $site ) ) {
 			throw new Exception("Webroot has not been created!");
 		}
 	}
@@ -283,7 +283,7 @@ class FeatureContext implements Context
 	 */
 	public function theSiteShouldHaveWordpress($site)
 	{
-		if (!file_exists(EE_SITE_ROOT . $site . "/app/src/wp-config.php")) {
+		if ( ! file_exists( EE_SITE_ROOT . '/' . $site . '/app/src/wp-config.php)) {
 			throw new Exception("WordPress data not found!");
 		}
 	}
