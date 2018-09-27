@@ -101,7 +101,7 @@ function get_site_info( $args, $site_enabled_check = true, $exit_if_not_found = 
 }
 
 /**
- * Generates global docker-compose.yml at EE_CONF_ROOT
+ * Generates global docker-compose.yml at EE_ROOT_DIR/services
  *
  * @param Filesystem $fs Filesystem object to write file
  */
@@ -124,12 +124,12 @@ function generate_global_docker_compose_yml( Filesystem $fs ) {
 					'LOCAL_GROUP_ID=' . posix_getegid(),
 				],
 				'volumes'        => [
-					EE_CONF_ROOT . '/nginx/certs:/etc/nginx/certs',
-					EE_CONF_ROOT . '/nginx/dhparam:/etc/nginx/dhparam',
-					EE_CONF_ROOT . '/nginx/conf.d:/etc/nginx/conf.d',
-					EE_CONF_ROOT . '/nginx/htpasswd:/etc/nginx/htpasswd',
-					EE_CONF_ROOT . '/nginx/vhost.d:/etc/nginx/vhost.d',
-					EE_CONF_ROOT . '/nginx/html:/usr/share/nginx/html',
+					EE_ROOT_DIR . '/services/nginx-proxy/certs:/etc/nginx/certs',
+					EE_ROOT_DIR . '/services/nginx-proxy/dhparam:/etc/nginx/dhparam',
+					EE_ROOT_DIR . '/services/nginx-proxy/conf.d:/etc/nginx/conf.d',
+					EE_ROOT_DIR . '/services/nginx-proxy/htpasswd:/etc/nginx/htpasswd',
+					EE_ROOT_DIR . '/services/nginx-proxy/vhost.d:/etc/nginx/vhost.d',
+					EE_ROOT_DIR . '/services/nginx-proxy/html:/usr/share/nginx/html',
 					'/var/run/docker.sock:/tmp/docker.sock:ro',
 				],
 				'networks'       => [
@@ -153,7 +153,7 @@ function generate_global_docker_compose_yml( Filesystem $fs ) {
 	];
 
 	$contents = EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/global_docker_compose.yml.mustache', $data );
-	$fs->dumpFile( EE_CONF_ROOT . '/docker-compose.yml', $contents );
+	$fs->dumpFile( EE_ROOT_DIR . '/services/docker-compose.yml', $contents );
 }
 
 /**
@@ -286,7 +286,7 @@ function create_site_root( $site_fs_path, $site_url ) {
 function add_site_redirects( string $site_url, bool $ssl, bool $inherit ) {
 
 	$fs               = new Filesystem();
-	$confd_path       = EE_CONF_ROOT . '/nginx/conf.d/';
+	$confd_path       = EE_ROOT_DIR . '/services/nginx-proxy/conf.d/';
 	$config_file_path = $confd_path . $site_url . '-redirect.conf';
 	$has_www          = strpos( $site_url, 'www.' ) === 0;
 	$cert_site_name   = $site_url;

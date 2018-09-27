@@ -51,7 +51,7 @@ class Site_Letsencrypt {
 	private $conf_dir;
 
 	function __construct() {
-		$this->conf_dir = EE_CONF_ROOT . '/acme-conf';
+		$this->conf_dir = EE_ROOT_DIR . '/services/nginx-proxy/acme-conf';
 		$this->setRepository();
 		$this->setAcmeClient();
 	}
@@ -178,8 +178,8 @@ class Site_Letsencrypt {
 				$payload = $authorizationChallenge->toArray()['payload'];
 
 				$fs = new \Symfony\Component\Filesystem\Filesystem();
-				$fs->copy( SITE_TEMPLATE_ROOT . '/vhost.d_default_letsencrypt.mustache', EE_CONF_ROOT . '/nginx/vhost.d/default' );
-				$challange_dir = EE_CONF_ROOT . '/nginx/html/.well-known/acme-challenge';
+				$fs->copy( SITE_TEMPLATE_ROOT . '/vhost.d_default_letsencrypt.mustache', EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/default' );
+				$challange_dir = EE_ROOT_DIR . '/services/nginx-proxy/html/.well-known/acme-challenge';
 				if ( ! $fs->exists( $challange_dir ) ) {
 					$fs->mkdir( $challange_dir );
 				}
@@ -337,9 +337,9 @@ class Site_Letsencrypt {
 		$crt_source_file   = strtr( $this->conf_dir . '/' . Repository::PATH_DOMAIN_CERT_FULLCHAIN, [ '{domain}' => $domain ] );
 		$chain_source_file = strtr( $this->conf_dir . '/' . Repository::PATH_DOMAIN_CERT_CHAIN, [ '{domain}' => $domain ] );
 
-		$key_dest_file   = EE_CONF_ROOT . '/nginx/certs/' . $domain . '.key';
-		$crt_dest_file   = EE_CONF_ROOT . '/nginx/certs/' . $domain . '.crt';
-		$chain_dest_file = EE_CONF_ROOT . '/nginx/certs/' . $domain . '.chain.pem';
+		$key_dest_file   = EE_ROOT_DIR . '/services/nginx-proxy/certs/' . $domain . '.key';
+		$crt_dest_file   = EE_ROOT_DIR . '/services/nginx-proxy/certs/' . $domain . '.crt';
+		$chain_dest_file = EE_ROOT_DIR . '/services/nginx-proxy/certs/' . $domain . '.chain.pem';
 
 		copy( $key_source_file, $key_dest_file );
 		copy( $crt_source_file, $crt_dest_file );
@@ -544,8 +544,8 @@ class Site_Letsencrypt {
 
 		$fs = new \Symfony\Component\Filesystem\Filesystem();
 
-		$challange_dir = EE_CONF_ROOT . '/nginx/html/.well-known';
-		$challange_rule_file = EE_CONF_ROOT . '/nginx/vhost.d/default';
+		$challange_dir = EE_ROOT_DIR . '/services/nginx-proxy/html/.well-known';
+		$challange_rule_file = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/default';
 		if ( $fs->exists( $challange_rule_file ) ) {
 			$fs->remove( $challange_rule_file );
 		}

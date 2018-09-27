@@ -14,7 +14,7 @@ include_once( EE_ROOT . '/php/utils.php' );
 
 define( 'EE', true );
 define( 'EE_VERSION', trim( file_get_contents( EE_ROOT . '/VERSION' ) ) );
-define( 'EE_CONF_ROOT', '/opt/easyengine' );
+define( 'EE_ROOT_DIR', '/opt/easyengine' );
 
 require_once EE_ROOT . '/php/bootstrap.php';
 
@@ -66,7 +66,7 @@ class FeatureContext implements Context
 		$this->commands = [];
 		$this->ee_path = getcwd();
 		$config_contents = \Mustangostang\Spyc::YAMLDump(['le-mail' => 'abc@example.com']);
-		file_put_contents( EE_CONF_ROOT . '/config.yml', $config_contents );
+		file_put_contents( EE_ROOT_DIR . '/config/config.yml', $config_contents );
 	}
 
 	/**
