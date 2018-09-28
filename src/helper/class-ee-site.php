@@ -2,6 +2,7 @@
 
 namespace EE\Site\Type;
 
+use EE;
 use EE\Model\Site;
 use Symfony\Component\Filesystem\Filesystem;
 use function EE\Site\Utils\auto_site_name;
@@ -211,7 +212,7 @@ abstract class EE_Site_Command {
 			\EE::log( "[$site_url] site root removed." );
 		}
 
-		$config_file_path = EE_CONF_ROOT . '/nginx/conf.d/' . $site_url . '-redirect.conf';
+		$config_file_path = EE_ROOT_DIR . '/services/nginx-proxy/conf.d/' . $site_url . '-redirect.conf';
 
 		if ( $this->fs->exists( $config_file_path ) ) {
 			try {
@@ -226,10 +227,10 @@ abstract class EE_Site_Command {
 		if ( $level > 4 ) {
 			if ( $this->site_data['site_ssl'] ) {
 				\EE::log( 'Removing ssl certs.' );
-				$crt_file   = EE_CONF_ROOT . "/nginx/certs/$site_url.crt";
-				$key_file   = EE_CONF_ROOT . "/nginx/certs/$site_url.key";
-				$conf_certs = EE_CONF_ROOT . "/acme-conf/certs/$site_url";
-				$conf_var   = EE_CONF_ROOT . "/acme-conf/var/$site_url";
+				$crt_file   = EE_ROOT_DIR . "/services/nginx-proxy/certs/$site_url.crt";
+				$key_file   = EE_ROOT_DIR . "/services/nginx-proxy/$site_url.key";
+				$conf_certs = EE_ROOT_DIR . "/services/nginx-proxy/acme-conf/certs/$site_url";
+				$conf_var   = EE_ROOT_DIR . "/services/nginx-proxy/acme-conf/var/$site_url";
 
 				$cert_files = [ $conf_certs, $conf_var, $crt_file, $key_file ];
 				try {
@@ -464,12 +465,12 @@ abstract class EE_Site_Command {
 			$this->init_le( $site_url, $site_fs_path, $wildcard );
 		} elseif ( 'inherit' === $ssl_type ) {
 			if ( $wildcard ) {
-				\EE::error( 'Cannot use --wildcard with --ssl=inherit', false );
+				throw new \Exception( 'Cannot use --wildcard with --ssl=inherit', false );
 			}
 			\EE::debug( 'Inheriting certs' );
 			$this->inherit_certs( $site_url );
 		} else {
-			\EE::error( "Unrecognized value in --ssl flag: $ssl_type" );
+			throw new \Exception( "Unrecognized value in --ssl flag: $ssl_type" );
 		}
 	}
 
@@ -502,7 +503,7 @@ abstract class EE_Site_Command {
 			return;
 		}
 		if ( $wildcard ) {
-			echo \cli\Colors::colorize( '%YIMPORTANT:%n Run `ee site le ' . $this->site_data['site_url'] . '` once the dns changes have propogated to complete the certification generation and installation.', null );
+			echo \cli\Colors::colorize( '%YIMPORTANT:%n Run `ee site ssl ' . $this->site_data['site_url'] . '` once the DNS changes have propagated to complete the certification generation and installation.', null );
 		} else {
 			$this->ssl( [], [] );
 		}
@@ -561,7 +562,12 @@ abstract class EE_Site_Command {
 	 */
 	public function ssl( $args = [], $assoc_args = [] ) {
 
-		if ( ! isset( $this->site_data['site_url'] ) ) {
+		EE::log( 'Starting SSL verification.' );
+
+		// This checks if this method was called internally by ee or by user
+		$called_by_ee = isset( $this->site_data['site_url'] );
+
+		if ( ! $called_by_ee ) {
 			$this->site_data = get_site_info( $args );
 		}
 
@@ -573,9 +579,13 @@ abstract class EE_Site_Command {
 		$domains = $this->get_cert_domains( $this->site_data['site_url'], $this->site_data['site_ssl_wildcard'] );
 		$client  = new Site_Letsencrypt();
 
-		if ( ! $client->check( $domains, $this->site_data['site_ssl_wildcard'] ) ) {
-			$this->site_data['site_ssl'] = null;
-
+		try {
+			$client->check( $domains, $this->site_data['site_ssl_wildcard'] );
+		} catch ( \Exception $e ) {
+			if ( $called_by_ee ) {
+				throw $e;
+			}
+			EE::error( 'Failed to verify SSL: ' . $e->getMessage() );
 			return;
 		}
 
@@ -585,7 +595,10 @@ abstract class EE_Site_Command {
 		if ( ! $this->site_data['site_ssl_wildcard'] ) {
 			$client->cleanup();
 		}
+
 		reload_global_nginx_proxy();
+
+		EE::log( 'SSL verification completed.' );
 	}
 
 	/**

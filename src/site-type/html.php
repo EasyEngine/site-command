@@ -5,6 +5,7 @@ declare( ticks=1 );
 namespace EE\Site\Type;
 
 use EE\Model\Site;
+use function EE\Utils\mustache_render;
 use Symfony\Component\Filesystem\Filesystem;
 use function EE\Site\Utils\auto_site_name;
 use function EE\Site\Utils\get_site_info;
@@ -106,7 +107,7 @@ class HTML extends EE_Site_Command {
 		$this->site_data['site_ssl_wildcard'] = \EE\Utils\get_flag_value( $assoc_args, 'wildcard' );
 		$this->skip_status_check              = \EE\Utils\get_flag_value( $assoc_args, 'skip-status-check' );
 
-		\EE\Site\Utils\init_checks();
+		\EE\Service\Utils\nginx_proxy_check();
 
 		\EE::log( 'Configuring project.' );
 
@@ -157,7 +158,6 @@ class HTML extends EE_Site_Command {
 	private function configure_site_files() {
 
 		$site_conf_dir           = $this->site_data['site_fs_path'] . '/config';
-		$site_docker_yml         = $this->site_data['site_fs_path'] . '/docker-compose.yml';
 		$site_conf_env           = $this->site_data['site_fs_path'] . '/.env';
 		$site_nginx_default_conf = $site_conf_dir . '/nginx/main.conf';
 		$site_src_dir            = $this->site_data['site_fs_path'] . '/app/src';
@@ -168,11 +168,7 @@ class HTML extends EE_Site_Command {
 		\EE::log( sprintf( 'Creating site %s.', $this->site_data['site_url'] ) );
 		\EE::log( 'Copying configuration files.' );
 
-		$filter                 = [];
-		$filter[]               = $this->site_data['site_type'];
-		$site_docker            = new Site_HTML_Docker();
-		$docker_compose_content = $site_docker->generate_docker_compose_yml( $filter );
-		$default_conf_content   = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx/main.conf.mustache', [ 'server_name' => $this->site_data['site_url'] ] );
+		$default_conf_content = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx/main.conf.mustache', [ 'server_name' => $this->site_data['site_url'] ] );
 
 		$env_data    = [
 			'virtual_host' => $this->site_data['site_url'],
@@ -182,7 +178,7 @@ class HTML extends EE_Site_Command {
 		$env_content = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/.env.mustache', $env_data );
 
 		try {
-			$this->fs->dumpFile( $site_docker_yml, $docker_compose_content );
+			$this->dump_docker_compose_yml( [ 'nohttps' => true ] );
 			$this->fs->dumpFile( $site_conf_env, $env_content );
 			$this->fs->dumpFile( $site_nginx_default_conf, $default_conf_content );
 			$this->fs->copy( $custom_conf_source, $custom_conf_dest );
@@ -198,6 +194,27 @@ class HTML extends EE_Site_Command {
 		} catch ( \Exception $e ) {
 			$this->catch_clean( $e );
 		}
+	}
+
+	/**
+	 * Generate and place docker-compose.yml file.
+	 *
+	 * @param array $additional_filters Filters to alter docker-compose file.
+	 */
+	private function dump_docker_compose_yml( $additional_filters = [] ) {
+
+		$site_docker_yml = $this->site_data['site_fs_path'] . '/docker-compose.yml';
+
+		$filter   = [];
+		$filter[] = $this->site_data['site_type'];
+
+		foreach ( $additional_filters as $key => $addon_filter ) {
+			$filter[ $key ] = $addon_filter;
+		}
+
+		$site_docker            = new Site_HTML_Docker();
+		$docker_compose_content = $site_docker->generate_docker_compose_yml( $filter );
+		$this->fs->dumpFile( $site_docker_yml, $docker_compose_content );
 	}
 
 	/**
@@ -236,6 +253,10 @@ class HTML extends EE_Site_Command {
 			if ( $this->site_data['site_ssl'] ) {
 				$this->init_ssl( $this->site_data['site_url'], $this->site_data['site_fs_path'], $this->site_data['site_ssl'], $this->site_data['site_ssl_wildcard'] );
 				\EE\Site\Utils\add_site_redirects( $this->site_data['site_url'], true, 'inherit' === $this->site_data['site_ssl'] );
+
+				$this->dump_docker_compose_yml( [ 'nohttps' => false ] );
+				\EE\Site\Utils\start_site_containers( $this->site_data['site_fs_path'] );
+
 				\EE\Site\Utils\reload_global_nginx_proxy();
 			}
 		} catch ( \Exception $e ) {
@@ -267,7 +288,7 @@ class HTML extends EE_Site_Command {
 			if ( $site ) {
 				\EE::log( 'Site entry created.' );
 			} else {
-				throw new Exception( 'Error creating site entry in database.' );
+				throw new \Exception( 'Error creating site entry in database.' );
 			}
 		} catch ( \Exception $e ) {
 			$this->catch_clean( $e );
