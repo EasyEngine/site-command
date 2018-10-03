@@ -598,12 +598,14 @@ abstract class EE_Site_Command {
 		$curl     = curl_init();
 		curl_setopt( $curl, CURLOPT_URL, $site_url );
 		curl_setopt( $curl, CURLOPT_RETURNTRANSFER, true );
+		curl_setopt( $curl, CURLOPT_FOLLOWLOCATION, true);
 		curl_setopt( $curl, CURLOPT_HEADER, false );
 		$data = curl_exec( $curl );
 		curl_close( $curl );
 
 		if ( ! empty( $data ) && $random_string === $data ) {
 			$successful = true;
+			EE::debug( "www subdomain pointed for $site_url" );
 		}
 
 		if ( file_exists( $file_path ) ) {
