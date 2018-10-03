@@ -38,7 +38,7 @@ abstract class EE_Site_Command {
 	/**
 	 * @var array $site_data Associative array containing essential site related information.
 	 */
-	private $site_data;
+	protected $site_data;
 
 	public function __construct() {
 
@@ -427,19 +427,25 @@ abstract class EE_Site_Command {
 	 * @throws \Exception
 	 */
 	protected function www_ssl_wrapper( $containers_to_start = [] ) {
+		/**
+		 * This adds http www redirection which is needed for issuing cert for a site.
+		 * i.e. when you create example.com site, certs are issued for example.com and www.example.com
+		 *
+		 * We're issuing certs for both domains as it is needed in order to perform redirection of
+		 * https://www.example.com -> https://example.com
+		 *
+		 * We add redirection config two times in case of ssl as we need http redirection
+		 * when certs are being requested and http+https redirection after we have certs.
+		 */
+		\EE\Site\Utils\add_site_redirects( $this->site_data['site_url'], false, 'inherit' === $this->site_data['site_ssl'] );
+		\EE\Site\Utils\reload_global_nginx_proxy();
+
 		$is_www_pointed = $this->check_www_subdomain( $this->site_data['site_url'], $this->site_data['site_fs_path'] );
-		if ( $is_www_pointed ) {
-			/*
-				* This adds http www redirection which is needed for issuing cert for a site.
-				* i.e. when you create example.com site, certs are issued for example.com and www.example.com
-				*
-				* We're issuing certs for both domains as it is needed in order to perform redirection of
-				* https://www.example.com -> https://example.com
-				*
-				* We add redirection config two times in case of ssl as we need http redirection
-				* when certs are being requested and http+https redirection after we have certs.
-				*/
-			\EE\Site\Utils\add_site_redirects( $this->site_data['site_url'], false, 'inherit' === $this->site_data['site_ssl'] );
+		if ( ! $is_www_pointed ) {
+			$fs          = new Filesystem();
+			$confd_path  = EE_ROOT_DIR . '/services/nginx-proxy/conf.d/';
+			$config_file = $confd_path . $this->site_data['site_url'] . '-redirect.conf';
+			$fs->remove( $config_file );
 			\EE\Site\Utils\reload_global_nginx_proxy();
 		}
 

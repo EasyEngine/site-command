@@ -18,11 +18,6 @@ use function EE\Site\Utils\get_site_info;
 class HTML extends EE_Site_Command {
 
 	/**
-	 * @var array $site_data Associative array containing essential site related information.
-	 */
-	private $site_data;
-
-	/**
 	 * @var object $docker Object to access `\EE::docker()` functions.
 	 */
 	private $docker;
