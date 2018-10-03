@@ -453,17 +453,17 @@ abstract class EE_Site_Command {
 	 * @param string $site_fs_path Webroot of the site.
 	 * @param string $ssl_type     Type of ssl cert to issue.
 	 * @param bool $wildcard       SSL with wildcard or not.
-	 * @param bool $allow_le       Allow LetsEncrypt
+	 * @param bool $add_le_on_www  Allow LetsEncrypt on www subdomain.
 	 *
 	 * @throws \EE\ExitException If --ssl flag has unrecognized value.
 	 * @throws \Exception
 	 */
-	protected function init_ssl( $site_url, $site_fs_path, $ssl_type, $wildcard = false, $allow_le = false ) {
+	protected function init_ssl( $site_url, $site_fs_path, $ssl_type, $wildcard = false, $add_le_on_www = false ) {
 
 		\EE::debug( 'Starting SSL procedure' );
 		if ( 'le' === $ssl_type ) {
 			\EE::debug( 'Initializing LE' );
-			$this->init_le( $site_url, $site_fs_path, $wildcard, $allow_le );
+			$this->init_le( $site_url, $site_fs_path, $wildcard, $add_le_on_www );
 		} elseif ( 'inherit' === $ssl_type ) {
 			if ( $wildcard ) {
 				throw new \Exception( 'Cannot use --wildcard with --ssl=inherit', false );
@@ -481,9 +481,9 @@ abstract class EE_Site_Command {
 	 * @param string $site_url     Name of the site for ssl.
 	 * @param string $site_fs_path Webroot of the site.
 	 * @param bool $wildcard       SSL with wildcard or not.
-	 * @param bool $allow_le       Allow LetsEncrypt
+	 * @param bool $add_le_on_www  Allow LetsEncrypt on www subdomain.
 	 */
-	protected function init_le( $site_url, $site_fs_path, $wildcard = false, $allow_le = false ) {
+	protected function init_le( $site_url, $site_fs_path, $wildcard = false, $add_le_on_www = false ) {
 
 		\EE::debug( 'Wildcard in init_le: ' . ( bool ) $wildcard );
 
@@ -499,7 +499,7 @@ abstract class EE_Site_Command {
 			return;
 		}
 
-		$domains = $this->get_cert_domains( $site_url, $wildcard, $allow_le );
+		$domains = $this->get_cert_domains( $site_url, $wildcard, $add_le_on_www );
 
 		if ( ! $client->authorize( $domains, $wildcard ) ) {
 			return;
@@ -514,20 +514,19 @@ abstract class EE_Site_Command {
 	/**
 	 * Returns all domains required by cert
 	 *
-	 * @param string $site_url  Name of site
-	 * @param $wildcard         Wildcard cert required?
-	 * @param bool   $allow_le  Allow LetsEncrypt
+	 * @param string $site_url    Name of site
+	 * @param $wildcard           Wildcard cert required?
+	 * @param bool $add_le_on_www Allow LetsEncrypt on www subdomain.
 	 *
 	 * @return array
 	 */
-	private function get_cert_domains( string $site_url, $wildcard, $allow_le = false ): array {
+	private function get_cert_domains( string $site_url, $wildcard, $add_le_on_www = false ): array {
 
 		$domains = [ $site_url ];
 		if ( $wildcard ) {
 			$domains[] = "*.{$site_url}";
 		} else {
-
-			if ( true === $allow_le ) {
+			if ( true === $add_le_on_www ) {
 				$domains[] = $this->get_www_domain( $site_url );
 			}
 		}
@@ -537,14 +536,16 @@ abstract class EE_Site_Command {
 
 	/**
 	 * Check www is working with site domain.
+	 *
 	 * @param string Site url.
 	 * @param string Absolute path of site.
 	 *
 	 * @return bool
 	 */
-	protected function check_www_subdomain( $site_url,  $site_path ): bool {
+	protected function check_www_subdomain( $site_url, $site_path ): bool {
+
 		$random_string = EE\Utils\random_password();
-		$sucessfull    = false;
+		$successful    = false;
 		$file_path     = $site_path . '/app/src/ssl-check.txt';
 		file_put_contents( $file_path, $random_string );
 
@@ -557,13 +558,14 @@ abstract class EE_Site_Command {
 		curl_close( $curl );
 
 		if ( ! empty( $data ) && $random_string === $data ) {
-			$sucessfull = true;
+			$successful = true;
 		}
 
 		if ( file_exists( $file_path ) ) {
 			unlink( $file_path );
 		}
-		return $sucessfull;
+
+		return $successful;
 	}
 
 	/**
