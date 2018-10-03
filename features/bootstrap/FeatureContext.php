@@ -283,7 +283,7 @@ class FeatureContext implements Context
 	 */
 	public function theSiteShouldHaveWordpress($site)
 	{
-		if ( ! file_exists( EE_SITE_ROOT . '/' . $site . '/app/src/wp-config.php)) {
+		if ( ! file_exists( EE_SITE_ROOT . '/' . $site . '/app/src/wp-config.php' ) ) {
 			throw new Exception("WordPress data not found!");
 		}
 	}
