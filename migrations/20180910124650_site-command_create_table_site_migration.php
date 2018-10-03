@@ -26,7 +26,7 @@ class CreateTableSiteMigration extends Base {
 	 */
 	public function up() {
 
-		$query = 'CREATE TABLE IF NOT EXISTS sites (
+		$query = 'CREATE TABLE sites (
 			id                   INTEGER  NOT NULL,
 			site_url             VARCHAR  NOT NULL,
 			site_type            VARCHAR  NOT NULL,
@@ -62,15 +62,6 @@ class CreateTableSiteMigration extends Base {
 			CHECK (site_enabled IN (0, 1))
 		);';
 
-		$query .= 'CREATE TABLE site_meta (
-			id INTEGER,
-			site_id INTEGER NOT NULL,
-			meta_key VARCHAR,
-			meta_value VARCHAR,
-			PRIMARY KEY (id),
-			FOREIGN KEY (site_id) REFERENCES sites(id)
-		);';
-
 		try {
 			self::$pdo->exec( $query );
 		} catch ( PDOException $exception ) {
@@ -85,9 +76,7 @@ class CreateTableSiteMigration extends Base {
 	 */
 	public function down() {
 
-		$query = 'DROP TABLE IF EXISTS sites;';
-
-		$query .= 'DROP TABLE IF EXISTS site_meta';
+		$query = 'DROP TABLE sites;';
 
 		try {
 			self::$pdo->exec( $query );
