@@ -201,7 +201,7 @@ class HTML extends EE_Site_Command {
 	 *
 	 * @param array $additional_filters Filters to alter docker-compose file.
 	 */
-	private function dump_docker_compose_yml( $additional_filters = [] ) {
+	protected function dump_docker_compose_yml( $additional_filters = [] ) {
 
 		$site_docker_yml = $this->site_data['site_fs_path'] . '/docker-compose.yml';
 
@@ -237,34 +237,7 @@ class HTML extends EE_Site_Command {
 				\EE\Site\Utils\site_status_check( $this->site_data['site_url'] );
 			}
 
-			$is_www_pointed = $this->check_www_subdomain( $this->site_data['site_url'], $this->site_data['site_fs_path'] );
-			if ( $is_www_pointed ) {
-				/*
-				 * This adds http www redirection which is needed for issuing cert for a site.
-				 * i.e. when you create example.com site, certs are issued for example.com and www.example.com
-				 *
-				 * We're issuing certs for both domains as it is needed in order to perform redirection of
-				 * https://www.example.com -> https://example.com
-				 *
-				 * We add redirection config two times in case of ssl as we need http redirection
-				 * when certs are being requested and http+https redirection after we have certs.
-				 */
-				\EE\Site\Utils\add_site_redirects( $this->site_data['site_url'], false, 'inherit' === $this->site_data['site_ssl'] );
-				\EE\Site\Utils\reload_global_nginx_proxy();
-			}
-
-			if ( $this->site_data['site_ssl'] ) {
-				$this->init_ssl( $this->site_data['site_url'], $this->site_data['site_fs_path'], $this->site_data['site_ssl'], $this->site_data['site_ssl_wildcard'] );
-
-				if ( $is_www_pointed ) {
-					\EE\Site\Utils\add_site_redirects( $this->site_data['site_url'], true, 'inherit' === $this->site_data['site_ssl'], $is_www_pointed );
-				}
-
-				$this->dump_docker_compose_yml( [ 'nohttps' => false ] );
-				\EE\Site\Utils\start_site_containers( $this->site_data['site_fs_path'] );
-
-				\EE\Site\Utils\reload_global_nginx_proxy();
-			}
+			$this->www_ssl_wrapper();
 		} catch ( \Exception $e ) {
 			$this->catch_clean( $e );
 		}
