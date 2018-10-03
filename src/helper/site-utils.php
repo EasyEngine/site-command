@@ -311,7 +311,7 @@ function add_site_redirects( string $site_url, bool $ssl, bool $inherit ) {
 		'ssl'            => $ssl,
 	];
 
-	$content = EE\Utils\mustache_render( EE_ROOT . '/templates/redirect.conf.mustache', $conf_data );
+	$content = EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/redirect.conf.mustache', $conf_data );
 	$fs->dumpFile( $config_file_path, ltrim( $content, PHP_EOL ) );
 }
 
