@@ -101,7 +101,7 @@ class FeatureContext implements Context
 	}
 
 	/**
-	 * @When /I run '(.*)'/
+	 * @When /I run '(.*)'|"(.*)"/
 	 */
 	public function iRun($command)
 	{
