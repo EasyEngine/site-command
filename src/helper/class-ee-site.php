@@ -439,6 +439,8 @@ abstract class EE_Site_Command {
 		 */
 		\EE\Site\Utils\add_site_redirects( $this->site_data['site_url'], false, 'inherit' === $this->site_data['site_ssl'] );
 		\EE\Site\Utils\reload_global_nginx_proxy();
+		// Need second reload sometimes for changes to reflect.
+		\EE\Site\Utils\reload_global_nginx_proxy();
 
 		$is_www_pointed = $this->check_www_subdomain( $this->site_data['site_url'], $this->site_data['site_fs_path'] );
 		if ( ! $is_www_pointed ) {
@@ -593,7 +595,7 @@ abstract class EE_Site_Command {
 		$successful    = false;
 		$file_path     = $site_path . '/app/src/www-check.html';
 		file_put_contents( $file_path, $random_string );
-
+		
 		$site_url = 'www.' . $site_url . '/www-check.html';
 		$curl     = curl_init();
 		curl_setopt( $curl, CURLOPT_URL, $site_url );
