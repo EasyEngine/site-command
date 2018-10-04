@@ -442,8 +442,8 @@ abstract class EE_Site_Command {
 		// Need second reload sometimes for changes to reflect.
 		\EE\Site\Utils\reload_global_nginx_proxy();
 
-		$is_www_pointed = $this->check_www_subdomain( $this->site_data['site_url'], $this->site_data['site_fs_path'] );
-		if ( ! $is_www_pointed ) {
+		$is_www_or_non_www_pointed = $this->check_www_or_non_www_domain( $this->site_data['site_url'], $this->site_data['site_fs_path'] );
+		if ( ! $is_www_or_non_www_pointed ) {
 			$fs          = new Filesystem();
 			$confd_path  = EE_ROOT_DIR . '/services/nginx-proxy/conf.d/';
 			$config_file = $confd_path . $this->site_data['site_url'] . '-redirect.conf';
@@ -454,8 +454,8 @@ abstract class EE_Site_Command {
 		if ( $this->site_data['site_ssl'] ) {
 			$this->init_ssl( $this->site_data['site_url'], $this->site_data['site_fs_path'], $this->site_data['site_ssl'], $this->site_data['site_ssl_wildcard'] );
 
-			if ( $is_www_pointed ) {
-				\EE\Site\Utils\add_site_redirects( $this->site_data['site_url'], true, 'inherit' === $this->site_data['site_ssl'], $is_www_pointed );
+			if ( $is_www_or_non_www_pointed ) {
+				\EE\Site\Utils\add_site_redirects( $this->site_data['site_url'], true, 'inherit' === $this->site_data['site_ssl'], $is_www_or_non_www_pointed );
 			}
 
 			$this->dump_docker_compose_yml( [ 'nohttps' => false ] );
@@ -582,32 +582,39 @@ abstract class EE_Site_Command {
 	}
 
 	/**
-	 * Check www is working with site domain.
+	 * Check www or non-www is working with site domain.
 	 *
 	 * @param string Site url.
 	 * @param string Absolute path of site.
 	 *
 	 * @return bool
 	 */
-	protected function check_www_subdomain( $site_url, $site_path ): bool {
+	protected function check_www_or_non_www_domain( $site_url, $site_path ): bool {
 
 		$random_string = EE\Utils\random_password();
 		$successful    = false;
-		$file_path     = $site_path . '/app/src/www-check.html';
+		$file_path     = $site_path . '/app/src/check.html';
 		file_put_contents( $file_path, $random_string );
-		
-		$site_url = 'www.' . $site_url . '/www-check.html';
-		$curl     = curl_init();
+
+		if ( 0 === strpos( $site_url, 'www.' ) ) {
+			$site_url = ltrim( $site_url, 'www.' );
+		} else {
+			$site_url = 'www.' . $site_url;
+		}
+
+		$site_url .= '/check.html';
+
+		$curl = curl_init();
 		curl_setopt( $curl, CURLOPT_URL, $site_url );
 		curl_setopt( $curl, CURLOPT_RETURNTRANSFER, true );
-		curl_setopt( $curl, CURLOPT_FOLLOWLOCATION, true);
+		curl_setopt( $curl, CURLOPT_FOLLOWLOCATION, true );
 		curl_setopt( $curl, CURLOPT_HEADER, false );
 		$data = curl_exec( $curl );
 		curl_close( $curl );
 
 		if ( ! empty( $data ) && $random_string === $data ) {
 			$successful = true;
-			EE::debug( "www subdomain pointed for $site_url" );
+			EE::debug( "pointed for $site_url" );
 		}
 
 		if ( file_exists( $file_path ) ) {
