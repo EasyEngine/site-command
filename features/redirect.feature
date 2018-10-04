@@ -10,7 +10,8 @@ Feature: Site Redirection
     | Location: http://example.test/ |
 
   Scenario: www-no_ssl redirection works properly
-    When I run 'bin/ee site create www.example1.test'
+    When I run '/bin/bash -c 'echo "127.0.0.1 example1.test" >> /etc/hosts''
+    And I run 'bin/ee site create www.example1.test'
     Then After delay of 5 seconds
     Then Request on 'localhost' with header 'Host: example1.test' should contain following headers:
     | header                              |
