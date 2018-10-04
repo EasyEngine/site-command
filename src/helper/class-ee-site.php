@@ -591,10 +591,10 @@ abstract class EE_Site_Command {
 
 		$random_string = EE\Utils\random_password();
 		$successful    = false;
-		$file_path     = $site_path . '/app/src/ssl-check.txt';
+		$file_path     = $site_path . '/app/src/www-check.html';
 		file_put_contents( $file_path, $random_string );
 
-		$site_url = 'www.' . $site_url . '/ssl-check.txt';
+		$site_url = 'www.' . $site_url . '/www-check.html';
 		$curl     = curl_init();
 		curl_setopt( $curl, CURLOPT_URL, $site_url );
 		curl_setopt( $curl, CURLOPT_RETURNTRANSFER, true );
