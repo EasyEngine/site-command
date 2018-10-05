@@ -311,7 +311,7 @@ function add_site_redirects( string $site_url, bool $ssl, bool $inherit ) {
 		'ssl'            => $ssl,
 	];
 
-	$content = EE\Utils\mustache_render( EE_ROOT . '/templates/redirect.conf.mustache', $conf_data );
+	$content = EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/redirect.conf.mustache', $conf_data );
 	$fs->dumpFile( $config_file_path, ltrim( $content, PHP_EOL ) );
 }
 
@@ -450,7 +450,12 @@ function configure_postfix( $site_url, $site_fs_path ) {
  * Reload the global nginx proxy.
  */
 function reload_global_nginx_proxy() {
-	\EE::launch( sprintf( 'docker exec %s sh -c "/app/docker-entrypoint.sh /usr/local/bin/docker-gen /app/nginx.tmpl /etc/nginx/conf.d/default.conf; /usr/sbin/nginx -s reload"', EE_PROXY_TYPE ) );
+
+	if ( \EE::launch( sprintf( 'docker exec %s sh -c "nginx -t"', EE_PROXY_TYPE ) ) ) {
+		return \EE::launch( sprintf( 'docker exec %s sh -c "/app/docker-entrypoint.sh /usr/local/bin/docker-gen /app/nginx.tmpl /etc/nginx/conf.d/default.conf; /usr/sbin/nginx -s reload"', EE_PROXY_TYPE ) );
+	}
+
+	return false;
 }
 
 /**

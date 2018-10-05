@@ -38,7 +38,7 @@ abstract class EE_Site_Command {
 	/**
 	 * @var array $site_data Associative array containing essential site related information.
 	 */
-	private $site_data;
+	protected $site_data;
 
 	public function __construct() {
 
@@ -419,6 +419,53 @@ abstract class EE_Site_Command {
 	}
 
 	/**
+	 * Function to add site redirects and initialise ssl process.
+	 *
+	 * @param array $containers_to_start Containers to start for that site. Default, empty will start all.
+	 *
+	 * @throws EE\ExitException
+	 * @throws \Exception
+	 */
+	protected function www_ssl_wrapper( $containers_to_start = [] ) {
+		/**
+		 * This adds http www redirection which is needed for issuing cert for a site.
+		 * i.e. when you create example.com site, certs are issued for example.com and www.example.com
+		 *
+		 * We're issuing certs for both domains as it is needed in order to perform redirection of
+		 * https://www.example.com -> https://example.com
+		 *
+		 * We add redirection config two times in case of ssl as we need http redirection
+		 * when certs are being requested and http+https redirection after we have certs.
+		 */
+		\EE\Site\Utils\add_site_redirects( $this->site_data['site_url'], false, 'inherit' === $this->site_data['site_ssl'] );
+		\EE\Site\Utils\reload_global_nginx_proxy();
+		// Need second reload sometimes for changes to reflect.
+		\EE\Site\Utils\reload_global_nginx_proxy();
+
+		$is_www_or_non_www_pointed = $this->check_www_or_non_www_domain( $this->site_data['site_url'], $this->site_data['site_fs_path'] );
+		if ( ! $is_www_or_non_www_pointed ) {
+			$fs          = new Filesystem();
+			$confd_path  = EE_ROOT_DIR . '/services/nginx-proxy/conf.d/';
+			$config_file = $confd_path . $this->site_data['site_url'] . '-redirect.conf';
+			$fs->remove( $config_file );
+			\EE\Site\Utils\reload_global_nginx_proxy();
+		}
+
+		if ( $this->site_data['site_ssl'] ) {
+			$this->init_ssl( $this->site_data['site_url'], $this->site_data['site_fs_path'], $this->site_data['site_ssl'], $this->site_data['site_ssl_wildcard'] );
+
+			if ( $is_www_or_non_www_pointed ) {
+				\EE\Site\Utils\add_site_redirects( $this->site_data['site_url'], true, 'inherit' === $this->site_data['site_ssl'], $is_www_or_non_www_pointed );
+			}
+
+			$this->dump_docker_compose_yml( [ 'nohttps' => false ] );
+			\EE\Site\Utils\start_site_containers( $this->site_data['site_fs_path'], $containers_to_start );
+
+			\EE\Site\Utils\reload_global_nginx_proxy();
+		}
+	}
+
+	/**
 	 * Runs the acme le registration and authorization.
 	 *
 	 * @param string $site_url Name of the site for ssl.
@@ -453,16 +500,17 @@ abstract class EE_Site_Command {
 	 * @param string $site_fs_path Webroot of the site.
 	 * @param string $ssl_type     Type of ssl cert to issue.
 	 * @param bool $wildcard       SSL with wildcard or not.
+	 * @param bool $add_le_on_www  Allow LetsEncrypt on www subdomain.
 	 *
 	 * @throws \EE\ExitException If --ssl flag has unrecognized value.
 	 * @throws \Exception
 	 */
-	protected function init_ssl( $site_url, $site_fs_path, $ssl_type, $wildcard = false ) {
+	protected function init_ssl( $site_url, $site_fs_path, $ssl_type, $wildcard = false, $add_le_on_www = false ) {
 
 		\EE::debug( 'Starting SSL procedure' );
 		if ( 'le' === $ssl_type ) {
 			\EE::debug( 'Initializing LE' );
-			$this->init_le( $site_url, $site_fs_path, $wildcard );
+			$this->init_le( $site_url, $site_fs_path, $wildcard, $add_le_on_www );
 		} elseif ( 'inherit' === $ssl_type ) {
 			if ( $wildcard ) {
 				throw new \Exception( 'Cannot use --wildcard with --ssl=inherit', false );
@@ -480,8 +528,9 @@ abstract class EE_Site_Command {
 	 * @param string $site_url     Name of the site for ssl.
 	 * @param string $site_fs_path Webroot of the site.
 	 * @param bool $wildcard       SSL with wildcard or not.
+	 * @param bool $add_le_on_www  Allow LetsEncrypt on www subdomain.
 	 */
-	protected function init_le( $site_url, $site_fs_path, $wildcard = false ) {
+	protected function init_le( $site_url, $site_fs_path, $wildcard = false, $add_le_on_www = false ) {
 
 		\EE::debug( 'Wildcard in init_le: ' . ( bool ) $wildcard );
 
@@ -497,7 +546,7 @@ abstract class EE_Site_Command {
 			return;
 		}
 
-		$domains = $this->get_cert_domains( $site_url, $wildcard );
+		$domains = $this->get_cert_domains( $site_url, $wildcard, $add_le_on_www );
 
 		if ( ! $client->authorize( $domains, $wildcard ) ) {
 			return;
@@ -512,21 +561,67 @@ abstract class EE_Site_Command {
 	/**
 	 * Returns all domains required by cert
 	 *
-	 * @param string $site_url  Name of site
-	 * @param $wildcard         Wildcard cert required?
+	 * @param string $site_url    Name of site
+	 * @param $wildcard           Wildcard cert required?
+	 * @param bool $add_le_on_www Allow LetsEncrypt on www subdomain.
 	 *
 	 * @return array
 	 */
-	private function get_cert_domains( string $site_url, $wildcard ): array {
+	private function get_cert_domains( string $site_url, $wildcard, $add_le_on_www = false ): array {
 
 		$domains = [ $site_url ];
 		if ( $wildcard ) {
 			$domains[] = "*.{$site_url}";
 		} else {
-			$domains[] = $this->get_www_domain( $site_url );
+			if ( true === $add_le_on_www ) {
+				$domains[] = $this->get_www_domain( $site_url );
+			}
 		}
 
 		return $domains;
+	}
+
+	/**
+	 * Check www or non-www is working with site domain.
+	 *
+	 * @param string Site url.
+	 * @param string Absolute path of site.
+	 *
+	 * @return bool
+	 */
+	protected function check_www_or_non_www_domain( $site_url, $site_path ): bool {
+
+		$random_string = EE\Utils\random_password();
+		$successful    = false;
+		$file_path     = $site_path . '/app/src/check.html';
+		file_put_contents( $file_path, $random_string );
+
+		if ( 0 === strpos( $site_url, 'www.' ) ) {
+			$site_url = ltrim( $site_url, 'www.' );
+		} else {
+			$site_url = 'www.' . $site_url;
+		}
+
+		$site_url .= '/check.html';
+
+		$curl = curl_init();
+		curl_setopt( $curl, CURLOPT_URL, $site_url );
+		curl_setopt( $curl, CURLOPT_RETURNTRANSFER, true );
+		curl_setopt( $curl, CURLOPT_FOLLOWLOCATION, true );
+		curl_setopt( $curl, CURLOPT_HEADER, false );
+		$data = curl_exec( $curl );
+		curl_close( $curl );
+
+		if ( ! empty( $data ) && $random_string === $data ) {
+			$successful = true;
+			EE::debug( "pointed for $site_url" );
+		}
+
+		if ( file_exists( $file_path ) ) {
+			unlink( $file_path );
+		}
+
+		return $successful;
 	}
 
 	/**
@@ -621,5 +716,7 @@ abstract class EE_Site_Command {
 	abstract public function create( $args, $assoc_args );
 
 	abstract protected function rollback();
+
+	abstract protected function dump_docker_compose_yml( $additional_filters = [] );
 
 }
