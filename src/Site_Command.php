@@ -111,6 +111,10 @@ class Site_Command {
 		// default site-type
 		$type = 'html';
 
+		if ( 'create' === reset( $args ) ) {
+			return $type;
+		}
+
 		$last_arg = array_pop( $args );
 		if ( substr( $last_arg, 0, 4 ) === 'http' ) {
 			$last_arg = str_replace( [ 'https://', 'http://' ], '', $last_arg );

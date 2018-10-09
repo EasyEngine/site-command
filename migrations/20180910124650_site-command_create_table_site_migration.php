@@ -38,6 +38,7 @@ class CreateTableSiteMigration extends Base {
 			cache_nginx_fullpage BOOLEAN  NOT NULL DEFAULT 0,
 			cache_mysql_query    BOOLEAN  NOT NULL DEFAULT 0,
 			cache_app_object     BOOLEAN  NOT NULL DEFAULT 0,
+			cache_host           VARCHAR,
 			php_version          VARCHAR,
 			db_name              VARCHAR,
 			db_user              VARCHAR,
