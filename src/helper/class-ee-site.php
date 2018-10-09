@@ -102,9 +102,9 @@ abstract class EE_Site_Command {
 		$sites = Site::all();
 
 		if ( $enabled && ! $disabled ) {
-			$sites = Site::where( 'site_enabled', true );
+			$sites = Site::where( 'site_enabled', 1 );
 		} elseif ( $disabled && ! $enabled ) {
-			$sites = Site::where( 'site_enabled', false );
+			$sites = Site::where( 'site_enabled', 0 );
 		}
 
 		if ( empty( $sites ) ) {
