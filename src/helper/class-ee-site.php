@@ -302,6 +302,11 @@ abstract class EE_Site_Command {
 		if ( true === (bool) $this->site_data->admin_tools ) {
 			EE::runcommand( 'admin-tools enable ' . $this->site_data->site_url . ' --force' );
 		}
+
+		if( true === (bool) $this->site_data->mailhog_enabled ) {
+			EE::runcommand( 'mailhog enable ' . $this->site_data->site_url );
+		}
+
 		\EE\Utils\delem_log( 'site enable end' );
 	}
 
