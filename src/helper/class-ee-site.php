@@ -223,6 +223,7 @@ abstract class EE_Site_Command {
 			}
 		}
 
+		\EE::do_hook( 'site_cleanup', $site_url );
 
 		if ( $level > 4 ) {
 			if ( $this->site_data['site_ssl'] ) {
