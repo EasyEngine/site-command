@@ -279,6 +279,10 @@ abstract class EE_Site_Command {
 
 		\EE::log( sprintf( 'Enabling site %s.', $this->site_data->site_url ) );
 
+		if ( 'running' !== EE::docker()::container_status( EE_PROXY_TYPE ) ) {
+			EE\Service\Utils\nginx_proxy_check();
+		}
+
 		if ( \EE::docker()::docker_compose_up( $this->site_data->site_fs_path ) ) {
 			$this->site_data->site_enabled = 1;
 			$this->site_data->save();
