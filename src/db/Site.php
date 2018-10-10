@@ -30,6 +30,12 @@ class Site extends Base {
 			'modified_on' => date( 'Y-m-d H:i:s' ),
 		] );
 
+		foreach ( $fields as $key => $value ) {
+			if ( is_bool( $value ) ) {
+				$fields[ $key ] = (int) $value;
+			}
+		}
+
 		$primary_key_column = static::$primary_key;
 
 		return EE::db()
