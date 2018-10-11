@@ -228,11 +228,12 @@ abstract class EE_Site_Command {
 			if ( $this->site_data['site_ssl'] ) {
 				\EE::log( 'Removing ssl certs.' );
 				$crt_file   = EE_ROOT_DIR . "/services/nginx-proxy/certs/$site_url.crt";
-				$key_file   = EE_ROOT_DIR . "/services/nginx-proxy/$site_url.key";
+				$key_file   = EE_ROOT_DIR . "/services/nginx-proxy/certs/$site_url.key";
+				$pem_file   = EE_ROOT_DIR . "/services/nginx-proxy/certs/$site_url.chain.pem";
 				$conf_certs = EE_ROOT_DIR . "/services/nginx-proxy/acme-conf/certs/$site_url";
 				$conf_var   = EE_ROOT_DIR . "/services/nginx-proxy/acme-conf/var/$site_url";
 
-				$cert_files = [ $conf_certs, $conf_var, $crt_file, $key_file ];
+				$cert_files = [ $conf_certs, $conf_var, $crt_file, $key_file, $pem_file ];
 				try {
 					$this->fs->remove( $cert_files );
 				} catch ( \Exception $e ) {
