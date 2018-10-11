@@ -223,6 +223,11 @@ abstract class EE_Site_Command {
 			}
 		}
 
+		/**
+		 * Site cleanup hook is a hook for different packages to initiate cleanup, for data related to given site.
+		 * Cleanup may be required by a package if it maintains its own database table or some files or both that are specific to the site being deleted.
+		 * In those cases, this hook can be used. It is placed just before removing the site entry from database table `sites`. The hook provides `site_url` with the help of which `id` of the site can be found as well as anything else related to that site can be deleted.
+		 */
 		\EE::do_hook( 'site_cleanup', $site_url );
 
 		if ( $level > 4 ) {
