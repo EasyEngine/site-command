@@ -279,10 +279,19 @@ abstract class EE_Site_Command {
 
 		\EE::log( sprintf( 'Enabling site %s.', $this->site_data->site_url ) );
 
+		$success = false;
 		if ( \EE::docker()::docker_compose_up( $this->site_data->site_fs_path ) ) {
 			$this->site_data->site_enabled = 1;
 			$this->site_data->save();
-			\EE::success( sprintf( 'Site %s enabled.', $this->site_data->site_url ) );
+			$success = true;
+		}
+
+		$site_data_array = (array) $this->site_data;
+		$this->site_data = reset( $site_data_array );
+		$this->www_ssl_wrapper();
+
+		if ( $success ) {
+			\EE::success( sprintf( 'Site %s enabled.', $this->site_data['site_url'] ) );
 		} else {
 			\EE::error( sprintf( 'There was error in enabling %s. Please check logs.', $this->site_data->site_url ) );
 		}
@@ -310,6 +319,12 @@ abstract class EE_Site_Command {
 		$this->site_data = get_site_info( $args, false, true, false );
 
 		\EE::log( sprintf( 'Disabling site %s.', $this->site_data->site_url ) );
+
+		$redirect_config_file_path = EE_ROOT_DIR . '/services/nginx-proxy/conf.d/' . $args[0] . '-redirect.conf';
+		if ( file_exists( $redirect_config_file_path ) ) {
+			unlink( $redirect_config_file_path );
+			\EE\Site\Utils\reload_global_nginx_proxy();
+		}
 
 		if ( \EE::docker()::docker_compose_down( $this->site_data->site_fs_path ) ) {
 			$this->site_data->site_enabled = 0;
