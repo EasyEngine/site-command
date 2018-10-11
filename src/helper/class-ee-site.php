@@ -279,13 +279,34 @@ abstract class EE_Site_Command {
 
 		\EE::log( sprintf( 'Enabling site %s.', $this->site_data->site_url ) );
 
-		if ( \EE::docker()::docker_compose_up( $this->site_data->site_fs_path ) ) {
+		if ( 'running' !== EE::docker()::container_status( EE_PROXY_TYPE ) ) {
+			EE\Service\Utils\nginx_proxy_check();
+		}
+
+		if ( 'global-db' === $this->site_data->db_host ) {
+			EE\Service\Utils\init_global_container( 'global-db' );
+		}
+
+		if ( 'global-redis' === $this->site_data->cache_host ) {
+			EE\Service\Utils\init_global_container( 'global-redis' );
+		}
+
+		if ( \EE::docker()::docker_compose_up( $this->site_data->site_fs_path, ['nginx'] ) ) {
 			$this->site_data->site_enabled = 1;
 			$this->site_data->save();
 			\EE::success( sprintf( 'Site %s enabled.', $this->site_data->site_url ) );
 		} else {
 			\EE::error( sprintf( 'There was error in enabling %s. Please check logs.', $this->site_data->site_url ) );
 		}
+
+		if ( true === (bool) $this->site_data->admin_tools ) {
+			EE::runcommand( 'admin-tools enable ' . $this->site_data->site_url . ' --force' );
+		}
+
+		if( true === (bool) $this->site_data->mailhog_enabled ) {
+			EE::runcommand( 'mailhog enable ' . $this->site_data->site_url );
+		}
+
 		\EE\Utils\delem_log( 'site enable end' );
 	}
 
