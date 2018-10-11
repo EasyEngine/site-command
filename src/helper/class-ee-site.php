@@ -293,7 +293,7 @@ abstract class EE_Site_Command {
 		if ( $success ) {
 			\EE::success( sprintf( 'Site %s enabled.', $this->site_data['site_url'] ) );
 		} else {
-			\EE::error( sprintf( 'There was error in enabling %s. Please check logs.', $this->site_data->site_url ) );
+			\EE::error( sprintf( 'There was error in enabling %s. Please check logs.', $this->site_data['site_url'] ) );
 		}
 		\EE\Utils\delem_log( 'site enable end' );
 	}
