@@ -302,20 +302,20 @@ abstract class EE_Site_Command {
 		$this->site_data = reset( $site_data_array );
 		$this->www_ssl_wrapper();
 
+
+		if ( true === (bool) $this->site_data['admin_tools'] ) {
+			EE::runcommand( 'admin-tools enable ' . $this->site_data['site_url'] . ' --force' );
+		}
+
+		if( true === (bool) $this->site_data['mailhog_enabled'] ) {
+			EE::runcommand( 'mailhog enable ' . $this->site_data['site_url'] );
+		}
+
 		if ( $success ) {
 			\EE::success( sprintf( 'Site %s enabled.', $this->site_data['site_url'] ) );
 		} else {
 			\EE::error( sprintf( 'There was error in enabling %s. Please check logs.', $this->site_data['site_url'] ) );
 		}
-
-		if ( true === (bool) $this->site_data->admin_tools ) {
-			EE::runcommand( 'admin-tools enable ' . $this->site_data->site_url . ' --force' );
-		}
-
-		if( true === (bool) $this->site_data->mailhog_enabled ) {
-			EE::runcommand( 'mailhog enable ' . $this->site_data->site_url );
-		}
-
 		\EE\Utils\delem_log( 'site enable end' );
 	}
 
