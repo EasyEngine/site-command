@@ -614,7 +614,7 @@ abstract class EE_Site_Command {
 
 		$random_string = EE\Utils\random_password();
 		$successful    = false;
-		$file_path     = $site_path . '/app/src/check.html';
+		$file_path     = $site_path . '/app/htdocs/check.html';
 		file_put_contents( $file_path, $random_string );
 
 		if ( 0 === strpos( $site_url, 'www.' ) ) {
