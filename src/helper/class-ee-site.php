@@ -341,9 +341,10 @@ abstract class EE_Site_Command {
 
 		\EE::log( sprintf( 'Disabling site %s.', $this->site_data->site_url ) );
 
+		$fs                        = new Filesystem();
 		$redirect_config_file_path = EE_ROOT_DIR . '/services/nginx-proxy/conf.d/' . $args[0] . '-redirect.conf';
-		if ( file_exists( $redirect_config_file_path ) ) {
-			unlink( $redirect_config_file_path );
+		if ( $fs->exists( $redirect_config_file_path ) ) {
+			$fs->remove( $redirect_config_file_path );
 			\EE\Site\Utils\reload_global_nginx_proxy();
 		}
 
