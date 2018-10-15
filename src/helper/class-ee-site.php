@@ -292,22 +292,31 @@ abstract class EE_Site_Command {
 			EE\Service\Utils\init_global_container( 'global-redis' );
 		}
 
+		$success = false;
 		if ( \EE::docker()::docker_compose_up( $this->site_data->site_fs_path, ['nginx'] ) ) {
 			$this->site_data->site_enabled = 1;
 			$this->site_data->save();
-			\EE::success( sprintf( 'Site %s enabled.', $this->site_data->site_url ) );
+			$success = true;
+		}
+
+		$site_data_array = (array) $this->site_data;
+		$this->site_data = reset( $site_data_array );
+		$this->www_ssl_wrapper();
+
+
+		if ( true === (bool) $this->site_data['admin_tools'] ) {
+			EE::runcommand( 'admin-tools enable ' . $this->site_data['site_url'] . ' --force' );
+		}
+
+		if( true === (bool) $this->site_data['mailhog_enabled'] ) {
+			EE::runcommand( 'mailhog enable ' . $this->site_data['site_url'] );
+		}
+
+		if ( $success ) {
+			\EE::success( sprintf( 'Site %s enabled.', $this->site_data['site_url'] ) );
 		} else {
-			\EE::error( sprintf( 'There was error in enabling %s. Please check logs.', $this->site_data->site_url ) );
+			\EE::error( sprintf( 'There was error in enabling %s. Please check logs.', $this->site_data['site_url'] ) );
 		}
-
-		if ( true === (bool) $this->site_data->admin_tools ) {
-			EE::runcommand( 'admin-tools enable ' . $this->site_data->site_url . ' --force' );
-		}
-
-		if( true === (bool) $this->site_data->mailhog_enabled ) {
-			EE::runcommand( 'mailhog enable ' . $this->site_data->site_url );
-		}
-
 		\EE\Utils\delem_log( 'site enable end' );
 	}
 
@@ -332,6 +341,13 @@ abstract class EE_Site_Command {
 		$this->site_data = get_site_info( $args, false, true, false );
 
 		\EE::log( sprintf( 'Disabling site %s.', $this->site_data->site_url ) );
+
+		$fs                        = new Filesystem();
+		$redirect_config_file_path = EE_ROOT_DIR . '/services/nginx-proxy/conf.d/' . $args[0] . '-redirect.conf';
+		if ( $fs->exists( $redirect_config_file_path ) ) {
+			$fs->remove( $redirect_config_file_path );
+			\EE\Site\Utils\reload_global_nginx_proxy();
+		}
 
 		if ( \EE::docker()::docker_compose_down( $this->site_data->site_fs_path ) ) {
 			$this->site_data->site_enabled = 0;
