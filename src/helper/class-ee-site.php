@@ -223,6 +223,13 @@ abstract class EE_Site_Command {
 			}
 		}
 
+		/**
+		 * Execute before site db data cleanup and after site services cleanup.
+		 * Note: This can be use to cleanup site data added by any package command.
+		 *
+		 * @param string $site_url Url of site which data is cleanup.
+		 */
+		\EE::do_hook( 'site_cleanup', $site_url );
 
 		if ( $level > 4 ) {
 			if ( $this->site_data['site_ssl'] ) {
