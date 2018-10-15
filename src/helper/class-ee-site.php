@@ -235,11 +235,12 @@ abstract class EE_Site_Command {
 			if ( $this->site_data['site_ssl'] ) {
 				\EE::log( 'Removing ssl certs.' );
 				$crt_file   = EE_ROOT_DIR . "/services/nginx-proxy/certs/$site_url.crt";
-				$key_file   = EE_ROOT_DIR . "/services/nginx-proxy/$site_url.key";
+				$key_file   = EE_ROOT_DIR . "/services/nginx-proxy/certs/$site_url.key";
+				$pem_file   = EE_ROOT_DIR . "/services/nginx-proxy/certs/$site_url.chain.pem";
 				$conf_certs = EE_ROOT_DIR . "/services/nginx-proxy/acme-conf/certs/$site_url";
 				$conf_var   = EE_ROOT_DIR . "/services/nginx-proxy/acme-conf/var/$site_url";
 
-				$cert_files = [ $conf_certs, $conf_var, $crt_file, $key_file ];
+				$cert_files = [ $conf_certs, $conf_var, $crt_file, $key_file, $pem_file ];
 				try {
 					$this->fs->remove( $cert_files );
 				} catch ( \Exception $e ) {
@@ -286,12 +287,42 @@ abstract class EE_Site_Command {
 
 		\EE::log( sprintf( 'Enabling site %s.', $this->site_data->site_url ) );
 
-		if ( \EE::docker()::docker_compose_up( $this->site_data->site_fs_path ) ) {
+		if ( 'running' !== EE::docker()::container_status( EE_PROXY_TYPE ) ) {
+			EE\Service\Utils\nginx_proxy_check();
+		}
+
+		if ( 'global-db' === $this->site_data->db_host ) {
+			EE\Service\Utils\init_global_container( 'global-db' );
+		}
+
+		if ( 'global-redis' === $this->site_data->cache_host ) {
+			EE\Service\Utils\init_global_container( 'global-redis' );
+		}
+
+		$success = false;
+		if ( \EE::docker()::docker_compose_up( $this->site_data->site_fs_path, ['nginx'] ) ) {
 			$this->site_data->site_enabled = 1;
 			$this->site_data->save();
-			\EE::success( sprintf( 'Site %s enabled.', $this->site_data->site_url ) );
+			$success = true;
+		}
+
+		$site_data_array = (array) $this->site_data;
+		$this->site_data = reset( $site_data_array );
+		$this->www_ssl_wrapper();
+
+
+		if ( true === (bool) $this->site_data['admin_tools'] ) {
+			EE::runcommand( 'admin-tools enable ' . $this->site_data['site_url'] . ' --force' );
+		}
+
+		if( true === (bool) $this->site_data['mailhog_enabled'] ) {
+			EE::runcommand( 'mailhog enable ' . $this->site_data['site_url'] );
+		}
+
+		if ( $success ) {
+			\EE::success( sprintf( 'Site %s enabled.', $this->site_data['site_url'] ) );
 		} else {
-			\EE::error( sprintf( 'There was error in enabling %s. Please check logs.', $this->site_data->site_url ) );
+			\EE::error( sprintf( 'There was error in enabling %s. Please check logs.', $this->site_data['site_url'] ) );
 		}
 		\EE\Utils\delem_log( 'site enable end' );
 	}
@@ -317,6 +348,13 @@ abstract class EE_Site_Command {
 		$this->site_data = get_site_info( $args, false, true, false );
 
 		\EE::log( sprintf( 'Disabling site %s.', $this->site_data->site_url ) );
+
+		$fs                        = new Filesystem();
+		$redirect_config_file_path = EE_ROOT_DIR . '/services/nginx-proxy/conf.d/' . $args[0] . '-redirect.conf';
+		if ( $fs->exists( $redirect_config_file_path ) ) {
+			$fs->remove( $redirect_config_file_path );
+			\EE\Site\Utils\reload_global_nginx_proxy();
+		}
 
 		if ( \EE::docker()::docker_compose_down( $this->site_data->site_fs_path ) ) {
 			$this->site_data->site_enabled = 0;
@@ -600,7 +638,7 @@ abstract class EE_Site_Command {
 
 		$random_string = EE\Utils\random_password();
 		$successful    = false;
-		$file_path     = $site_path . '/app/src/check.html';
+		$file_path     = $site_path . '/app/htdocs/check.html';
 		file_put_contents( $file_path, $random_string );
 
 		if ( 0 === strpos( $site_url, 'www.' ) ) {

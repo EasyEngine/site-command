@@ -38,7 +38,7 @@ class Site_HTML_Docker {
 		}
 		$nginx['volumes']  = [
 			'vol' => [
-				[ 'name' => './app/src:/var/www/htdocs' ],
+				[ 'name' => './app:/var/www' ],
 				[ 'name' => './config/nginx/main.conf:/etc/nginx/conf.d/default.conf' ],
 				[ 'name' => './config/nginx/custom:/etc/nginx/custom' ],
 				[ 'name' => './logs/nginx:/var/log/nginx' ],
