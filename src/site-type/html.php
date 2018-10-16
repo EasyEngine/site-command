@@ -156,7 +156,7 @@ class HTML extends EE_Site_Command {
 		$site_conf_dir           = $this->site_data['site_fs_path'] . '/config';
 		$site_conf_env           = $this->site_data['site_fs_path'] . '/.env';
 		$site_nginx_default_conf = $site_conf_dir . '/nginx/main.conf';
-		$site_src_dir            = $this->site_data['site_fs_path'] . '/app/src';
+		$site_src_dir            = $this->site_data['site_fs_path'] . '/app/htdocs';
 		$process_user            = posix_getpwuid( posix_geteuid() );
 		$custom_conf_dest        = $site_conf_dir . '/nginx/custom/user.conf';
 		$custom_conf_source      = SITE_TEMPLATE_ROOT . '/config/nginx/user.conf.mustache';
@@ -181,7 +181,7 @@ class HTML extends EE_Site_Command {
 
 			$index_data = [
 				'version'       => 'v' . EE_VERSION,
-				'site_src_root' => $this->site_data['site_fs_path'] . '/app/src',
+				'site_src_root' => $this->site_data['site_fs_path'] . '/app/htdocs',
 			];
 			$index_html = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/index.html.mustache', $index_data );
 			$this->fs->dumpFile( $site_src_dir . '/index.html', $index_html );

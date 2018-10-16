@@ -52,6 +52,7 @@ class CreateTableSiteMigration extends Base {
 			app_admin_username   VARCHAR,
 			app_admin_password   VARCHAR,
 			app_mail             VARCHAR,
+			mailhog_enabled      BOOLEAN  NOT NULL DEFAULT 0,
 			admin_tools          BOOLEAN  NOT NULL DEFAULT 0,
 			created_on           DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			modified_on          DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
