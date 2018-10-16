@@ -768,7 +768,7 @@ abstract class EE_Site_Command {
 			return;
 		}
 
-		\EE::error( 'You can not create more than 30 sites' );
+		\EE::error( 'You can not create more than 27 sites' );
 	}
 
 	abstract public function create( $args, $assoc_args );
