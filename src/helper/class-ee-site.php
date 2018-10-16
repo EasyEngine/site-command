@@ -764,7 +764,7 @@ abstract class EE_Site_Command {
 	protected function check_site_count() {
 		$sites = Site::all();
 
-		if( 27 > count( $sites) ) {
+		if ( 27 > count( $sites) ) {
 			return;
 		}
 
