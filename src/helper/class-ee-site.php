@@ -758,8 +758,10 @@ abstract class EE_Site_Command {
 		}
 	}
 
-	/*
-	 *  Check site count for maximum 27 sites.
+	/**
+	 * Check site count for maximum 27 sites.
+	 *
+	 * @throws EE\ExitException
 	 */
 	protected function check_site_count() {
 		$sites = Site::all();
