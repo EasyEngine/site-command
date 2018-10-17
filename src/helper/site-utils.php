@@ -464,7 +464,6 @@ function get_global_auth() {
 
 	$auth = \EE\Model\Auth::where( [
 		'site_url' => 'default',
-		'scope'    => 'site',
 	] );
 
 	if ( empty( $auth ) ) {
