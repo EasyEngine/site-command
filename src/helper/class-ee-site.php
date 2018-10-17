@@ -767,6 +767,21 @@ abstract class EE_Site_Command {
 		}
 	}
 
+	/**
+	 * Check site count for maximum 27 sites.
+	 *
+	 * @throws EE\ExitException
+	 */
+	protected function check_site_count() {
+		$sites = Site::all();
+
+		if ( 27 > count( $sites ) ) {
+			return;
+		}
+
+		\EE::error( 'You can not create more than 27 sites' );
+	}
+
 	abstract public function create( $args, $assoc_args );
 
 	abstract protected function rollback();

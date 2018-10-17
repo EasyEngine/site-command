@@ -85,6 +85,7 @@ class HTML extends EE_Site_Command {
 	 */
 	public function create( $args, $assoc_args ) {
 
+		$this->check_site_count();
 		\EE\Utils\delem_log( 'site create start' );
 		\EE::warning( 'This is a beta version. Please don\'t use it in production.' );
 		$this->logger->debug( 'args:', $args );
