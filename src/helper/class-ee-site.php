@@ -301,6 +301,9 @@ abstract class EE_Site_Command {
 
 		$success = false;
 
+		$postfix_exists      = EE::docker()::service_exists( 'postfix', $this->site_data->site_fs_path );
+		$containers_to_start = $postfix_exists ? [ 'nginx' ] : [ 'nginx', 'postfix' ];
+
 		if ( \EE::docker()::docker_compose_up( $this->site_data->site_fs_path, $containers_to_start ) ) {
 			$this->site_data->site_enabled = 1;
 			$this->site_data->save();
@@ -310,6 +313,10 @@ abstract class EE_Site_Command {
 		$site_data_array = (array) $this->site_data;
 		$this->site_data = reset( $site_data_array );
 		$this->www_ssl_wrapper( $containers_to_start, true );
+
+		if ( $postfix_exists ) {
+			\EE\Site\Utils\configure_postfix( $this->site_data['site_url'], $this->site_data['site_fs_path'] );
+		}
 
 		if ( true === (bool) $this->site_data['admin_tools'] ) {
 			EE::runcommand( 'admin-tools enable ' . $this->site_data['site_url'] . ' --force' );
