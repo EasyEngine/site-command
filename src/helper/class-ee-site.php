@@ -300,7 +300,8 @@ abstract class EE_Site_Command {
 		}
 
 		$success = false;
-		if ( \EE::docker()::docker_compose_up( $this->site_data->site_fs_path, ['nginx'] ) ) {
+
+		if ( \EE::docker()::docker_compose_up( $this->site_data->site_fs_path, $containers_to_start ) ) {
 			$this->site_data->site_enabled = 1;
 			$this->site_data->save();
 			$success = true;
@@ -308,14 +309,13 @@ abstract class EE_Site_Command {
 
 		$site_data_array = (array) $this->site_data;
 		$this->site_data = reset( $site_data_array );
-		$this->www_ssl_wrapper();
-
+		$this->www_ssl_wrapper( $containers_to_start, true );
 
 		if ( true === (bool) $this->site_data['admin_tools'] ) {
 			EE::runcommand( 'admin-tools enable ' . $this->site_data['site_url'] . ' --force' );
 		}
 
-		if( true === (bool) $this->site_data['mailhog_enabled'] ) {
+		if ( true === (bool) $this->site_data['mailhog_enabled'] ) {
 			EE::runcommand( 'mailhog enable ' . $this->site_data['site_url'] );
 		}
 
@@ -471,7 +471,7 @@ abstract class EE_Site_Command {
 	 * @throws EE\ExitException
 	 * @throws \Exception
 	 */
-	protected function www_ssl_wrapper( $containers_to_start = [] ) {
+	protected function www_ssl_wrapper( $containers_to_start = [], $site_enable = false ) {
 		/**
 		 * This adds http www redirection which is needed for issuing cert for a site.
 		 * i.e. when you create example.com site, certs are issued for example.com and www.example.com
@@ -497,14 +497,16 @@ abstract class EE_Site_Command {
 		}
 
 		if ( $this->site_data['site_ssl'] ) {
-			$this->init_ssl( $this->site_data['site_url'], $this->site_data['site_fs_path'], $this->site_data['site_ssl'], $this->site_data['site_ssl_wildcard'] );
+			if ( ! $site_enable ) {
+				$this->init_ssl( $this->site_data['site_url'], $this->site_data['site_fs_path'], $this->site_data['site_ssl'], $this->site_data['site_ssl_wildcard'] );
 
-			if ( $is_www_or_non_www_pointed ) {
-				\EE\Site\Utils\add_site_redirects( $this->site_data['site_url'], true, 'inherit' === $this->site_data['site_ssl'], $is_www_or_non_www_pointed );
+				$this->dump_docker_compose_yml( [ 'nohttps' => false ] );
+				\EE\Site\Utils\start_site_containers( $this->site_data['site_fs_path'], $containers_to_start );
 			}
 
-			$this->dump_docker_compose_yml( [ 'nohttps' => false ] );
-			\EE\Site\Utils\start_site_containers( $this->site_data['site_fs_path'], $containers_to_start );
+			if ( $is_www_or_non_www_pointed ) {
+				\EE\Site\Utils\add_site_redirects( $this->site_data['site_url'], true, 'inherit' === $this->site_data['site_ssl'] );
+			}
 
 			\EE\Site\Utils\reload_global_nginx_proxy();
 		}
