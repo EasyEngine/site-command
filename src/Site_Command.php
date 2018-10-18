@@ -66,13 +66,18 @@ class Site_Command {
 	public function __invoke( $args, $assoc_args ) {
 
 		$site_types = self::get_site_types();
-		$assoc_args = $this->convert_old_args_to_new_args( $args, $assoc_args );
 
-		if ( isset( $assoc_args['type'] ) ) {
-			$type = $assoc_args['type'];
-			unset( $assoc_args['type'] );
+		// default site-type
+		$type = 'html';
+
+		if ( in_array( reset( $args ), [ 'create', 'update' ] ) || empty( $args ) ) {
+			$assoc_args = $this->convert_old_args_to_new_args( $args, $assoc_args );
+			if ( isset( $assoc_args['type'] ) ) {
+				$type = $assoc_args['type'];
+				unset( $assoc_args['type'] );
+			}
 		} else {
-			$type = $this->determine_type( $args );
+			$type = $this->determine_type( $type, $args );
 		}
 		array_unshift( $args, 'site' );
 
@@ -100,16 +105,16 @@ class Site_Command {
 	 * Or falls down to the default site-type defined by the user,
 	 * Or finally the most basic site-type and the default included in this package, type=html.
 	 *
-	 * @param array $args Command line arguments passed to site-command.
+	 * @param array $args          Command line arguments passed to site-command.
+	 * @param string $default_type Default site-type.
 	 *
 	 * @throws \EE\ExitException
 	 *
 	 * @return string site-type.
 	 */
-	private function determine_type( $args ) {
+	private function determine_type( $default_type, $args ) {
 
-		// default site-type
-		$type = 'html';
+		$type = $default_type;
 
 		if ( 'create' === reset( $args ) ) {
 			return $type;
