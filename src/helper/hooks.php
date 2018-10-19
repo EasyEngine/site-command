@@ -42,4 +42,21 @@ function ee_site_help_cmd_routing( $args, $assoc_args ) {
 
 }
 
+/**
+ * Hook to cleanup redis entries if any.
+ *
+ * @param string $site_url The site to be cleaned up.
+ */
+function cleanup_redis_entries( $site_url ) {
+
+	$site_data = Site::find( $site_url );
+
+	if ( ! $site_data && GLOBAL_REDIS !== $site_data->cache_host ) {
+		return;
+	}
+
+	EE::exec( sprintf( 'docker exec -it %s redis-cli --eval purge.lua 0 , "%s:*"', GLOBAL_REDIS_CONTAINER, $site_data->site_url ) );
+}
+
+EE::add_hook( 'site_cleanup', 'cleanup_redis_entries' );
 EE::add_hook( 'before_invoke:help', 'ee_site_help_cmd_routing' );
