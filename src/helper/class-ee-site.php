@@ -302,7 +302,7 @@ abstract class EE_Site_Command {
 		$success = false;
 
 		$postfix_exists      = EE::docker()::service_exists( 'postfix', $this->site_data->site_fs_path );
-		$containers_to_start = $postfix_exists ? [ 'nginx' ] : [ 'nginx', 'postfix' ];
+		$containers_to_start = $postfix_exists ? [ 'nginx', 'postfix' ] : [ 'nginx' ];
 
 		if ( \EE::docker()::docker_compose_up( $this->site_data->site_fs_path, $containers_to_start ) ) {
 			$this->site_data->site_enabled = 1;
