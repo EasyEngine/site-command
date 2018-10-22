@@ -66,12 +66,12 @@ class Site_Command {
 	public function __invoke( $args, $assoc_args ) {
 
 		$site_types = self::get_site_types();
+		$assoc_args = $this->convert_old_args_to_new_args( $args, $assoc_args );
 
-		// default site-type
+		// default site-type.
 		$type = 'html';
 
-		if ( in_array( reset( $args ), [ 'create', 'update' ] ) || empty( $args ) ) {
-			$assoc_args = $this->convert_old_args_to_new_args( $args, $assoc_args );
+		if ( in_array( reset( $args ), [ 'create', 'update' ], true ) || empty( $args ) ) {
 			if ( isset( $assoc_args['type'] ) ) {
 				$type = $assoc_args['type'];
 				unset( $assoc_args['type'] );
@@ -156,6 +156,9 @@ class Site_Command {
 	 */
 	private function convert_old_args_to_new_args( $args, $assoc_args ) {
 
+		if ( ! in_array( reset( $args ), [ 'create', 'update' ], true ) && ! empty( $args ) ) {
+			return $assoc_args;
+		}
 		$ee3_compat_array_map_to_type = [
 			'wp'          => [ 'type' => 'wp' ],
 			'wpsubdom'    => [ 'type' => 'wp', 'mu' => 'subdom' ],
