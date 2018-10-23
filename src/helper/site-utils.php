@@ -497,8 +497,12 @@ function get_site_prefix( $site_url ) {
  *                              $volumes[$key]['path_to_symlink'] => specifies the path to symlink the created volume.
  */
 function create_volumes( $site_url, $volumes ) {
-	$volume_prefix = get_site_prefix( $site_url );
-	$fs            = new Filesystem();
+
+	$volume_prefix   = get_site_prefix( $site_url );
+	$fs              = new Filesystem();
+	$launch          = EE::launch( "docker info 2> /dev/null | awk '/Docker Root Dir/ {print $4}'" );
+	$docker_root_dir = trim( $launch->stdout );
+
 	foreach ( $volumes as $volume ) {
 		$fs->mkdir( dirname( $volume['path_to_symlink'] ) );
 		\EE::exec(
@@ -512,8 +516,6 @@ function create_volumes( $site_url, $volumes ) {
 				$volume['name']
 			)
 		);
-		$launch          = EE::launch( "docker info 2> /dev/null | awk '/Docker Root Dir/ {print $4}'" );
-		$docker_root_dir = trim( $launch->stdout );
 		$fs->symlink( sprintf( '%s/volumes/%s_%s/_data', $docker_root_dir, $volume_prefix, $volume['name'] ), $volume['path_to_symlink'] );
 	}
 }
