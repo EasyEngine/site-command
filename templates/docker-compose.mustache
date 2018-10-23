@@ -51,6 +51,19 @@ services:
     {{/networks}}
 {{/services}}
 
+{{#created_volumes}}
+volumes:
+  htdocs:
+    external:
+      name: {{prefix}}_htdocs
+  config_nginx:
+    external:
+      name: {{prefix}}_config_nginx
+  log_nginx:
+    external:
+      name: {{prefix}}_log_nginx
+{{/created_volumes}}
+
 {{#network}}
 networks:
   site-network:
