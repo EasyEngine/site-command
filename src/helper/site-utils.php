@@ -476,3 +476,31 @@ function get_global_auth() {
 	];
 
 }
+
+/**
+ * Gets a dockerized prefix created for site.
+ *
+ * @param string $site_url Name of the site.
+ *
+ * @return string prefix derived from the name.
+ */
+function get_site_prefix( $site_url ) {
+	return str_replace( [ '.', '-' ], '', $site_url );
+}
+
+/**
+ * Function to create external docker volumes and related symlinks.
+ *
+ * @param string $volume_prefix Prefix with which external volume needs to be created.
+ * @param array $volumes        The volumes to be created.
+ *                              $volumes[$key]['name'] => specifies the name of volume to be created
+ *                              $volumes[$key]['path_to_symlink'] => specifies the path to symlink the created volume.
+ */
+function create_volumes( $volume_prefix, $volumes ) {
+	$fs = new Filesystem();
+	foreach ( $volumes as $volume ) {
+		$fs->mkdir( dirname( $volume['path_to_symlink'] ) );
+		\EE::exec( sprintf( 'docker volume create %s_%s', $volume_prefix, $volume['name'] ) );
+		$fs->symlink( sprintf( '/var/lib/docker/volumes/%s_%s/_data', $volume_prefix, $volume['name'] ), $volume['path_to_symlink'] );
+	}
+}
