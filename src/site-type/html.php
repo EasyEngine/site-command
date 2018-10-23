@@ -155,14 +155,23 @@ class HTML extends EE_Site_Command {
 
 		$site_conf_dir           = $this->site_data['site_fs_path'] . '/config';
 		$site_conf_env           = $this->site_data['site_fs_path'] . '/.env';
-		$site_nginx_default_conf = $site_conf_dir . '/nginx/main.conf';
+		$site_nginx_default_conf = $site_conf_dir . '/nginx/default.conf';
 		$site_src_dir            = $this->site_data['site_fs_path'] . '/app/htdocs';
 		$process_user            = posix_getpwuid( posix_geteuid() );
 		$custom_conf_dest        = $site_conf_dir . '/nginx/custom/user.conf';
 		$custom_conf_source      = SITE_TEMPLATE_ROOT . '/config/nginx/user.conf.mustache';
 
+		$volume_prefix = \EE\Site\Utils\get_site_prefix( $this->site_data['site_url'] );
+		$volumes       = [
+			[ 'name' => 'htdocs', 'path_to_symlink' => $this->site_data['site_fs_path'] . '/app' ],
+			[ 'name' => 'config_nginx', 'path_to_symlink' => dirname( $site_nginx_default_conf ) ],
+			[ 'name' => 'log_nginx', 'path_to_symlink' => $this->site_data['site_fs_path'] . '/logs/nginx' ],
+		];
+
 		\EE::log( sprintf( 'Creating site %s.', $this->site_data['site_url'] ) );
 		\EE::log( 'Copying configuration files.' );
+
+		\EE\Site\Utils\create_volumes( $volume_prefix, $volumes );
 
 		$default_conf_content = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx/main.conf.mustache', [ 'server_name' => $this->site_data['site_url'] ] );
 
@@ -176,9 +185,12 @@ class HTML extends EE_Site_Command {
 		try {
 			$this->dump_docker_compose_yml( [ 'nohttps' => true ] );
 			$this->fs->dumpFile( $site_conf_env, $env_content );
+			\EE\Site\Utils\start_site_containers( $this->site_data['site_fs_path'] );
 			$this->fs->dumpFile( $site_nginx_default_conf, $default_conf_content );
 			$this->fs->copy( $custom_conf_source, $custom_conf_dest );
-
+			$this->fs->remove( $this->site_data['site_fs_path'] . '/app/html' );
+			$this->fs->remove( $this->site_data['site_fs_path'] . '/config/nginx/conf.d' );
+			\EE::exec( 'docker-compose restart nginx' );
 			$index_data = [
 				'version'       => 'v' . EE_VERSION,
 				'site_src_root' => $this->site_data['site_fs_path'] . '/app/htdocs',
@@ -201,8 +213,9 @@ class HTML extends EE_Site_Command {
 
 		$site_docker_yml = $this->site_data['site_fs_path'] . '/docker-compose.yml';
 
-		$filter   = [];
-		$filter[] = $this->site_data['site_type'];
+		$filter                = [];
+		$filter[]              = $this->site_data['site_type'];
+		$filter['site_prefix'] = \EE\Site\Utils\get_site_prefix( $this->site_data['site_url'] );
 
 		foreach ( $additional_filters as $key => $addon_filter ) {
 			$filter[ $key ] = $addon_filter;
@@ -224,8 +237,6 @@ class HTML extends EE_Site_Command {
 			\EE\Site\Utils\create_site_root( $this->site_data['site_fs_path'], $this->site_data['site_url'] );
 			$this->level = 3;
 			$this->configure_site_files();
-
-			\EE\Site\Utils\start_site_containers( $this->site_data['site_fs_path'] );
 
 			\EE\Site\Utils\create_etc_hosts_entry( $this->site_data['site_url'] );
 			if ( ! $this->skip_status_check ) {
