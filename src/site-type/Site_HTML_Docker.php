@@ -38,10 +38,9 @@ class Site_HTML_Docker {
 		}
 		$nginx['volumes']  = [
 			'vol' => [
-				[ 'name' => './app:/var/www' ],
-				[ 'name' => './config/nginx/main.conf:/etc/nginx/conf.d/default.conf' ],
-				[ 'name' => './config/nginx/custom:/etc/nginx/custom' ],
-				[ 'name' => './logs/nginx:/var/log/nginx' ],
+				[ 'name' => 'htdocs:/var/www' ],
+				[ 'name' => 'config_nginx:/etc/nginx' ],
+				[ 'name' => 'log_nginx:/var/log/nginx' ],
 			],
 		];
 		$nginx['labels']   = [
@@ -66,14 +65,17 @@ class Site_HTML_Docker {
 		$base[] = $nginx;
 
 		$binding = [
-			'services' => $base,
-			'network'  => [
+			'services'        => $base,
+			'network'         => [
 				'networks_labels' => [
 					'label' => [
 						[ 'name' => 'org.label-schema.vendor=EasyEngine' ],
 						[ 'name' => 'io.easyengine.site=${VIRTUAL_HOST}' ],
 					],
 				],
+			],
+			'created_volumes' => [
+				'prefix' => $filters['site_prefix'],
 			],
 		];
 
