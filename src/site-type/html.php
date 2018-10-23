@@ -161,8 +161,7 @@ class HTML extends EE_Site_Command {
 		$custom_conf_dest        = $site_conf_dir . '/nginx/custom/user.conf';
 		$custom_conf_source      = SITE_TEMPLATE_ROOT . '/config/nginx/user.conf.mustache';
 
-		$volume_prefix = \EE\Site\Utils\get_site_prefix( $this->site_data['site_url'] );
-		$volumes       = [
+		$volumes = [
 			[ 'name' => 'htdocs', 'path_to_symlink' => $this->site_data['site_fs_path'] . '/app' ],
 			[ 'name' => 'config_nginx', 'path_to_symlink' => dirname( $site_nginx_default_conf ) ],
 			[ 'name' => 'log_nginx', 'path_to_symlink' => $this->site_data['site_fs_path'] . '/logs/nginx' ],
@@ -171,7 +170,7 @@ class HTML extends EE_Site_Command {
 		\EE::log( sprintf( 'Creating site %s.', $this->site_data['site_url'] ) );
 		\EE::log( 'Copying configuration files.' );
 
-		\EE\Site\Utils\create_volumes( $volume_prefix, $volumes );
+		\EE\Site\Utils\create_volumes( $this->site_data['site_url'], $volumes );
 
 		$default_conf_content = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx/main.conf.mustache', [ 'server_name' => $this->site_data['site_url'] ] );
 
