@@ -512,6 +512,8 @@ function create_volumes( $site_url, $volumes ) {
 				$volume['name']
 			)
 		);
-		$fs->symlink( sprintf( '/var/lib/docker/volumes/%s_%s/_data', $volume_prefix, $volume['name'] ), $volume['path_to_symlink'] );
+		$launch          = EE::launch( "docker info 2> /dev/null | awk '/Docker Root Dir/ {print $4}'" );
+		$docker_root_dir = trim( $launch->stdout );
+		$fs->symlink( sprintf( '%s/volumes/%s_%s/_data', $docker_root_dir, $volume_prefix, $volume['name'] ), $volume['path_to_symlink'] );
 	}
 }
