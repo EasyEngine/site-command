@@ -53,15 +53,11 @@ services:
 
 {{#created_volumes}}
 volumes:
-  htdocs:
+  {{#external_vols}}
+  {{ext_vol_name}}:
     external:
-      name: {{prefix}}_htdocs
-  config_nginx:
-    external:
-      name: {{prefix}}_config_nginx
-  log_nginx:
-    external:
-      name: {{prefix}}_log_nginx
+      name: {{prefix}}_{{ext_vol_name}}
+  {{/external_vols}}
 {{/created_volumes}}
 
 {{#network}}

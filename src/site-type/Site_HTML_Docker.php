@@ -62,6 +62,14 @@ class Site_HTML_Docker {
 			]
 		];
 
+		$volumes = [
+			'external_vols' => [
+				[ 'prefix' => $filters['site_prefix'], 'ext_vol_name' => 'htdocs' ],
+				[ 'prefix' => $filters['site_prefix'], 'ext_vol_name' => 'config_nginx' ],
+				[ 'prefix' => $filters['site_prefix'], 'ext_vol_name' => 'log_nginx' ],
+			],
+		];
+
 		$base[] = $nginx;
 
 		$binding = [
@@ -74,9 +82,7 @@ class Site_HTML_Docker {
 					],
 				],
 			],
-			'created_volumes' => [
-				'prefix' => $filters['site_prefix'],
-			],
+			'created_volumes' => $volumes,
 		];
 
 		$docker_compose_yml = mustache_render( SITE_TEMPLATE_ROOT . '/docker-compose.mustache', $binding );
