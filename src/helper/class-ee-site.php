@@ -198,13 +198,10 @@ abstract class EE_Site_Command {
 			}
 		}
 
-		$volumes_dir   = '/var/lib/docker/volumes';
-		$volume_prefix = \EE\Site\Utils\get_site_prefix( $site_url );
-		$finder        = new Finder();
-		$finder->in( $volumes_dir );
-		$volumes_to_delete = $finder->directories()->name( $volume_prefix . '*' );
-		foreach ( iterator_to_array( $volumes_to_delete, true ) as $volume ) {
-			\EE::exec( 'docker volume rm ' . basename( $volume ) );
+		$launch  = EE::launch( sprintf( 'docker volume ls --filter="label=org.label-schema.vendor=EasyEngine" --filter="label=io.easyengine.site=%s" -q', $site_url ) );
+		$volumes = explode( PHP_EOL, trim( $launch->stdout ) );
+		foreach ( $volumes as $volume ) {
+			\EE::exec( 'docker volume rm ' . $volume );
 		}
 
 		if ( ! empty( $db_data['db_host'] ) ) {
