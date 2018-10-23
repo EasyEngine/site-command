@@ -5,6 +5,7 @@ namespace EE\Site\Type;
 use EE;
 use EE\Model\Site;
 use Symfony\Component\Filesystem\Filesystem;
+use Symfony\Component\Finder\Finder;
 use function EE\Site\Utils\auto_site_name;
 use function EE\Site\Utils\get_site_info;
 use function EE\Site\Utils\reload_global_nginx_proxy;
@@ -195,6 +196,15 @@ abstract class EE_Site_Command {
 					\EE::warning( 'Error in removing docker containers.' );
 				}
 			}
+		}
+
+		$volumes_dir   = '/var/lib/docker/volumes';
+		$volume_prefix = \EE\Site\Utils\get_site_prefix( $site_url );
+		$finder        = new Finder();
+		$finder->in( $volumes_dir );
+		$volumes_to_delete = $finder->directories()->name( $volume_prefix . '*' );
+		foreach ( iterator_to_array( $volumes_to_delete, true ) as $volume ) {
+			\EE::exec( 'docker volume rm ' . basename( $volume ) );
 		}
 
 		if ( ! empty( $db_data['db_host'] ) ) {
