@@ -170,7 +170,7 @@ class HTML extends EE_Site_Command {
 		\EE::log( sprintf( 'Creating site %s.', $this->site_data['site_url'] ) );
 		\EE::log( 'Copying configuration files.' );
 
-		\EE\Site\Utils\create_volumes( $this->site_data['site_url'], $volumes );
+		$this->docker->create_volumes( $this->site_data['site_url'], $volumes );
 
 		$default_conf_content = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx/main.conf.mustache', [ 'server_name' => $this->site_data['site_url'] ] );
 
@@ -214,7 +214,7 @@ class HTML extends EE_Site_Command {
 
 		$filter                = [];
 		$filter[]              = $this->site_data['site_type'];
-		$filter['site_prefix'] = \EE\Site\Utils\get_site_prefix( $this->site_data['site_url'] );
+		$filter['site_prefix'] = $this->docker->get_docker_style_prefix( $this->site_data['site_url'] );
 
 		foreach ( $additional_filters as $key => $addon_filter ) {
 			$filter[ $key ] = $addon_filter;

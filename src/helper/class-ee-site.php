@@ -197,8 +197,7 @@ abstract class EE_Site_Command {
 			}
 		}
 
-		$launch  = EE::launch( sprintf( 'docker volume ls --filter="label=org.label-schema.vendor=EasyEngine" --filter="label=io.easyengine.site=%s" -q', $site_url ) );
-		$volumes = explode( PHP_EOL, trim( $launch->stdout ) );
+		$volumes = \EE::docker()::get_volumes_by_label( $site_url );
 		foreach ( $volumes as $volume ) {
 			\EE::exec( 'docker volume rm ' . $volume );
 		}
