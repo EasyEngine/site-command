@@ -5,7 +5,6 @@ namespace EE\Site\Type;
 use EE;
 use EE\Model\Site;
 use Symfony\Component\Filesystem\Filesystem;
-use Symfony\Component\Finder\Finder;
 use function EE\Site\Utils\auto_site_name;
 use function EE\Site\Utils\get_site_info;
 use function EE\Site\Utils\reload_global_nginx_proxy;
