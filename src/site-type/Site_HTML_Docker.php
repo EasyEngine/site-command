@@ -38,10 +38,9 @@ class Site_HTML_Docker {
 		}
 		$nginx['volumes']  = [
 			'vol' => [
-				[ 'name' => './app:/var/www' ],
-				[ 'name' => './config/nginx/main.conf:/etc/nginx/conf.d/default.conf' ],
-				[ 'name' => './config/nginx/custom:/etc/nginx/custom' ],
-				[ 'name' => './logs/nginx:/var/log/nginx' ],
+				[ 'name' => 'htdocs:/var/www' ],
+				[ 'name' => 'config_nginx:/etc/nginx' ],
+				[ 'name' => 'log_nginx:/var/log/nginx' ],
 			],
 		];
 		$nginx['labels']   = [
@@ -63,11 +62,19 @@ class Site_HTML_Docker {
 			]
 		];
 
+		$volumes = [
+			'external_vols' => [
+				[ 'prefix' => $filters['site_prefix'], 'ext_vol_name' => 'htdocs' ],
+				[ 'prefix' => $filters['site_prefix'], 'ext_vol_name' => 'config_nginx' ],
+				[ 'prefix' => $filters['site_prefix'], 'ext_vol_name' => 'log_nginx' ],
+			],
+		];
+
 		$base[] = $nginx;
 
 		$binding = [
-			'services' => $base,
-			'network'  => [
+			'services'        => $base,
+			'network'         => [
 				'networks_labels' => [
 					'label' => [
 						[ 'name' => 'org.label-schema.vendor=EasyEngine' ],
@@ -75,6 +82,7 @@ class Site_HTML_Docker {
 					],
 				],
 			],
+			'created_volumes' => $volumes,
 		];
 
 		$docker_compose_yml = mustache_render( SITE_TEMPLATE_ROOT . '/docker-compose.mustache', $binding );

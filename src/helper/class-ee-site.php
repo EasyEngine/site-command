@@ -197,6 +197,11 @@ abstract class EE_Site_Command {
 			}
 		}
 
+		$volumes = \EE::docker()::get_volumes_by_label( $site_url );
+		foreach ( $volumes as $volume ) {
+			\EE::exec( 'docker volume rm ' . $volume );
+		}
+
 		if ( ! empty( $db_data['db_host'] ) ) {
 			\EE\Site\Utils\cleanup_db( $db_data['db_host'], $db_data['db_name'] );
 			\EE\Site\Utils\cleanup_db_user( $db_data['db_host'], $db_data['db_user'] );
