@@ -155,7 +155,7 @@ class HTML extends EE_Site_Command {
 
 		$site_conf_dir           = $this->site_data['site_fs_path'] . '/config';
 		$site_conf_env           = $this->site_data['site_fs_path'] . '/.env';
-		$site_nginx_default_conf = $site_conf_dir . '/nginx/default.conf';
+		$site_nginx_default_conf = $site_conf_dir . '/nginx/main.conf';
 		$site_src_dir            = $this->site_data['site_fs_path'] . '/app/htdocs';
 		$process_user            = posix_getpwuid( posix_geteuid() );
 		$custom_conf_dest        = $site_conf_dir . '/nginx/custom/user.conf';
