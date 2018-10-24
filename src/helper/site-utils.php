@@ -498,8 +498,10 @@ function get_site_prefix( $site_url ) {
  */
 function create_volumes( $site_url, $volumes ) {
 
-	$volume_prefix   = get_site_prefix( $site_url );
-	$fs              = new Filesystem();
+	$volume_prefix = get_site_prefix( $site_url );
+	$fs            = new Filesystem();
+
+	// This command will get the root directory for Docker, generally `/var/lib/docker`.
 	$launch          = EE::launch( "docker info 2> /dev/null | awk '/Docker Root Dir/ {print $4}'" );
 	$docker_root_dir = trim( $launch->stdout );
 
