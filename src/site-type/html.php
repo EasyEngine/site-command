@@ -215,6 +215,7 @@ class HTML extends EE_Site_Command {
 		$filter                = [];
 		$filter[]              = $this->site_data['site_type'];
 		$filter['site_prefix'] = $this->docker->get_docker_style_prefix( $this->site_data['site_url'] );
+		$filter['is_ssl']      = $this->site_data['site_ssl'];
 
 		foreach ( $additional_filters as $key => $addon_filter ) {
 			$filter[ $key ] = $addon_filter;
@@ -237,7 +238,9 @@ class HTML extends EE_Site_Command {
 			$this->level = 3;
 			$this->configure_site_files();
 
-			\EE\Site\Utils\create_etc_hosts_entry( $this->site_data['site_url'] );
+			if ( ! $this->site_data['site_ssl'] ) {
+				\EE\Site\Utils\create_etc_hosts_entry( $this->site_data['site_url'] );
+			}
 			if ( ! $this->skip_status_check ) {
 				$this->level = 4;
 				\EE\Site\Utils\site_status_check( $this->site_data['site_url'] );
