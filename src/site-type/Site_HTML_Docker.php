@@ -43,12 +43,6 @@ class Site_HTML_Docker {
 				[ 'name' => 'log_nginx:/var/log/nginx' ],
 			],
 		];
-		$nginx['labels']  = [
-			'label' => [
-				'name' => 'io.easyengine.site=${VIRTUAL_HOST}',
-			],
-		];
-
 		$nginx['labels']   = [
 			'label' => [
 				'name' => 'io.easyengine.site=${VIRTUAL_HOST}',
@@ -57,7 +51,7 @@ class Site_HTML_Docker {
 		$nginx['networks'] = [
 			'net' => [
 				[ 'name' => 'global-frontend-network' ],
-			]
+			],
 		];
 		if ( $filters['is_ssl'] ) {
 			$nginx['networks']['net'][] = [
