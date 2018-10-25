@@ -189,7 +189,7 @@ class HTML extends EE_Site_Command {
 			$this->fs->copy( $custom_conf_source, $custom_conf_dest );
 			$this->fs->remove( $this->site_data['site_fs_path'] . '/app/html' );
 			$this->fs->remove( $this->site_data['site_fs_path'] . '/config/nginx/conf.d' );
-			\EE::exec( 'docker-compose restart nginx' );
+			\EE\Site\Utils\restart_site_containers( $this->site_data['site_fs_path'], 'nginx' );
 			$index_data = [
 				'version'       => 'v' . EE_VERSION,
 				'site_src_root' => $this->site_data['site_fs_path'] . '/app/htdocs',
