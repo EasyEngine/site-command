@@ -1,5 +1,7 @@
 <?php
 
+use EE\Model\Site;
+
 if ( ! class_exists( 'EE' ) ) {
 	return;
 }
