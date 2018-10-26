@@ -36,7 +36,7 @@ class Site_HTML_Docker {
 		if ( ! empty( $filters['nohttps'] ) ) {
 			$nginx['environment']['env'][] = [ 'name' => 'HTTPS_METHOD=nohttps' ];
 		}
-		$nginx['volumes']  = [
+		$nginx['volumes'] = [
 			'vol' => [
 				[ 'name' => 'htdocs:/var/www' ],
 				[ 'name' => 'config_nginx:/etc/nginx' ],
@@ -50,17 +50,23 @@ class Site_HTML_Docker {
 		];
 		$nginx['networks'] = [
 			'net' => [
-				[
-					'name'    => 'site-network',
-					'aliases' => [
-						'alias' => [
-							'name' => '${VIRTUAL_HOST}',
-						],
+				[ 'name' => 'global-frontend-network' ],
+			],
+		];
+		if ( $filters['is_ssl'] ) {
+			$nginx['networks']['net'][] = [
+				'name'    => 'site-network',
+				'aliases' => [
+					'alias' => [
+						'name' => '${VIRTUAL_HOST}',
 					],
 				],
-				[ 'name' => 'global-frontend-network' ],
-			]
-		];
+			];
+		} else {
+			$nginx['networks']['net'][] = [
+				'name' => 'site-network',
+			];
+		}
 
 		$volumes = [
 			'external_vols' => [
