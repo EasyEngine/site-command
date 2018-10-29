@@ -161,8 +161,16 @@ class HTML extends EE_Site_Command {
 		$custom_conf_dest        = $site_conf_dir . '/nginx/custom/user.conf';
 		$custom_conf_source      = SITE_TEMPLATE_ROOT . '/config/nginx/user.conf.mustache';
 
+		$volumes = [
+			[ 'name' => 'htdocs', 'path_to_symlink' => $this->site_data['site_fs_path'] . '/app' ],
+			[ 'name' => 'config_nginx', 'path_to_symlink' => dirname( $site_nginx_default_conf ) ],
+			[ 'name' => 'log_nginx', 'path_to_symlink' => $this->site_data['site_fs_path'] . '/logs/nginx' ],
+		];
+
 		\EE::log( sprintf( 'Creating site %s.', $this->site_data['site_url'] ) );
 		\EE::log( 'Copying configuration files.' );
+
+		$this->docker->create_volumes( $this->site_data['site_url'], $volumes );
 
 		$default_conf_content = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx/main.conf.mustache', [ 'server_name' => $this->site_data['site_url'] ] );
 
@@ -176,9 +184,12 @@ class HTML extends EE_Site_Command {
 		try {
 			$this->dump_docker_compose_yml( [ 'nohttps' => true ] );
 			$this->fs->dumpFile( $site_conf_env, $env_content );
+			\EE\Site\Utils\start_site_containers( $this->site_data['site_fs_path'] );
 			$this->fs->dumpFile( $site_nginx_default_conf, $default_conf_content );
 			$this->fs->copy( $custom_conf_source, $custom_conf_dest );
-
+			$this->fs->remove( $this->site_data['site_fs_path'] . '/app/html' );
+			$this->fs->remove( $this->site_data['site_fs_path'] . '/config/nginx/conf.d' );
+			\EE\Site\Utils\restart_site_containers( $this->site_data['site_fs_path'], 'nginx' );
 			$index_data = [
 				'version'       => 'v' . EE_VERSION,
 				'site_src_root' => $this->site_data['site_fs_path'] . '/app/htdocs',
@@ -201,8 +212,10 @@ class HTML extends EE_Site_Command {
 
 		$site_docker_yml = $this->site_data['site_fs_path'] . '/docker-compose.yml';
 
-		$filter   = [];
-		$filter[] = $this->site_data['site_type'];
+		$filter                = [];
+		$filter[]              = $this->site_data['site_type'];
+		$filter['site_prefix'] = $this->docker->get_docker_style_prefix( $this->site_data['site_url'] );
+		$filter['is_ssl']      = $this->site_data['site_ssl'];
 
 		foreach ( $additional_filters as $key => $addon_filter ) {
 			$filter[ $key ] = $addon_filter;
@@ -225,9 +238,9 @@ class HTML extends EE_Site_Command {
 			$this->level = 3;
 			$this->configure_site_files();
 
-			\EE\Site\Utils\start_site_containers( $this->site_data['site_fs_path'] );
-
-			\EE\Site\Utils\create_etc_hosts_entry( $this->site_data['site_url'] );
+			if ( ! $this->site_data['site_ssl'] ) {
+				\EE\Site\Utils\create_etc_hosts_entry( $this->site_data['site_url'] );
+			}
 			if ( ! $this->skip_status_check ) {
 				$this->level = 4;
 				\EE\Site\Utils\site_status_check( $this->site_data['site_url'] );
