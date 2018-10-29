@@ -367,25 +367,57 @@ function site_status_check( $site_url ) {
 }
 
 /**
- * Function to pull the latest images and bring up the site containers.
+ * Function to pull the latest images and bring up the site containers and set EasyEngine header.
  *
  * @param string $site_fs_path Root directory of the site.
- * @param array $containers    The minimum required conatainers to start the site. Default null, leads to starting of
- *                             all containers.
+ * @param array $containers    The minimum required conatainers to start the site. Default null, leads to starting of all containers.
  *
  * @throws \Exception when docker-compose up fails.
  */
 function start_site_containers( $site_fs_path, $containers = [] ) {
 
-	EE::log( 'Pulling latest images. This may take some time.' );
 	chdir( $site_fs_path );
-	EE::exec( 'docker-compose pull' );
 	EE::log( 'Starting site\'s services.' );
 	if ( ! EE::docker()::docker_compose_up( $site_fs_path, $containers ) ) {
 		throw new \Exception( 'There was some error in docker-compose up.' );
 	}
+	set_nginx_version_conf( $site_fs_path );
 }
 
+/**
+ * Function to restart given containers for a site and update EasyEngine header.
+ *
+ * @param string $site_fs_path     Root directory of the site.
+ * @param string|array $containers Containers to restart.
+ */
+function restart_site_containers( $site_fs_path, $containers ) {
+
+	chdir( $site_fs_path );
+	$all_containers = is_array( $containers ) ? implode( ' ', $containers ) : $containers;
+	EE::exec( "docker-compose restart $all_containers" );
+	set_nginx_version_conf( $site_fs_path );
+}
+
+/**
+ * Function to set nginx version.conf file.
+ *
+ * @param string $site_fs_path Root directory of the site.
+ */
+function set_nginx_version_conf( $site_fs_path ) {
+	if ( ! EE::docker()::service_exists( 'nginx', $site_fs_path ) ) {
+		return;
+	}
+	chdir( $site_fs_path );
+	$version_line    = sprintf( 'add_header X-Powered-By \"EasyEngine v%s\";', EE_VERSION );
+	$version_file    = '/version.conf';
+	$version_success = EE::exec( sprintf( 'docker-compose exec nginx bash -c \'echo "%s" > %s\'', $version_line, $version_file ), false, false, [
+		$version_file,
+		$version_line,
+	] );
+	if ( $version_success ) {
+		EE::exec( 'docker-compose exec nginx bash -c "nginx -t && nginx -s reload"' );
+	}
+}
 
 /**
  * Generic function to run a docker compose command. Must be ran inside correct directory.
