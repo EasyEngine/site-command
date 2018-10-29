@@ -271,18 +271,28 @@ abstract class EE_Site_Command {
 	 * : Name of website to be enabled.
 	 *
 	 * [--force]
-	 * : Force execution of site up.
+	 * : Force execution of site enable.
+	 *
+	 * [--verify]
+	 * : Verify if required global services are working.
 	 *
 	 * ## EXAMPLES
 	 *
 	 *     # Enable site
 	 *     $ ee site enable example.com
 	 *
+	 *     # Enable site with verification of dependent global services. (Note: This takes longer time to enable the
+	 *     site.)
+	 *     $ ee site enable example.com --verify
+	 *
+	 *     # Force enable a site.
+	 *     $ ee site enable example.com --force
 	 */
 	public function enable( $args, $assoc_args ) {
 
 		\EE\Utils\delem_log( 'site enable start' );
 		$force           = \EE\Utils\get_flag_value( $assoc_args, 'force' );
+		$verify          = \EE\Utils\get_flag_value( $assoc_args, 'verify' );
 		$args            = auto_site_name( $args, 'site', __FUNCTION__ );
 		$this->site_data = get_site_info( $args, false, true, false );
 
@@ -290,30 +300,31 @@ abstract class EE_Site_Command {
 			\EE::error( sprintf( '%s is already enabled!', $this->site_data->site_url ) );
 		}
 
+		if ( $verify ) {
+			$this->verify_services();
+		}
+
 		\EE::log( sprintf( 'Enabling site %s.', $this->site_data->site_url ) );
 
-		if ( 'running' !== EE::docker()::container_status( EE_PROXY_TYPE ) ) {
-			EE\Service\Utils\nginx_proxy_check();
-		}
-
-		if ( 'global-db' === $this->site_data->db_host ) {
-			EE\Service\Utils\init_global_container( 'global-db' );
-		}
-
-		if ( 'global-redis' === $this->site_data->cache_host ) {
-			EE\Service\Utils\init_global_container( 'global-redis' );
-		}
-
-		$success = false;
-
-		$postfix_exists      = EE::docker()::service_exists( 'postfix', $this->site_data->site_fs_path );
-		$containers_to_start = $postfix_exists ? [ 'nginx', 'postfix' ] : [ 'nginx' ];
+		$success             = false;
+		$containers_to_start = [ 'nginx' ];
 
 		if ( \EE::docker()::docker_compose_up( $this->site_data->site_fs_path, $containers_to_start ) ) {
 			$this->site_data->site_enabled = 1;
 			$this->site_data->save();
 			$success = true;
 		}
+
+		if ( $success ) {
+			\EE::success( sprintf( 'Site %s enabled.', $this->site_data->site_url ) );
+		} else {
+			\EE::error( sprintf( 'There was error in enabling %s. Please check logs.', $this->site_data->site_url ) );
+		}
+
+		\EE::log( 'Running post enable configurations.' );
+
+		$postfix_exists      = EE::docker()::service_exists( 'postfix', $this->site_data->site_fs_path );
+		$containers_to_start = $postfix_exists ? [ 'nginx', 'postfix' ] : [ 'nginx' ];
 
 		$site_data_array = (array) $this->site_data;
 		$this->site_data = reset( $site_data_array );
@@ -331,11 +342,8 @@ abstract class EE_Site_Command {
 			EE::runcommand( 'mailhog enable ' . $this->site_data['site_url'] );
 		}
 
-		if ( $success ) {
-			\EE::success( sprintf( 'Site %s enabled.', $this->site_data['site_url'] ) );
-		} else {
-			\EE::error( sprintf( 'There was error in enabling %s. Please check logs.', $this->site_data['site_url'] ) );
-		}
+		\EE::success( 'Post enable configurations complete.' );
+
 		\EE\Utils\delem_log( 'site enable end' );
 	}
 
@@ -472,6 +480,25 @@ abstract class EE_Site_Command {
 
 		foreach ( $services as $service ) {
 			\EE\Site\Utils\run_compose_command( 'exec', $reload_commands[ $service ], 'reload', $service );
+		}
+	}
+
+	/**
+	 * Function to verify and check the global services dependent for given site.
+	 * Enables the dependent service if it is down.
+	 */
+	private function verify_services() {
+
+		if ( 'running' !== EE::docker()::container_status( EE_PROXY_TYPE ) ) {
+			EE\Service\Utils\nginx_proxy_check();
+		}
+
+		if ( 'global-db' === $this->site_data->db_host ) {
+			EE\Service\Utils\init_global_container( 'global-db' );
+		}
+
+		if ( 'global-redis' === $this->site_data->cache_host ) {
+			EE\Service\Utils\init_global_container( 'global-redis' );
 		}
 	}
 
