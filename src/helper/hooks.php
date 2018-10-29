@@ -57,7 +57,7 @@ function cleanup_redis_entries( $site_url ) {
 		return;
 	}
 
-	EE::exec( sprintf( 'docker exec -it %s redis-cli --eval purge_all_cache.lua 0 , "%s:*"', GLOBAL_REDIS_CONTAINER, $site_data->site_url ) );
+	EE::exec( sprintf( 'docker exec -it %s redis-cli --eval purge_all_cache.lua 0 , "%s*"', GLOBAL_REDIS_CONTAINER, $site_data->site_url ) );
 }
 
 EE::add_hook( 'site_cleanup', 'cleanup_redis_entries' );
