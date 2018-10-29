@@ -197,6 +197,11 @@ abstract class EE_Site_Command {
 			}
 		}
 
+		$volumes = \EE::docker()::get_volumes_by_label( $site_url );
+		foreach ( $volumes as $volume ) {
+			\EE::exec( 'docker volume rm ' . $volume );
+		}
+
 		if ( ! empty( $db_data['db_host'] ) ) {
 			\EE\Site\Utils\cleanup_db( $db_data['db_host'], $db_data['db_name'] );
 			\EE\Site\Utils\cleanup_db_user( $db_data['db_host'], $db_data['db_user'] );
@@ -302,7 +307,7 @@ abstract class EE_Site_Command {
 		$success = false;
 
 		$postfix_exists      = EE::docker()::service_exists( 'postfix', $this->site_data->site_fs_path );
-		$containers_to_start = $postfix_exists ? [ 'nginx' ] : [ 'nginx', 'postfix' ];
+		$containers_to_start = $postfix_exists ? [ 'nginx', 'postfix' ] : [ 'nginx' ];
 
 		if ( \EE::docker()::docker_compose_up( $this->site_data->site_fs_path, $containers_to_start ) ) {
 			$this->site_data->site_enabled = 1;

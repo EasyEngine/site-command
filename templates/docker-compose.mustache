@@ -51,6 +51,15 @@ services:
     {{/networks}}
 {{/services}}
 
+{{#created_volumes}}
+volumes:
+  {{#external_vols}}
+  {{ext_vol_name}}:
+    external:
+      name: {{prefix}}_{{ext_vol_name}}
+  {{/external_vols}}
+{{/created_volumes}}
+
 {{#network}}
 networks:
   site-network:
