@@ -327,6 +327,8 @@ abstract class EE_Site_Command {
 		$postfix_exists      = EE::docker()::service_exists( 'postfix', $this->site_data->site_fs_path );
 		$containers_to_start = $postfix_exists ? [ 'nginx', 'postfix' ] : [ 'nginx' ];
 
+		\EE\Site\Utils\start_site_containers( $this->site_data->site_fs_path, $containers_to_start );
+
 		$site_data_array = (array) $this->site_data;
 		$this->site_data = reset( $site_data_array );
 		$this->www_ssl_wrapper( $containers_to_start, true );
