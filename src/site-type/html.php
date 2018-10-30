@@ -155,7 +155,7 @@ class HTML extends EE_Site_Command {
 
 		$site_conf_dir           = $this->site_data['site_fs_path'] . '/config';
 		$site_conf_env           = $this->site_data['site_fs_path'] . '/.env';
-		$site_nginx_default_conf = $site_conf_dir . '/nginx/main.conf';
+		$site_nginx_default_conf = $site_conf_dir . '/nginx/conf.d/main.conf';
 		$site_src_dir            = $this->site_data['site_fs_path'] . '/app/htdocs';
 		$process_user            = posix_getpwuid( posix_geteuid() );
 		$custom_conf_dest        = $site_conf_dir . '/nginx/custom/user.conf';
@@ -163,7 +163,7 @@ class HTML extends EE_Site_Command {
 
 		$volumes = [
 			[ 'name' => 'htdocs', 'path_to_symlink' => $this->site_data['site_fs_path'] . '/app' ],
-			[ 'name' => 'config_nginx', 'path_to_symlink' => dirname( $site_nginx_default_conf ) ],
+			[ 'name' => 'config_nginx', 'path_to_symlink' => dirname( dirname( $site_nginx_default_conf ) ) ],
 			[ 'name' => 'log_nginx', 'path_to_symlink' => $this->site_data['site_fs_path'] . '/logs/nginx' ],
 		];
 
@@ -188,7 +188,6 @@ class HTML extends EE_Site_Command {
 			$this->fs->dumpFile( $site_nginx_default_conf, $default_conf_content );
 			$this->fs->copy( $custom_conf_source, $custom_conf_dest );
 			$this->fs->remove( $this->site_data['site_fs_path'] . '/app/html' );
-			$this->fs->remove( $this->site_data['site_fs_path'] . '/config/nginx/conf.d' );
 			\EE\Site\Utils\restart_site_containers( $this->site_data['site_fs_path'], 'nginx' );
 			$index_data = [
 				'version'       => 'v' . EE_VERSION,
