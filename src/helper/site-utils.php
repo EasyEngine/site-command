@@ -342,16 +342,17 @@ function create_etc_hosts_entry( $site_url ) {
 function site_status_check( $site_url ) {
 
 	EE::log( 'Checking and verifying site-up status. This may take some time.' );
-	$httpcode = \EE\Utils\get_curl_info( $site_url );
-	$i        = 0;
-	$auth     = false;
+	$config_80_port = \EE\Utils\get_config_value( 'proxy_80_port', 80 );
+	$httpcode       = \EE\Utils\get_curl_info( $site_url, $config_80_port );
+	$i              = 0;
+	$auth           = false;
 	while ( 200 !== $httpcode && 302 !== $httpcode && 301 !== $httpcode ) {
 		EE::debug( "$site_url status httpcode: $httpcode" );
 		if ( 401 === $httpcode ) {
 			$user_pass = get_global_auth();
 			$auth      = $user_pass['username'] . ':' . $user_pass['password'];
 		}
-		$httpcode = \EE\Utils\get_curl_info( $site_url, 80, false, $auth );
+		$httpcode = \EE\Utils\get_curl_info( $site_url, $config_80_port, false, $auth );
 		echo '.';
 		sleep( 2 );
 		if ( $i ++ > 60 ) {
