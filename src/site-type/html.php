@@ -5,6 +5,7 @@ declare( ticks=1 );
 namespace EE\Site\Type;
 
 use EE\Model\Site;
+use function EE\Utils\mustache_render;
 use Symfony\Component\Filesystem\Filesystem;
 use function EE\Site\Utils\auto_site_name;
 use function EE\Site\Utils\get_site_info;
@@ -15,11 +16,6 @@ use function EE\Site\Utils\get_site_info;
  * @package ee-cli
  */
 class HTML extends EE_Site_Command {
-
-	/**
-	 * @var array $site_data Associative array containing essential site related information.
-	 */
-	private $site_data;
 
 	/**
 	 * @var object $docker Object to access `\EE::docker()` functions.
@@ -89,6 +85,7 @@ class HTML extends EE_Site_Command {
 	 */
 	public function create( $args, $assoc_args ) {
 
+		$this->check_site_count();
 		\EE\Utils\delem_log( 'site create start' );
 		\EE::warning( 'This is a beta version. Please don\'t use it in production.' );
 		$this->logger->debug( 'args:', $args );
@@ -106,7 +103,7 @@ class HTML extends EE_Site_Command {
 		$this->site_data['site_ssl_wildcard'] = \EE\Utils\get_flag_value( $assoc_args, 'wildcard' );
 		$this->skip_status_check              = \EE\Utils\get_flag_value( $assoc_args, 'skip-status-check' );
 
-		\EE\Site\Utils\init_checks();
+		\EE\Service\Utils\nginx_proxy_check();
 
 		\EE::log( 'Configuring project.' );
 
@@ -157,20 +154,25 @@ class HTML extends EE_Site_Command {
 	private function configure_site_files() {
 
 		$site_conf_dir           = $this->site_data['site_fs_path'] . '/config';
-		$site_docker_yml         = $this->site_data['site_fs_path'] . '/docker-compose.yml';
 		$site_conf_env           = $this->site_data['site_fs_path'] . '/.env';
-		$site_nginx_default_conf = $site_conf_dir . '/nginx/default.conf';
-		$site_src_dir            = $this->site_data['site_fs_path'] . '/app/src';
+		$site_nginx_default_conf = $site_conf_dir . '/nginx/conf.d/main.conf';
+		$site_src_dir            = $this->site_data['site_fs_path'] . '/app/htdocs';
 		$process_user            = posix_getpwuid( posix_geteuid() );
+		$custom_conf_dest        = $site_conf_dir . '/nginx/custom/user.conf';
+		$custom_conf_source      = SITE_TEMPLATE_ROOT . '/config/nginx/user.conf.mustache';
+
+		$volumes = [
+			[ 'name' => 'htdocs', 'path_to_symlink' => $this->site_data['site_fs_path'] . '/app' ],
+			[ 'name' => 'config_nginx', 'path_to_symlink' => dirname( dirname( $site_nginx_default_conf ) ) ],
+			[ 'name' => 'log_nginx', 'path_to_symlink' => $this->site_data['site_fs_path'] . '/logs/nginx' ],
+		];
 
 		\EE::log( sprintf( 'Creating site %s.', $this->site_data['site_url'] ) );
 		\EE::log( 'Copying configuration files.' );
 
-		$filter                 = [];
-		$filter[]               = $this->site_data['site_type'];
-		$site_docker            = new Site_HTML_Docker();
-		$docker_compose_content = $site_docker->generate_docker_compose_yml( $filter );
-		$default_conf_content   = $default_conf_content = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx/default.conf.mustache', [ 'server_name' => $this->site_data['site_url'] ] );
+		$this->docker->create_volumes( $this->site_data['site_url'], $volumes );
+
+		$default_conf_content = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx/main.conf.mustache', [ 'server_name' => $this->site_data['site_url'] ] );
 
 		$env_data    = [
 			'virtual_host' => $this->site_data['site_url'],
@@ -180,24 +182,47 @@ class HTML extends EE_Site_Command {
 		$env_content = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/.env.mustache', $env_data );
 
 		try {
-			$this->fs->dumpFile( $site_docker_yml, $docker_compose_content );
+			$this->dump_docker_compose_yml( [ 'nohttps' => true ] );
 			$this->fs->dumpFile( $site_conf_env, $env_content );
-			$this->fs->mkdir( $site_conf_dir );
-			$this->fs->mkdir( $site_conf_dir . '/nginx' );
+			\EE\Site\Utils\start_site_containers( $this->site_data['site_fs_path'] );
 			$this->fs->dumpFile( $site_nginx_default_conf, $default_conf_content );
-
+			$this->fs->copy( $custom_conf_source, $custom_conf_dest );
+			$this->fs->remove( $this->site_data['site_fs_path'] . '/app/html' );
+			\EE\Site\Utils\restart_site_containers( $this->site_data['site_fs_path'], 'nginx' );
 			$index_data = [
 				'version'       => 'v' . EE_VERSION,
-				'site_src_root' => $this->site_data['site_fs_path'] . '/app/src',
+				'site_src_root' => $this->site_data['site_fs_path'] . '/app/htdocs',
 			];
 			$index_html = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/index.html.mustache', $index_data );
-			$this->fs->mkdir( $site_src_dir );
 			$this->fs->dumpFile( $site_src_dir . '/index.html', $index_html );
 
 			\EE::success( 'Configuration files copied.' );
 		} catch ( \Exception $e ) {
 			$this->catch_clean( $e );
 		}
+	}
+
+	/**
+	 * Generate and place docker-compose.yml file.
+	 *
+	 * @param array $additional_filters Filters to alter docker-compose file.
+	 */
+	protected function dump_docker_compose_yml( $additional_filters = [] ) {
+
+		$site_docker_yml = $this->site_data['site_fs_path'] . '/docker-compose.yml';
+
+		$filter                = [];
+		$filter[]              = $this->site_data['site_type'];
+		$filter['site_prefix'] = $this->docker->get_docker_style_prefix( $this->site_data['site_url'] );
+		$filter['is_ssl']      = $this->site_data['site_ssl'];
+
+		foreach ( $additional_filters as $key => $addon_filter ) {
+			$filter[ $key ] = $addon_filter;
+		}
+
+		$site_docker            = new Site_HTML_Docker();
+		$docker_compose_content = $site_docker->generate_docker_compose_yml( $filter );
+		$this->fs->dumpFile( $site_docker_yml, $docker_compose_content );
 	}
 
 	/**
@@ -212,32 +237,15 @@ class HTML extends EE_Site_Command {
 			$this->level = 3;
 			$this->configure_site_files();
 
-			\EE\Site\Utils\start_site_containers( $this->site_data['site_fs_path'] );
-
-			\EE\Site\Utils\create_etc_hosts_entry( $this->site_data['site_url'] );
+			if ( ! $this->site_data['site_ssl'] ) {
+				\EE\Site\Utils\create_etc_hosts_entry( $this->site_data['site_url'] );
+			}
 			if ( ! $this->skip_status_check ) {
 				$this->level = 4;
 				\EE\Site\Utils\site_status_check( $this->site_data['site_url'] );
 			}
 
-			/*
-			 * This adds http www redirection which is needed for issuing cert for a site.
-			 * i.e. when you create example.com site, certs are issued for example.com and www.example.com
-			 *
-			 * We're issuing certs for both domains as it is needed in order to perform redirection of
-			 * https://www.example.com -> https://example.com
-			 *
-			 * We add redirection config two times in case of ssl as we need http redirection
-			 * when certs are being requested and http+https redirection after we have certs.
-			 */
-			\EE\Site\Utils\add_site_redirects( $this->site_data['site_url'], false, 'inherit' === $this->site_data['site_ssl'] );
-			\EE\Site\Utils\reload_global_nginx_proxy();
-
-			if ( $this->site_data['site_ssl'] ) {
-				$this->init_ssl( $this->site_data['site_url'], $this->site_data['site_fs_path'], $this->site_data['site_ssl'], $this->site_data['site_ssl_wildcard'] );
-				\EE\Site\Utils\add_site_redirects( $this->site_data['site_url'], true, 'inherit' === $this->site_data['site_ssl'] );
-				\EE\Site\Utils\reload_global_nginx_proxy();
-			}
+			$this->www_ssl_wrapper();
 		} catch ( \Exception $e ) {
 			$this->catch_clean( $e );
 		}
@@ -267,7 +275,7 @@ class HTML extends EE_Site_Command {
 			if ( $site ) {
 				\EE::log( 'Site entry created.' );
 			} else {
-				throw new Exception( 'Error creating site entry in database.' );
+				throw new \Exception( 'Error creating site entry in database.' );
 			}
 		} catch ( \Exception $e ) {
 			$this->catch_clean( $e );

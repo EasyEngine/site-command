@@ -2,6 +2,7 @@
 
 namespace EE\Site\Type;
 
+use EE;
 use EE\Model\Site;
 use Symfony\Component\Filesystem\Filesystem;
 use function EE\Site\Utils\auto_site_name;
@@ -37,7 +38,7 @@ abstract class EE_Site_Command {
 	/**
 	 * @var array $site_data Associative array containing essential site related information.
 	 */
-	private $site_data;
+	protected $site_data;
 
 	public function __construct() {
 
@@ -101,9 +102,9 @@ abstract class EE_Site_Command {
 		$sites = Site::all();
 
 		if ( $enabled && ! $disabled ) {
-			$sites = Site::where( 'is_enabled', true );
+			$sites = Site::where( 'site_enabled', true );
 		} elseif ( $disabled && ! $enabled ) {
-			$sites = Site::where( 'is_enabled', false );
+			$sites = Site::where( 'site_enabled', false );
 		}
 
 		if ( empty( $sites ) ) {
@@ -154,15 +155,22 @@ abstract class EE_Site_Command {
 
 		\EE\Utils\delem_log( 'site delete start' );
 		$this->site_data = get_site_info( $args, false );
+
+		$db_data = ( empty( $this->site_data['db_host'] ) || 'db' === $this->site_data['db_host'] ) ? [] : [
+			'db_host' => $this->site_data['db_host'],
+			'db_user' => $this->site_data['db_user'],
+			'db_name' => $this->site_data['db_name'],
+		];
+
 		\EE::confirm( sprintf( 'Are you sure you want to delete %s?', $this->site_data['site_url'] ), $assoc_args );
-		$this->delete_site( 5, $this->site_data['site_url'], $this->site_data['site_fs_path'] );
+		$this->delete_site( 5, $this->site_data['site_url'], $this->site_data['site_fs_path'], $db_data );
 		\EE\Utils\delem_log( 'site delete end' );
 	}
 
 	/**
 	 * Function to delete the given site.
 	 *
-	 * @param int    $level        Level of deletion.
+	 * @param int $level           Level of deletion.
 	 *                             Level - 0: No need of clean-up.
 	 *                             Level - 1: Clean-up only the site-root.
 	 *                             Level - 2: Try to remove network. The network may or may not have been created.
@@ -170,10 +178,11 @@ abstract class EE_Site_Command {
 	 *                             may not have been created. Level - 4: Remove containers. Level - 5: Remove db entry.
 	 * @param string $site_url     Name of the site to be deleted.
 	 * @param string $site_fs_path Webroot of the site.
+	 * @param array $db_data       Database host, user and password to cleanup db.
 	 *
 	 * @throws \EE\ExitException
 	 */
-	protected function delete_site( $level, $site_url, $site_fs_path ) {
+	protected function delete_site( $level, $site_url, $site_fs_path, $db_data = [] ) {
 
 		$this->fs = new Filesystem();
 
@@ -188,6 +197,16 @@ abstract class EE_Site_Command {
 			}
 		}
 
+		$volumes = \EE::docker()::get_volumes_by_label( $site_url );
+		foreach ( $volumes as $volume ) {
+			\EE::exec( 'docker volume rm ' . $volume );
+		}
+
+		if ( ! empty( $db_data['db_host'] ) ) {
+			\EE\Site\Utils\cleanup_db( $db_data['db_host'], $db_data['db_name'] );
+			\EE\Site\Utils\cleanup_db_user( $db_data['db_host'], $db_data['db_user'] );
+		}
+
 		if ( $this->fs->exists( $site_fs_path ) ) {
 			try {
 				$this->fs->remove( $site_fs_path );
@@ -198,7 +217,7 @@ abstract class EE_Site_Command {
 			\EE::log( "[$site_url] site root removed." );
 		}
 
-		$config_file_path = EE_CONF_ROOT . '/nginx/conf.d/' . $site_url . '-redirect.conf';
+		$config_file_path = EE_ROOT_DIR . '/services/nginx-proxy/conf.d/' . $site_url . '-redirect.conf';
 
 		if ( $this->fs->exists( $config_file_path ) ) {
 			try {
@@ -209,16 +228,24 @@ abstract class EE_Site_Command {
 			}
 		}
 
+		/**
+		 * Execute before site db data cleanup and after site services cleanup.
+		 * Note: This can be use to cleanup site data added by any package command.
+		 *
+		 * @param string $site_url Url of site which data is cleanup.
+		 */
+		\EE::do_hook( 'site_cleanup', $site_url );
 
 		if ( $level > 4 ) {
 			if ( $this->site_data['site_ssl'] ) {
 				\EE::log( 'Removing ssl certs.' );
-				$crt_file   = EE_CONF_ROOT . "/nginx/certs/$site_url.crt";
-				$key_file   = EE_CONF_ROOT . "/nginx/certs/$site_url.key";
-				$conf_certs = EE_CONF_ROOT . "/acme-conf/certs/$site_url";
-				$conf_var   = EE_CONF_ROOT . "/acme-conf/var/$site_url";
+				$crt_file   = EE_ROOT_DIR . "/services/nginx-proxy/certs/$site_url.crt";
+				$key_file   = EE_ROOT_DIR . "/services/nginx-proxy/certs/$site_url.key";
+				$pem_file   = EE_ROOT_DIR . "/services/nginx-proxy/certs/$site_url.chain.pem";
+				$conf_certs = EE_ROOT_DIR . "/services/nginx-proxy/acme-conf/certs/$site_url";
+				$conf_var   = EE_ROOT_DIR . "/services/nginx-proxy/acme-conf/var/$site_url";
 
-				$cert_files = [ $conf_certs, $conf_var, $crt_file, $key_file ];
+				$cert_files = [ $conf_certs, $conf_var, $crt_file, $key_file, $pem_file ];
 				try {
 					$this->fs->remove( $cert_files );
 				} catch ( \Exception $e ) {
@@ -244,18 +271,28 @@ abstract class EE_Site_Command {
 	 * : Name of website to be enabled.
 	 *
 	 * [--force]
-	 * : Force execution of site up.
+	 * : Force execution of site enable.
+	 *
+	 * [--verify]
+	 * : Verify if required global services are working.
 	 *
 	 * ## EXAMPLES
 	 *
 	 *     # Enable site
-	 *     $ ee site up example.com
+	 *     $ ee site enable example.com
 	 *
+	 *     # Enable site with verification of dependent global services. (Note: This takes longer time to enable the
+	 *     site.)
+	 *     $ ee site enable example.com --verify
+	 *
+	 *     # Force enable a site.
+	 *     $ ee site enable example.com --force
 	 */
-	public function up( $args, $assoc_args ) {
+	public function enable( $args, $assoc_args ) {
 
 		\EE\Utils\delem_log( 'site enable start' );
 		$force           = \EE\Utils\get_flag_value( $assoc_args, 'force' );
+		$verify          = \EE\Utils\get_flag_value( $assoc_args, 'verify' );
 		$args            = auto_site_name( $args, 'site', __FUNCTION__ );
 		$this->site_data = get_site_info( $args, false, true, false );
 
@@ -263,15 +300,51 @@ abstract class EE_Site_Command {
 			\EE::error( sprintf( '%s is already enabled!', $this->site_data->site_url ) );
 		}
 
+		if ( $verify ) {
+			$this->verify_services();
+		}
+
 		\EE::log( sprintf( 'Enabling site %s.', $this->site_data->site_url ) );
 
-		if ( \EE::docker()::docker_compose_up( $this->site_data->site_fs_path ) ) {
+		$success             = false;
+		$containers_to_start = [ 'nginx' ];
+
+		if ( \EE::docker()::docker_compose_up( $this->site_data->site_fs_path, $containers_to_start ) ) {
 			$this->site_data->site_enabled = 1;
 			$this->site_data->save();
+			$success = true;
+		}
+
+		if ( $success ) {
 			\EE::success( sprintf( 'Site %s enabled.', $this->site_data->site_url ) );
+			\EE\Site\Utils\set_nginx_version_conf( $this->site_data->site_fs_path );
 		} else {
 			\EE::error( sprintf( 'There was error in enabling %s. Please check logs.', $this->site_data->site_url ) );
 		}
+
+		\EE::log( 'Running post enable configurations.' );
+
+		$postfix_exists      = EE::docker()::service_exists( 'postfix', $this->site_data->site_fs_path );
+		$containers_to_start = $postfix_exists ? [ 'nginx', 'postfix' ] : [ 'nginx' ];
+
+		$site_data_array = (array) $this->site_data;
+		$this->site_data = reset( $site_data_array );
+		$this->www_ssl_wrapper( $containers_to_start, true );
+
+		if ( $postfix_exists ) {
+			\EE\Site\Utils\configure_postfix( $this->site_data['site_url'], $this->site_data['site_fs_path'] );
+		}
+
+		if ( true === (bool) $this->site_data['admin_tools'] ) {
+			EE::runcommand( 'admin-tools enable ' . $this->site_data['site_url'] . ' --force' );
+		}
+
+		if ( true === (bool) $this->site_data['mailhog_enabled'] ) {
+			EE::runcommand( 'mailhog enable ' . $this->site_data['site_url'] );
+		}
+
+		\EE::success( 'Post enable configurations complete.' );
+
 		\EE\Utils\delem_log( 'site enable end' );
 	}
 
@@ -286,16 +359,23 @@ abstract class EE_Site_Command {
 	 * ## EXAMPLES
 	 *
 	 *     # Disable site
-	 *     $ ee site down example.com
+	 *     $ ee site disable example.com
 	 *
 	 */
-	public function down( $args, $assoc_args ) {
+	public function disable( $args, $assoc_args ) {
 
 		\EE\Utils\delem_log( 'site disable start' );
 		$args            = auto_site_name( $args, 'site', __FUNCTION__ );
 		$this->site_data = get_site_info( $args, false, true, false );
 
 		\EE::log( sprintf( 'Disabling site %s.', $this->site_data->site_url ) );
+
+		$fs                        = new Filesystem();
+		$redirect_config_file_path = EE_ROOT_DIR . '/services/nginx-proxy/conf.d/' . $args[0] . '-redirect.conf';
+		if ( $fs->exists( $redirect_config_file_path ) ) {
+			$fs->remove( $redirect_config_file_path );
+			\EE\Site\Utils\reload_global_nginx_proxy();
+		}
 
 		if ( \EE::docker()::docker_compose_down( $this->site_data->site_fs_path ) ) {
 			$this->site_data->site_enabled = 0;
@@ -405,6 +485,74 @@ abstract class EE_Site_Command {
 	}
 
 	/**
+	 * Function to verify and check the global services dependent for given site.
+	 * Enables the dependent service if it is down.
+	 */
+	private function verify_services() {
+
+		if ( 'running' !== EE::docker()::container_status( EE_PROXY_TYPE ) ) {
+			EE\Service\Utils\nginx_proxy_check();
+		}
+
+		if ( 'global-db' === $this->site_data->db_host ) {
+			EE\Service\Utils\init_global_container( 'global-db' );
+		}
+
+		if ( 'global-redis' === $this->site_data->cache_host ) {
+			EE\Service\Utils\init_global_container( 'global-redis' );
+		}
+	}
+
+	/**
+	 * Function to add site redirects and initialise ssl process.
+	 *
+	 * @param array $containers_to_start Containers to start for that site. Default, empty will start all.
+	 *
+	 * @throws EE\ExitException
+	 * @throws \Exception
+	 */
+	protected function www_ssl_wrapper( $containers_to_start = [], $site_enable = false ) {
+		/**
+		 * This adds http www redirection which is needed for issuing cert for a site.
+		 * i.e. when you create example.com site, certs are issued for example.com and www.example.com
+		 *
+		 * We're issuing certs for both domains as it is needed in order to perform redirection of
+		 * https://www.example.com -> https://example.com
+		 *
+		 * We add redirection config two times in case of ssl as we need http redirection
+		 * when certs are being requested and http+https redirection after we have certs.
+		 */
+		\EE\Site\Utils\add_site_redirects( $this->site_data['site_url'], false, 'inherit' === $this->site_data['site_ssl'] );
+		\EE\Site\Utils\reload_global_nginx_proxy();
+		// Need second reload sometimes for changes to reflect.
+		\EE\Site\Utils\reload_global_nginx_proxy();
+
+		$is_www_or_non_www_pointed = $this->check_www_or_non_www_domain( $this->site_data['site_url'], $this->site_data['site_fs_path'] );
+		if ( ! $is_www_or_non_www_pointed ) {
+			$fs          = new Filesystem();
+			$confd_path  = EE_ROOT_DIR . '/services/nginx-proxy/conf.d/';
+			$config_file = $confd_path . $this->site_data['site_url'] . '-redirect.conf';
+			$fs->remove( $config_file );
+			\EE\Site\Utils\reload_global_nginx_proxy();
+		}
+
+		if ( $this->site_data['site_ssl'] ) {
+			if ( ! $site_enable ) {
+				$this->init_ssl( $this->site_data['site_url'], $this->site_data['site_fs_path'], $this->site_data['site_ssl'], $this->site_data['site_ssl_wildcard'] );
+
+				$this->dump_docker_compose_yml( [ 'nohttps' => false ] );
+				\EE\Site\Utils\start_site_containers( $this->site_data['site_fs_path'], $containers_to_start );
+			}
+
+			if ( $is_www_or_non_www_pointed ) {
+				\EE\Site\Utils\add_site_redirects( $this->site_data['site_url'], true, 'inherit' === $this->site_data['site_ssl'] );
+			}
+
+			\EE\Site\Utils\reload_global_nginx_proxy();
+		}
+	}
+
+	/**
 	 * Runs the acme le registration and authorization.
 	 *
 	 * @param string $site_url Name of the site for ssl.
@@ -439,24 +587,25 @@ abstract class EE_Site_Command {
 	 * @param string $site_fs_path Webroot of the site.
 	 * @param string $ssl_type     Type of ssl cert to issue.
 	 * @param bool $wildcard       SSL with wildcard or not.
+	 * @param bool $add_le_on_www  Allow LetsEncrypt on www subdomain.
 	 *
 	 * @throws \EE\ExitException If --ssl flag has unrecognized value.
 	 * @throws \Exception
 	 */
-	protected function init_ssl( $site_url, $site_fs_path, $ssl_type, $wildcard = false ) {
+	protected function init_ssl( $site_url, $site_fs_path, $ssl_type, $wildcard = false, $add_le_on_www = false ) {
 
 		\EE::debug( 'Starting SSL procedure' );
 		if ( 'le' === $ssl_type ) {
 			\EE::debug( 'Initializing LE' );
-			$this->init_le( $site_url, $site_fs_path, $wildcard );
+			$this->init_le( $site_url, $site_fs_path, $wildcard, $add_le_on_www );
 		} elseif ( 'inherit' === $ssl_type ) {
 			if ( $wildcard ) {
-				\EE::error( 'Cannot use --wildcard with --ssl=inherit', false );
+				throw new \Exception( 'Cannot use --wildcard with --ssl=inherit', false );
 			}
 			\EE::debug( 'Inheriting certs' );
 			$this->inherit_certs( $site_url );
 		} else {
-			\EE::error( "Unrecognized value in --ssl flag: $ssl_type" );
+			throw new \Exception( "Unrecognized value in --ssl flag: $ssl_type" );
 		}
 	}
 
@@ -466,8 +615,9 @@ abstract class EE_Site_Command {
 	 * @param string $site_url     Name of the site for ssl.
 	 * @param string $site_fs_path Webroot of the site.
 	 * @param bool $wildcard       SSL with wildcard or not.
+	 * @param bool $add_le_on_www  Allow LetsEncrypt on www subdomain.
 	 */
-	protected function init_le( $site_url, $site_fs_path, $wildcard = false ) {
+	protected function init_le( $site_url, $site_fs_path, $wildcard = false, $add_le_on_www = false ) {
 
 		\EE::debug( 'Wildcard in init_le: ' . ( bool ) $wildcard );
 
@@ -483,36 +633,82 @@ abstract class EE_Site_Command {
 			return;
 		}
 
-		$domains = $this->get_cert_domains( $site_url, $wildcard );
+		$domains = $this->get_cert_domains( $site_url, $wildcard, $add_le_on_www );
 
 		if ( ! $client->authorize( $domains, $wildcard ) ) {
 			return;
 		}
 		if ( $wildcard ) {
-			echo \cli\Colors::colorize( '%YIMPORTANT:%n Run `ee site le ' . $this->site_data['site_url'] . '` once the dns changes have propogated to complete the certification generation and installation.', null );
+			echo \cli\Colors::colorize( '%YIMPORTANT:%n Run `ee site ssl ' . $this->site_data['site_url'] . '` once the DNS changes have propagated to complete the certification generation and installation.', null );
 		} else {
-			$this->le( [], [] );
+			$this->ssl( [], [] );
 		}
 	}
 
 	/**
 	 * Returns all domains required by cert
 	 *
-	 * @param string $site_url  Name of site
-	 * @param $wildcard         Wildcard cert required?
+	 * @param string $site_url    Name of site
+	 * @param $wildcard           Wildcard cert required?
+	 * @param bool $add_le_on_www Allow LetsEncrypt on www subdomain.
 	 *
 	 * @return array
 	 */
-	private function get_cert_domains( string $site_url, $wildcard ): array {
+	private function get_cert_domains( string $site_url, $wildcard, $add_le_on_www = false ): array {
 
 		$domains = [ $site_url ];
 		if ( $wildcard ) {
 			$domains[] = "*.{$site_url}";
 		} else {
-			$domains[] = $this->get_www_domain( $site_url );
+			if ( true === $add_le_on_www ) {
+				$domains[] = $this->get_www_domain( $site_url );
+			}
 		}
 
 		return $domains;
+	}
+
+	/**
+	 * Check www or non-www is working with site domain.
+	 *
+	 * @param string Site url.
+	 * @param string Absolute path of site.
+	 *
+	 * @return bool
+	 */
+	protected function check_www_or_non_www_domain( $site_url, $site_path ): bool {
+
+		$random_string = EE\Utils\random_password();
+		$successful    = false;
+		$file_path     = $site_path . '/app/htdocs/check.html';
+		file_put_contents( $file_path, $random_string );
+
+		if ( 0 === strpos( $site_url, 'www.' ) ) {
+			$site_url = ltrim( $site_url, 'www.' );
+		} else {
+			$site_url = 'www.' . $site_url;
+		}
+
+		$site_url .= '/check.html';
+
+		$curl = curl_init();
+		curl_setopt( $curl, CURLOPT_URL, $site_url );
+		curl_setopt( $curl, CURLOPT_RETURNTRANSFER, true );
+		curl_setopt( $curl, CURLOPT_FOLLOWLOCATION, true );
+		curl_setopt( $curl, CURLOPT_HEADER, false );
+		$data = curl_exec( $curl );
+		curl_close( $curl );
+
+		if ( ! empty( $data ) && $random_string === $data ) {
+			$successful = true;
+			EE::debug( "pointed for $site_url" );
+		}
+
+		if ( file_exists( $file_path ) ) {
+			unlink( $file_path );
+		}
+
+		return $successful;
 	}
 
 	/**
@@ -536,7 +732,7 @@ abstract class EE_Site_Command {
 
 
 	/**
-	 * Runs the acme le.
+	 * Verifies ssl challenge and also renews certificates(if expired).
 	 *
 	 * ## OPTIONS
 	 *
@@ -546,9 +742,14 @@ abstract class EE_Site_Command {
 	 * [--force]
 	 * : Force renewal.
 	 */
-	public function le( $args = [], $assoc_args = [] ) {
+	public function ssl( $args = [], $assoc_args = [] ) {
 
-		if ( ! isset( $this->site_data['site_url'] ) ) {
+		EE::log( 'Starting SSL verification.' );
+
+		// This checks if this method was called internally by ee or by user
+		$called_by_ee = isset( $this->site_data['site_url'] );
+
+		if ( ! $called_by_ee ) {
 			$this->site_data = get_site_info( $args );
 		}
 
@@ -560,9 +761,13 @@ abstract class EE_Site_Command {
 		$domains = $this->get_cert_domains( $this->site_data['site_url'], $this->site_data['site_ssl_wildcard'] );
 		$client  = new Site_Letsencrypt();
 
-		if ( ! $client->check( $domains, $this->site_data['site_ssl_wildcard'] ) ) {
-			$this->site_data['site_ssl'] = null;
-
+		try {
+			$client->check( $domains, $this->site_data['site_ssl_wildcard'] );
+		} catch ( \Exception $e ) {
+			if ( $called_by_ee ) {
+				throw $e;
+			}
+			EE::error( 'Failed to verify SSL: ' . $e->getMessage() );
 			return;
 		}
 
@@ -572,7 +777,10 @@ abstract class EE_Site_Command {
 		if ( ! $this->site_data['site_ssl_wildcard'] ) {
 			$client->cleanup();
 		}
+
 		reload_global_nginx_proxy();
+
+		EE::log( 'SSL verification completed.' );
 	}
 
 	/**
@@ -592,8 +800,25 @@ abstract class EE_Site_Command {
 		}
 	}
 
+	/**
+	 * Check site count for maximum 27 sites.
+	 *
+	 * @throws EE\ExitException
+	 */
+	protected function check_site_count() {
+		$sites = Site::all();
+
+		if ( 27 > count( $sites ) ) {
+			return;
+		}
+
+		\EE::error( 'You can not create more than 27 sites' );
+	}
+
 	abstract public function create( $args, $assoc_args );
 
 	abstract protected function rollback();
+
+	abstract protected function dump_docker_compose_yml( $additional_filters = [] );
 
 }
