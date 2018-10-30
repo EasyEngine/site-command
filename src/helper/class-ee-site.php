@@ -317,6 +317,7 @@ abstract class EE_Site_Command {
 
 		if ( $success ) {
 			\EE::success( sprintf( 'Site %s enabled.', $this->site_data->site_url ) );
+			\EE\Site\Utils\set_nginx_version_conf( $this->site_data->site_fs_path );
 		} else {
 			\EE::error( sprintf( 'There was error in enabling %s. Please check logs.', $this->site_data->site_url ) );
 		}
