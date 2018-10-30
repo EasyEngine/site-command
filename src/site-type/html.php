@@ -163,7 +163,7 @@ class HTML extends EE_Site_Command {
 
 		$volumes = [
 			[ 'name' => 'htdocs', 'path_to_symlink' => $this->site_data['site_fs_path'] . '/app' ],
-			[ 'name' => 'config_nginx', 'path_to_symlink' => dirname( $custom_conf_dest ) ],
+			[ 'name' => 'config_nginx', 'path_to_symlink' => dirname( dirname( $site_nginx_default_conf ) ) ],
 			[ 'name' => 'log_nginx', 'path_to_symlink' => $this->site_data['site_fs_path'] . '/logs/nginx' ],
 		];
 
