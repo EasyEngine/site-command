@@ -2,9 +2,9 @@
 
 namespace EE\Site\Utils;
 
-use \EE;
+use EE;
 use EE\Model\Site;
-use \Symfony\Component\Filesystem\Filesystem;
+use Symfony\Component\Filesystem\Filesystem;
 
 /**
  * Get the site-name from the path from where ee is running if it is a valid site path.
@@ -76,7 +76,7 @@ function auto_site_name( $args, $command, $function, $arg_pos = 0 ) {
  * Populate basic site info from db.
  *
  * @param bool $site_enabled_check Check if site is enabled. Throw error message if not enabled.
- * @param bool $exit_if_not_found  Check if site exists. Throw error message if not.
+ * @param bool $exit_if_not_found  Check if site exists. Throw error message if not, else return false.
  * @param bool $return_array       Return array of data or object.
  *
  * @return mixed $site_data Site data from db.
@@ -88,63 +88,23 @@ function get_site_info( $args, $site_enabled_check = true, $exit_if_not_found = 
 	$array_data = ( array ) $data;
 	$site_data  = $return_array ? reset( $array_data ) : $data;
 
+	if ( ! $data ) {
+		if ( $exit_if_not_found ) {
+			\EE::error( sprintf( 'Site %s does not exist.', $site_url ) );
+		}
 
-	if ( ! $data->site_enabled && $site_enabled_check ) {
-		\EE::error( sprintf( 'Site %1$s is not enabled. Use `ee site up %1$s` to enable it.', $data->site_url ) );
+		return false;
 	}
 
-	if ( ! $data && $exit_if_not_found ) {
-		\EE::error( sprintf( 'Site %s does not exist.', $data->site_url ) );
+	if ( ! $data->site_enabled && $site_enabled_check ) {
+		\EE::error( sprintf( 'Site %1$s is not enabled. Use `ee site enable %1$s` to enable it.', $data->site_url ) );
 	}
 
 	return $site_data;
 }
 
-
 /**
- * Function to check all the required configurations needed to create the site.
- *
- * Boots up the container if it is stopped or not running.
- */
-function init_checks() {
-
-	$proxy_type = EE_PROXY_TYPE;
-	if ( 'running' !== EE::docker()::container_status( $proxy_type ) ) {
-		/**
-		 * Checking ports.
-		 */
-		$port_80_status  = get_curl_info( 'localhost', 80, true );
-		$port_443_status = get_curl_info( 'localhost', 443, true );
-
-		// if any/both the port/s is/are occupied.
-		if ( ! ( $port_80_status && $port_443_status ) ) {
-			EE::error( 'Cannot create/start proxy container. Please make sure port 80 and 443 are free.' );
-		} else {
-
-			$fs = new Filesystem();
-
-			if ( ! $fs->exists( EE_CONF_ROOT . '/docker-compose.yml' ) ) {
-				generate_global_docker_compose_yml( $fs );
-			}
-
-			$EE_CONF_ROOT = EE_CONF_ROOT;
-			if ( ! EE::docker()::docker_network_exists( 'ee-global-network' ) ) {
-				if ( ! EE::docker()::create_network( 'ee-global-network' ) ) {
-					EE::error( 'Unable to create network ee-global-network' );
-				}
-			}
-			if ( EE::docker()::docker_compose_up( EE_CONF_ROOT, [ 'nginx-proxy' ] ) ) {
-				$fs->dumpFile( "$EE_CONF_ROOT/nginx/conf.d/custom.conf", file_get_contents( EE_ROOT . '/templates/custom.conf.mustache' ) );
-				EE::success( "$proxy_type container is up." );
-			} else {
-				EE::error( "There was some error in starting $proxy_type container. Please check logs." );
-			}
-		}
-	}
-}
-
-/**
- * Generates global docker-compose.yml at EE_CONF_ROOT
+ * Generates global docker-compose.yml at EE_ROOT_DIR/services
  *
  * @param Filesystem $fs Filesystem object to write file
  */
@@ -153,35 +113,145 @@ function generate_global_docker_compose_yml( Filesystem $fs ) {
 
 	$data = [
 		'services' => [
-			'name'           => 'nginx-proxy',
-			'container_name' => EE_PROXY_TYPE,
-			'image'          => 'easyengine/nginx-proxy:' . $img_versions['easyengine/nginx-proxy'],
-			'restart'        => 'always',
-			'ports'          => [
-				'80:80',
-				'443:443',
+			[
+				'name'           => 'nginx-proxy',
+				'container_name' => EE_PROXY_TYPE,
+				'image'          => 'easyengine/nginx-proxy:' . $img_versions['easyengine/nginx-proxy'],
+				'restart'        => 'always',
+				'ports'          => [
+					'80:80',
+					'443:443',
+				],
+				'environment'    => [
+					'LOCAL_USER_ID=' . posix_geteuid(),
+					'LOCAL_GROUP_ID=' . posix_getegid(),
+				],
+				'volumes'        => [
+					EE_ROOT_DIR . '/services/nginx-proxy/certs:/etc/nginx/certs',
+					EE_ROOT_DIR . '/services/nginx-proxy/dhparam:/etc/nginx/dhparam',
+					EE_ROOT_DIR . '/services/nginx-proxy/conf.d:/etc/nginx/conf.d',
+					EE_ROOT_DIR . '/services/nginx-proxy/htpasswd:/etc/nginx/htpasswd',
+					EE_ROOT_DIR . '/services/nginx-proxy/vhost.d:/etc/nginx/vhost.d',
+					EE_ROOT_DIR . '/services/nginx-proxy/html:/usr/share/nginx/html',
+					'/var/run/docker.sock:/tmp/docker.sock:ro',
+				],
+				'networks'       => [
+					'global-frontend-network',
+				],
 			],
-			'environment'    => [
-				'LOCAL_USER_ID=' . posix_geteuid(),
-				'LOCAL_GROUP_ID=' . posix_getegid(),
-			],
-			'volumes'        => [
-				EE_CONF_ROOT . '/nginx/certs:/etc/nginx/certs',
-				EE_CONF_ROOT . '/nginx/dhparam:/etc/nginx/dhparam',
-				EE_CONF_ROOT . '/nginx/conf.d:/etc/nginx/conf.d',
-				EE_CONF_ROOT . '/nginx/htpasswd:/etc/nginx/htpasswd',
-				EE_CONF_ROOT . '/nginx/vhost.d:/etc/nginx/vhost.d',
-				EE_CONF_ROOT . '/nginx/html:/usr/share/nginx/html',
-				'/var/run/docker.sock:/tmp/docker.sock:ro',
-			],
-			'networks'       => [
-				'global-network',
+			[
+				'name'           => GLOBAL_DB,
+				'container_name' => GLOBAL_DB_CONTAINER,
+				'image'          => 'easyengine/mariadb:' . $img_versions['easyengine/mariadb'],
+				'restart'        => 'always',
+				'environment'    => [
+					'MYSQL_ROOT_PASSWORD=' . \EE\Utils\random_password(),
+				],
+				'volumes'        => [ './app/db:/var/lib/mysql' ],
+				'networks'       => [
+					'global-backend-network',
+				],
 			],
 		],
 	];
 
 	$contents = EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/global_docker_compose.yml.mustache', $data );
-	$fs->dumpFile( EE_CONF_ROOT . '/docker-compose.yml', $contents );
+	$fs->dumpFile( EE_ROOT_DIR . '/services/docker-compose.yml', $contents );
+}
+
+/**
+ * Create user in remote or global db.
+ *
+ * @param string $db_host Database Hostname.
+ * @param string $db_name Database name to be created.
+ * @param string $db_user Database user to be created.
+ * @param string $db_pass Database password to be created.
+ *
+ * @return array|bool Finally created database name, user and password.
+ */
+function create_user_in_db( $db_host, $db_name = '', $db_user = '', $db_pass = '' ) {
+
+	$db_name = empty( $db_name ) ? \EE\Utils\random_password( 5 ) : $db_name;
+	$db_user = empty( $db_user ) ? \EE\Utils\random_password( 5 ) : $db_user;
+	$db_pass = empty( $db_pass ) ? \EE\Utils\random_password() : $db_pass;
+
+	$create_string = sprintf( "CREATE USER '%1\$s'@'%%' IDENTIFIED BY '%2\$s'; CREATE DATABASE %3\$s; GRANT ALL PRIVILEGES ON %3\$s.* TO '%1\$s'@'%%'; FLUSH PRIVILEGES;", $db_user, $db_pass, $db_name );
+
+	if ( GLOBAL_DB === $db_host ) {
+
+		$health_script  = 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e"exit"';
+		$db_script_path = \EE\Utils\get_temp_dir() . 'db_exec';
+		file_put_contents( $db_script_path, $health_script );
+		$mysql_unhealthy = true;
+		EE::exec( sprintf( 'docker cp %s ee-global-db:/db_exec', $db_script_path ) );
+		$count = 0;
+		while ( $mysql_unhealthy ) {
+			$mysql_unhealthy = ! EE::exec( 'docker exec ee-global-db sh db_exec' );
+			if ( $count ++ > 60 ) {
+				break;
+			}
+			sleep( 1 );
+		}
+
+		$db_script_path = \EE\Utils\get_temp_dir() . 'db_exec';
+		file_put_contents( $db_script_path, sprintf( 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e"%s"', $create_string ) );
+
+		EE::exec( sprintf( 'docker cp %s ee-global-db:/db_exec', $db_script_path ) );
+		if ( ! EE::exec( 'docker exec ee-global-db sh db_exec' ) ) {
+			return false;
+		}
+	} else {
+		//TODO: Handle remote case.
+	}
+
+	return [
+		'db_name' => $db_name,
+		'db_user' => $db_user,
+		'db_pass' => $db_pass,
+	];
+}
+
+/**
+ * Function to cleanup database.
+ *
+ * @param string $db_host Database host from which database is to be removed.
+ * @param string $db_name Database name to be removed.
+ * @param string $db_user Database user to remove the host.
+ * @param string $db_pass Database password of the user.
+ */
+function cleanup_db( $db_host, $db_name, $db_user = '', $db_pass = '' ) {
+
+	$cleanup_string = sprintf( 'DROP DATABASE %s;', $db_name );
+
+	if ( GLOBAL_DB === $db_host ) {
+		$db_script_path = \EE\Utils\get_temp_dir() . 'db_exec';
+		file_put_contents( $db_script_path, sprintf( 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e"%s"', $cleanup_string ) );
+
+		EE::exec( sprintf( 'docker cp %s ee-global-db:/db_exec', $db_script_path ) );
+		EE::exec( 'docker exec ee-global-db sh db_exec' );
+	}
+
+}
+
+/**
+ * Function to cleanup database user.
+ *
+ * @param string $db_host               Database host from which user is to be removed.
+ * @param string $db_user_to_be_cleaned Database user to be removed.
+ * @param string $db_privileged_pass    User having sufficient privilege to delete the given user.
+ * @param string $db_privileged_user    Password of that privileged user.
+ */
+function cleanup_db_user( $db_host, $db_user_to_be_cleaned, $db_privileged_pass = '', $db_privileged_user = 'root' ) {
+
+	$cleanup_string = sprintf( 'DROP USER \'%s\'@\'%%\';', $db_user_to_be_cleaned );
+
+	if ( GLOBAL_DB === $db_host ) {
+		$db_script_path = \EE\Utils\get_temp_dir() . 'db_exec';
+		file_put_contents( $db_script_path, sprintf( 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e"%s"', $cleanup_string ) );
+
+		EE::exec( sprintf( 'docker cp %s ee-global-db:/db_exec', $db_script_path ) );
+		EE::exec( 'docker exec ee-global-db sh db_exec' );
+	}
 }
 
 /**
@@ -215,7 +285,7 @@ function create_site_root( $site_fs_path, $site_url ) {
 function add_site_redirects( string $site_url, bool $ssl, bool $inherit ) {
 
 	$fs               = new Filesystem();
-	$confd_path       = EE_CONF_ROOT . '/nginx/conf.d/';
+	$confd_path       = EE_ROOT_DIR . '/services/nginx-proxy/conf.d/';
 	$config_file_path = $confd_path . $site_url . '-redirect.conf';
 	$has_www          = strpos( $site_url, 'www.' ) === 0;
 	$cert_site_name   = $site_url;
@@ -237,7 +307,7 @@ function add_site_redirects( string $site_url, bool $ssl, bool $inherit ) {
 		'ssl'            => $ssl,
 	];
 
-	$content = EE\Utils\mustache_render( EE_ROOT . '/templates/redirect.conf.mustache', $conf_data );
+	$content = EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/redirect.conf.mustache', $conf_data );
 	$fs->dumpFile( $config_file_path, ltrim( $content, PHP_EOL ) );
 }
 
@@ -272,16 +342,17 @@ function create_etc_hosts_entry( $site_url ) {
 function site_status_check( $site_url ) {
 
 	EE::log( 'Checking and verifying site-up status. This may take some time.' );
-	$httpcode = get_curl_info( $site_url );
-	$i        = 0;
-	$auth     = false;
+	$config_80_port = \EE\Utils\get_config_value( 'proxy_80_port', 80 );
+	$httpcode       = \EE\Utils\get_curl_info( $site_url, $config_80_port );
+	$i              = 0;
+	$auth           = false;
 	while ( 200 !== $httpcode && 302 !== $httpcode && 301 !== $httpcode ) {
 		EE::debug( "$site_url status httpcode: $httpcode" );
 		if ( 401 === $httpcode ) {
 			$user_pass = get_global_auth();
 			$auth      = $user_pass['username'] . ':' . $user_pass['password'];
 		}
-		$httpcode = get_curl_info( $site_url, 80, false, $auth );
+		$httpcode = \EE\Utils\get_curl_info( $site_url, $config_80_port, false, $auth );
 		echo '.';
 		sleep( 2 );
 		if ( $i ++ > 60 ) {
@@ -297,54 +368,57 @@ function site_status_check( $site_url ) {
 }
 
 /**
- * Function to get httpcode or port occupancy info.
- *
- * @param string $url     url to get info about.
- * @param int $port       The port to check.
- * @param bool $port_info Return port info or httpcode.
- * @param mixed $auth     Send http auth with passed value if not false.
- *
- * @return bool|int port occupied or httpcode.
- */
-function get_curl_info( $url, $port = 80, $port_info = false, $auth = false ) {
-
-	$ch = curl_init( $url );
-	curl_setopt( $ch, CURLOPT_HEADER, true );
-	curl_setopt( $ch, CURLOPT_RETURNTRANSFER, 1 );
-	curl_setopt( $ch, CURLOPT_NOBODY, true );
-	curl_setopt( $ch, CURLOPT_TIMEOUT, 10 );
-	curl_setopt( $ch, CURLOPT_PORT, $port );
-	if ( $auth ) {
-		curl_setopt( $ch, CURLOPT_USERPWD, $auth );
-	}
-	curl_exec( $ch );
-	if ( $port_info ) {
-		return empty( curl_getinfo( $ch, CURLINFO_PRIMARY_IP ) );
-	}
-
-	return curl_getinfo( $ch, CURLINFO_HTTP_CODE );
-}
-
-/**
- * Function to pull the latest images and bring up the site containers.
+ * Function to pull the latest images and bring up the site containers and set EasyEngine header.
  *
  * @param string $site_fs_path Root directory of the site.
- * @param array $containers    The minimum required conatainers to start the site. Default null, leads to starting of
- *                             all containers.
+ * @param array $containers    The minimum required conatainers to start the site. Default null, leads to starting of all containers.
  *
  * @throws \Exception when docker-compose up fails.
  */
 function start_site_containers( $site_fs_path, $containers = [] ) {
 
-	EE::log( 'Pulling latest images. This may take some time.' );
 	chdir( $site_fs_path );
-	EE::exec( 'docker-compose pull' );
 	EE::log( 'Starting site\'s services.' );
 	if ( ! EE::docker()::docker_compose_up( $site_fs_path, $containers ) ) {
 		throw new \Exception( 'There was some error in docker-compose up.' );
 	}
+	set_nginx_version_conf( $site_fs_path );
 }
 
+/**
+ * Function to restart given containers for a site and update EasyEngine header.
+ *
+ * @param string $site_fs_path     Root directory of the site.
+ * @param string|array $containers Containers to restart.
+ */
+function restart_site_containers( $site_fs_path, $containers ) {
+
+	chdir( $site_fs_path );
+	$all_containers = is_array( $containers ) ? implode( ' ', $containers ) : $containers;
+	EE::exec( "docker-compose restart $all_containers" );
+	set_nginx_version_conf( $site_fs_path );
+}
+
+/**
+ * Function to set nginx version.conf file.
+ *
+ * @param string $site_fs_path Root directory of the site.
+ */
+function set_nginx_version_conf( $site_fs_path ) {
+	if ( ! EE::docker()::service_exists( 'nginx', $site_fs_path ) ) {
+		return;
+	}
+	chdir( $site_fs_path );
+	$version_line    = sprintf( 'add_header X-Powered-By \"EasyEngine v%s\";', EE_VERSION );
+	$version_file    = '/version.conf';
+	$version_success = EE::exec( sprintf( 'docker-compose exec nginx bash -c \'echo "%s" > %s\'', $version_line, $version_file ), false, false, [
+		$version_file,
+		$version_line,
+	] );
+	if ( $version_success ) {
+		EE::exec( 'docker-compose exec nginx bash -c "nginx -t && nginx -s reload"' );
+	}
+}
 
 /**
  * Generic function to run a docker compose command. Must be ran inside correct directory.
@@ -378,7 +452,7 @@ function set_postfix_files( $site_url, $site_conf_dir ) {
 
 	if ( ! EE::exec( sprintf( "openssl req -new -x509 -nodes -days 365 -subj \"/CN=smtp.%s\" -out $ssl_dir/server.crt -keyout $ssl_dir/server.key", $site_url ) )
 	     && EE::exec( "chmod 0600 $ssl_dir/server.key" ) ) {
-		throw new Exception( 'Unable to generate ssl key for postfix' );
+		throw new \Exception( 'Unable to generate ssl key for postfix' );
 	}
 }
 
@@ -405,7 +479,12 @@ function configure_postfix( $site_url, $site_fs_path ) {
  * Reload the global nginx proxy.
  */
 function reload_global_nginx_proxy() {
-	\EE::launch( sprintf( 'docker exec %s sh -c "/app/docker-entrypoint.sh /usr/local/bin/docker-gen /app/nginx.tmpl /etc/nginx/conf.d/default.conf; /usr/sbin/nginx -s reload"', EE_PROXY_TYPE ) );
+
+	if ( \EE::launch( sprintf( 'docker exec %s sh -c "nginx -t"', EE_PROXY_TYPE ) ) ) {
+		return \EE::launch( sprintf( 'docker exec %s sh -c "/app/docker-entrypoint.sh /usr/local/bin/docker-gen /app/nginx.tmpl /etc/nginx/conf.d/default.conf; /usr/sbin/nginx -s reload"', EE_PROXY_TYPE ) );
+	}
+
+	return false;
 }
 
 /**
@@ -418,7 +497,6 @@ function get_global_auth() {
 
 	$auth = \EE\Model\Auth::where( [
 		'site_url' => 'default',
-		'scope'    => 'site',
 	] );
 
 	if ( empty( $auth ) ) {

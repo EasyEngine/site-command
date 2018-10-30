@@ -2,7 +2,7 @@
 
 namespace EE\Site\Type;
 
-use function \EE\Utils\mustache_render;
+use function EE\Utils\mustache_render;
 
 class Site_HTML_Docker {
 
@@ -18,11 +18,6 @@ class Site_HTML_Docker {
 		$base         = [];
 
 		$restart_default = [ 'name' => 'always' ];
-		$network_default = [
-			'net' => [
-				[ 'name' => 'site-network' ]
-			]
-		];
 
 		// nginx configuration.
 		$nginx['service_name'] = [ 'name' => 'nginx' ];
@@ -38,31 +33,54 @@ class Site_HTML_Docker {
 				[ 'name' => 'HSTS=off' ],
 			],
 		];
-		$nginx['volumes']     = [
+		if ( ! empty( $filters['nohttps'] ) ) {
+			$nginx['environment']['env'][] = [ 'name' => 'HTTPS_METHOD=nohttps' ];
+		}
+		$nginx['volumes'] = [
 			'vol' => [
-				[ 'name' => './app/src:/var/www/htdocs' ],
-				[ 'name' => './config/nginx/default.conf:/etc/nginx/conf.d/default.conf' ],
-				[ 'name' => './logs/nginx:/var/log/nginx' ],
-				[ 'name' => './config/nginx/common:/usr/local/openresty/nginx/conf/common' ],
+				[ 'name' => 'htdocs:/var/www' ],
+				[ 'name' => 'config_nginx:/usr/local/openresty/nginx/conf' ],
+				[ 'name' => 'log_nginx:/var/log/nginx' ],
 			],
 		];
-		$nginx['labels']      = [
+		$nginx['labels']   = [
 			'label' => [
 				'name' => 'io.easyengine.site=${VIRTUAL_HOST}',
 			],
 		];
-		$nginx['networks']    = [
+		$nginx['networks'] = [
 			'net' => [
-				[ 'name' => 'site-network' ],
-				[ 'name' => 'global-network' ],
-			]
+				[ 'name' => 'global-frontend-network' ],
+			],
+		];
+		if ( $filters['is_ssl'] ) {
+			$nginx['networks']['net'][] = [
+				'name'    => 'site-network',
+				'aliases' => [
+					'alias' => [
+						'name' => '${VIRTUAL_HOST}',
+					],
+				],
+			];
+		} else {
+			$nginx['networks']['net'][] = [
+				'name' => 'site-network',
+			];
+		}
+
+		$volumes = [
+			'external_vols' => [
+				[ 'prefix' => $filters['site_prefix'], 'ext_vol_name' => 'htdocs' ],
+				[ 'prefix' => $filters['site_prefix'], 'ext_vol_name' => 'config_nginx' ],
+				[ 'prefix' => $filters['site_prefix'], 'ext_vol_name' => 'log_nginx' ],
+			],
 		];
 
 		$base[] = $nginx;
 
 		$binding = [
-			'services' => $base,
-			'network'  => [
+			'services'        => $base,
+			'network'         => [
 				'networks_labels' => [
 					'label' => [
 						[ 'name' => 'org.label-schema.vendor=EasyEngine' ],
@@ -70,6 +88,7 @@ class Site_HTML_Docker {
 					],
 				],
 			],
+			'created_volumes' => $volumes,
 		];
 
 		$docker_compose_yml = mustache_render( SITE_TEMPLATE_ROOT . '/docker-compose.mustache', $binding );

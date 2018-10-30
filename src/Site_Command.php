@@ -3,6 +3,9 @@
 use EE\Dispatcher\CommandFactory;
 use EE\Model\Site;
 
+/**
+ * Adds site related functionality to EasyEngine
+ */
 class Site_Command {
 
 	/**
@@ -11,14 +14,14 @@ class Site_Command {
 	protected static $site_types = [];
 
 	/**
-	 * @var Object $instance Hold an instance of the class.
+	 * @var Site_Command $instance Hold an instance of the class.
 	 */
 	private static $instance;
 
 	/**
 	 * The singleton method to hold the instance of site-command.
 	 *
-	 * @return Object|Site_Command
+	 * @return Site_Command
 	 */
 	public static function instance() {
 
@@ -65,11 +68,16 @@ class Site_Command {
 		$site_types = self::get_site_types();
 		$assoc_args = $this->convert_old_args_to_new_args( $args, $assoc_args );
 
-		if ( isset( $assoc_args['type'] ) ) {
-			$type = $assoc_args['type'];
-			unset( $assoc_args['type'] );
+		// default site-type.
+		$type = 'html';
+
+		if ( in_array( reset( $args ), [ 'create', 'update' ], true ) || empty( $args ) ) {
+			if ( isset( $assoc_args['type'] ) ) {
+				$type = $assoc_args['type'];
+				unset( $assoc_args['type'] );
+			}
 		} else {
-			$type = $this->determine_type( $args );
+			$type = $this->determine_type( $type, $args );
 		}
 		array_unshift( $args, 'site' );
 
@@ -97,14 +105,16 @@ class Site_Command {
 	 * Or falls down to the default site-type defined by the user,
 	 * Or finally the most basic site-type and the default included in this package, type=html.
 	 *
-	 * @param array $args Command line arguments passed to site-command.
+	 * @param array $args          Command line arguments passed to site-command.
+	 * @param string $default_type Default site-type.
+	 *
+	 * @throws \EE\ExitException
 	 *
 	 * @return string site-type.
 	 */
-	private function determine_type( $args ) {
+	private function determine_type( $default_type, $args ) {
 
-		// default site-type
-		$type = 'html';
+		$type = $default_type;
 
 		$last_arg = array_pop( $args );
 		if ( substr( $last_arg, 0, 4 ) === 'http' ) {
@@ -146,6 +156,9 @@ class Site_Command {
 	 */
 	private function convert_old_args_to_new_args( $args, $assoc_args ) {
 
+		if ( ! in_array( reset( $args ), [ 'create', 'update' ], true ) && ! empty( $args ) ) {
+			return $assoc_args;
+		}
 		$ee3_compat_array_map_to_type = [
 			'wp'          => [ 'type' => 'wp' ],
 			'wpsubdom'    => [ 'type' => 'wp', 'mu' => 'subdom' ],
