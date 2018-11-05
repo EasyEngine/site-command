@@ -288,7 +288,7 @@ abstract class EE_Site_Command {
 	 *     # Force enable a site.
 	 *     $ ee site enable example.com --force
 	 */
-	public function enable( $args, $assoc_args ) {
+	public function enable( $args, $assoc_args, $exit_on_error = true ) {
 
 		\EE\Utils\delem_log( 'site enable start' );
 		$force           = \EE\Utils\get_flag_value( $assoc_args, 'force' );
@@ -319,7 +319,11 @@ abstract class EE_Site_Command {
 			\EE::success( sprintf( 'Site %s enabled.', $this->site_data->site_url ) );
 			\EE\Site\Utils\set_nginx_version_conf( $this->site_data->site_fs_path );
 		} else {
-			\EE::error( sprintf( 'There was error in enabling %s. Please check logs.', $this->site_data->site_url ) );
+			$err_msg = sprintf( 'There was error in enabling %s. Please check logs.', $this->site_data->site_url );
+			if ( $exit_on_error ) {
+				\EE::error( $err_msg );
+			}
+			throw new \Exception( $err_msg );
 		}
 
 		\EE::log( 'Running post enable configurations.' );
