@@ -825,6 +825,6 @@ abstract class EE_Site_Command {
 
 	abstract protected function rollback();
 
-	abstract protected function dump_docker_compose_yml( $additional_filters = [] );
+	abstract public function dump_docker_compose_yml( $additional_filters = [] );
 
 }
