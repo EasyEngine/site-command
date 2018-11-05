@@ -821,6 +821,18 @@ abstract class EE_Site_Command {
 		\EE::error( 'You can not create more than 27 sites' );
 	}
 
+	/**
+	 * Function to populate site-info from database.
+	 *
+	 * @param string $site_name Name of the site whose info needs to be populated.
+	 * @param string $in_array  Populate info in array if true, else in obj form.
+	 *
+	 * @ignorecommand
+	 */
+	public function populate_site_info( $site_name, $in_array = true ) {
+		$this->site_data = EE\Site\Utils\get_site_info( [ $site_name ], false, false, $in_array );
+	}
+
 	abstract public function create( $args, $assoc_args );
 
 	abstract protected function rollback();
