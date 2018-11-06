@@ -48,29 +48,40 @@ class UpdatePhpConfig extends Base {
 			EE::debug( "Starting php-config path and volume changes for: $site->site_url" );
 
 			$docker_yml           = $site->site_fs_path . '/docker-compose.yml';
-			$docker_yml_backup    = $site->site_fs_path . '/docker-compose.yml.backup';
+			$docker_yml_backup    = EE_BACKUP_DIR . '/' . $site->site_url . '/docker-compose.yml.backup';
 			$prefix               = \EE::docker()->get_docker_style_prefix( $site->site_url );
 			$volume_name          = 'config_php';
 			$volume_to_be_deleted = $prefix . '_config_php';
 			$symlink_path_old     = $site->site_fs_path . '/config/php-fpm';
 			$symlink_path_new     = $site->site_fs_path . '/config/php';
-			$restore_file_path    = $site->site_fs_path . '/config/php';
-			$backup_file_source   = EE_ROOT_DIR . '/.backup/php-fpm';
+			$restore_file_path    = $site->site_fs_path . '/config/php/php';
+			$backup_file_path     = EE_BACKUP_DIR . '/' . $site->site_url . '/php-fpm';
+			$ee_site_object       = SiteContainers::get_site_object( $site->site_type );
+			$data_in_array        = ( array ) $site;
+			$array_site_data      = array_pop( $data_in_array );
 
 			self::$rsp->add_step(
 				"take-$site->site_url-docker-compose-backup",
-				'EE\Migration\SiteContainers::backup_site_docker_compose_file',
-				'EE\Migration\SiteContainers::revert_site_docker_compose_file',
+				'EE\Migration\SiteContainers::backup_restore',
+				'EE\Migration\SiteContainers::backup_restore',
 				[ $docker_yml, $docker_yml_backup ],
 				[ $docker_yml_backup, $docker_yml ]
 			);
 
 			self::$rsp->add_step(
 				"take-$site->site_url-config-php-vol-backup",
-				'EE\Migration\SiteContainers::backup_files',
-				'EE\Migration\SiteContainers::restore_files',
-				[ $symlink_path_old ],
-				[ $symlink_path_old ]
+				'EE\Migration\SiteContainers::backup_restore',
+				'EE\Migration\SiteContainers::backup_restore',
+				[ $symlink_path_old, $backup_file_path ],
+				[ $backup_file_path, $symlink_path_old ]
+			);
+
+			self::$rsp->add_step(
+				"generate-$site->site_url-docker-compose",
+				'EE\Migration\SiteContainers::generate_site_docker_compose_file',
+				null,
+				[ $array_site_data, $ee_site_object ],
+				null
 			);
 
 			if ( $site->site_enabled ) {
@@ -99,19 +110,29 @@ class UpdatePhpConfig extends Base {
 				[ $volume_to_be_deleted, $symlink_path_new ]
 			);
 
-			self::$rsp->add_step(
-				"restore-$site->site_url-config-php-vol-backup",
-				'EE\Migration\SiteContainers::restore_files',
-				'EE\Migration\SiteContainers::backup_files',
-				[ $restore_file_path, $backup_file_source ],
-				[ $backup_file_source ]
-			);
-
 			if ( $site->site_enabled ) {
 				self::$rsp->add_step(
 					"start-$site->site_url-containers",
 					'EE\Site\Utils\start_site_containers',
 					'EE\Site\Utils\stop_site_containers',
+					[ $site->site_fs_path, [ 'php' ] ],
+					[ $site->site_fs_path, [ 'php' ] ]
+				);
+			}
+
+			self::$rsp->add_step(
+				"restore-$site->site_url-config-php-vol-backup",
+				'EE\Migration\SiteContainers::backup_restore',
+				'EE\Migration\SiteContainers::backup_restore',
+				[ $backup_file_path, $restore_file_path ],
+				[ $backup_file_path, $symlink_path_old ]
+			);
+
+			if ( $site->site_enabled ) {
+				self::$rsp->add_step(
+					"start-$site->site_url-containers",
+					'EE\Site\Utils\restart_site_containers',
+					'EE\Site\Utils\restart_site_containers',
 					[ $site->site_fs_path, [ 'php' ] ],
 					[ $site->site_fs_path, [ 'php' ] ]
 				);
