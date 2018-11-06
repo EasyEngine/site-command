@@ -620,7 +620,8 @@ abstract class EE_Site_Command {
 	 * @param bool $add_le_on_www  Allow LetsEncrypt on www subdomain.
 	 */
 	protected function init_le( $site_url, $site_fs_path, $wildcard = false, $add_le_on_www = false ) {
-
+		$preferred_challenge = \EE\Utils\get_config_value( 'preferred_ssl_challenge', '' );
+		$is_solver_dns       = ( $wildcard || 'dns' === $preferred_challenge ) ? true : false;
 		\EE::debug( 'Wildcard in init_le: ' . ( bool ) $wildcard );
 
 		$this->site_data['site_url']          = $site_url;
@@ -637,10 +638,10 @@ abstract class EE_Site_Command {
 
 		$domains = $this->get_cert_domains( $site_url, $wildcard, $add_le_on_www );
 
-		if ( ! $client->authorize( $domains, $wildcard ) ) {
+		if ( ! $client->authorize( $domains, $wildcard, $preferred_challenge ) ) {
 			return;
 		}
-		if ( $wildcard ) {
+		if ( $is_solver_dns ) {
 			echo \cli\Colors::colorize( '%YIMPORTANT:%n Run `ee site ssl ' . $this->site_data['site_url'] . '` once the DNS changes have propagated to complete the certification generation and installation.', null );
 		} else {
 			$this->ssl( [], [] );
@@ -763,13 +764,16 @@ abstract class EE_Site_Command {
 		$domains = $this->get_cert_domains( $this->site_data['site_url'], $this->site_data['site_ssl_wildcard'] );
 		$client  = new Site_Letsencrypt();
 
+		$preferred_challenge = \EE\Utils\get_config_value( 'preferred_ssl_challenge', '' );
+
 		try {
-			$client->check( $domains, $this->site_data['site_ssl_wildcard'] );
+			$client->check( $domains, $this->site_data['site_ssl_wildcard'], $preferred_challenge );
 		} catch ( \Exception $e ) {
 			if ( $called_by_ee ) {
 				throw $e;
 			}
 			EE::error( 'Failed to verify SSL: ' . $e->getMessage() );
+
 			return;
 		}
 
