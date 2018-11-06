@@ -66,8 +66,8 @@ class UpdatePhpConfig extends Base {
 			$array_site_data         = array_pop( $data_in_array );
 			$backup_to_restore       = $backup_file_path;
 
-			if( 'php' === $site->site_type ) {
-				$config_data_path_old  = $site->site_fs_path . '/config/php-fpm/php';
+			if ( 'php' === $site->site_type ) {
+				$config_data_path_old = $site->site_fs_path . '/config/php-fpm/php';
 				self::$rsp->add_step(
 					"take-$site->site_url-php-ini-backup",
 					'EE\Migration\SiteContainers::backup_restore',
@@ -190,6 +190,107 @@ class UpdatePhpConfig extends Base {
 	 * @throws EE\ExitException
 	 */
 	public function down() {
+
+		if ( $this->skip_this_migration ) {
+			EE::debug( 'Skipping no-overlap migration down as it is not needed.' );
+
+			return;
+		}
+		self::$rsp = new RevertableStepProcessor();
+
+		foreach ( $this->sites as $site ) {
+
+			if ( ! in_array( $site->site_type, [ 'php', 'wp' ], true ) ) {
+				continue;
+			}
+
+			EE::debug( "Reverting php-config path and volume changes for: $site->site_url" );
+
+			$docker_yml              = $site->site_fs_path . '/docker-compose.yml';
+			$docker_yml_backup       = EE_BACKUP_DIR . '/' . $site->site_url . '/docker-compose.yml.backup';
+			$prefix                  = \EE::docker()->get_docker_style_prefix( $site->site_url );
+			$config_volume_name      = 'config_php';
+			$volume_to_be_deleted    = $prefix . '_config_php';
+			$config_symlink_path_old = $site->site_fs_path . '/config/php-fpm';
+			$config_symlink_path_new = $site->site_fs_path . '/config/php';
+			$restore_file_path       = $site->site_fs_path . '/config/php/php';
+			$backup_file_path        = EE_BACKUP_DIR . '/' . $site->site_url . '/php-fpm';
+			$backup_to_restore       = ( 'php' === $site->site_type ) ? $site->site_fs_path . '/config/php-fpm/php' : $backup_file_path;
+
+			self::$rsp->add_step(
+				"revert-$site->site_url-docker-compose-backup",
+				'EE\Migration\SiteContainers::backup_restore',
+				'EE\Migration\SiteContainers::backup_restore',
+				[ $docker_yml_backup, $docker_yml ],
+				[ $docker_yml, $docker_yml_backup ]
+			);
+
+			self::$rsp->add_step(
+				"revert-$site->site_url-config-php-vol-backup",
+				'EE\Migration\SiteContainers::backup_restore',
+				'EE\Migration\SiteContainers::backup_restore',
+				[ $backup_file_path, $config_symlink_path_old ],
+				[ $config_symlink_path_old, $backup_file_path ]
+			);
+
+			if ( $site->site_enabled ) {
+				self::$rsp->add_step(
+					"stop-$site->site_url-containers",
+					'EE\Site\Utils\stop_site_containers',
+					'EE\Site\Utils\start_site_containers',
+					[ $site->site_fs_path, [ 'php' ] ],
+					[ $site->site_fs_path, [ 'php' ] ]
+				);
+			}
+
+			self::$rsp->add_step(
+				"delete-new-$site->site_url-config-php-volume",
+				'EE\Migration\SiteContainers::delete_volume',
+				'EE\Migration\SiteContainers::create_volume',
+				[ $volume_to_be_deleted, $config_symlink_path_new ],
+				[ $site->site_url, $config_volume_name, $config_symlink_path_new ]
+			);
+
+			self::$rsp->add_step(
+				"re-create-$site->site_url-config-php-volume",
+				'EE\Migration\SiteContainers::create_volume',
+				'EE\Migration\SiteContainers::delete_volume',
+				[ $site->site_url, $config_volume_name, $config_symlink_path_old ],
+				[ $volume_to_be_deleted, $config_symlink_path_old ]
+			);
+
+			if ( $site->site_enabled ) {
+				self::$rsp->add_step(
+					"start-$site->site_url-containers",
+					'EE\Site\Utils\start_site_containers',
+					'EE\Site\Utils\stop_site_containers',
+					[ $site->site_fs_path, [ 'php' ] ],
+					[ $site->site_fs_path, [ 'php' ] ]
+				);
+			}
+
+			self::$rsp->add_step(
+				"restore-$site->site_url-old-config-php-vol-backup",
+				'EE\Migration\SiteContainers::backup_restore',
+				'EE\Migration\SiteContainers::backup_restore',
+				[ $backup_file_path, $config_symlink_path_old ],
+				[ $backup_to_restore, $restore_file_path ]
+			);
+
+			if ( $site->site_enabled ) {
+				self::$rsp->add_step(
+					"start-$site->site_url-containers",
+					'EE\Site\Utils\restart_site_containers',
+					'EE\Site\Utils\restart_site_containers',
+					[ $site->site_fs_path, [ 'php' ] ],
+					[ $site->site_fs_path, [ 'php' ] ]
+				);
+			}
+		}
+
+		if ( ! self::$rsp->execute() ) {
+			throw new \Exception( 'Unable to revert config-php migrations.' );
+		}
 
 	}
 }
