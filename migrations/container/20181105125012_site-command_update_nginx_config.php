@@ -99,7 +99,7 @@ class UpdateNginxConfig extends Base {
 					"reload-$site->site_url-nginx-containers",
 					'EE\Migration\SiteContainers::reload_nginx',
 					null,
-					[ $site->site_fs_path, [ 'nginx' ] ],
+					[ $site->site_fs_path ],
 					null
 				);
 			}
@@ -150,7 +150,7 @@ class UpdateNginxConfig extends Base {
 					"reload-$site->site_url-nginx-containers",
 					'EE\Migration\SiteContainers::reload_nginx',
 					null,
-					[ $site->site_fs_path, [ 'nginx' ] ],
+					[ $site->site_fs_path ],
 					null
 				);
 			}
