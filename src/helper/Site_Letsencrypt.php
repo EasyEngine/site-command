@@ -131,15 +131,16 @@ class Site_Letsencrypt {
 	/**
 	 * Function to authorize the letsencrypt request and get the token for challenge.
 	 *
-	 * @param array $domains  Domains to be authorized.
-	 * @param bool  $wildcard Is the authorization for wildcard or not.
+	 * @param array $domains Domains to be authorized.
+	 * @param bool $wildcard Is the authorization for wildcard or not.
 	 *
 	 * @throws \Exception
 	 * @return bool Success.
 	 */
-	public function authorize( Array $domains, $wildcard = false ) {
-		$solver     = $wildcard ? new SimpleDnsSolver( null, new ConsoleOutput() ) : new SimpleHttpSolver();
-		$solverName = $wildcard ? 'dns-01' : 'http-01';
+	public function authorize( Array $domains, $wildcard = false, $preferred_challenge = '' ) {
+		$is_solver_dns = ( $wildcard || 'dns' === $preferred_challenge ) ? true : false;
+		$solver        = $is_solver_dns ? new SimpleDnsSolver( null, new ConsoleOutput() ) : new SimpleHttpSolver();
+		$solverName    = $is_solver_dns ? 'dns-01' : 'http-01';
 		try {
 			$order = $this->client->requestOrder( $domains );
 		} catch ( \Exception $e ) {
@@ -173,7 +174,7 @@ class Site_Letsencrypt {
 			\EE::debug( 'Solving authorization challenge: Domain: ' . $authorizationChallenge->getDomain() . ' Challenge: ' . print_r( $authorizationChallenge->toArray(), true ) );
 			$solver->solve( $authorizationChallenge );
 
-			if ( ! $wildcard ) {
+			if ( ! $is_solver_dns ) {
 				$token   = $authorizationChallenge->toArray()['token'];
 				$payload = $authorizationChallenge->toArray()['payload'];
 
@@ -195,9 +196,10 @@ class Site_Letsencrypt {
 		return true;
 	}
 
-	public function check( Array $domains, $wildcard = false ) {
-		\EE::debug( ( 'Starting check with solver ' ) . ( $wildcard ? 'dns' : 'http' ) );
-		$solver    = $wildcard ? new SimpleDnsSolver( null, new ConsoleOutput() ) : new SimpleHttpSolver();
+	public function check( Array $domains, $wildcard = false, $preferred_challenge = '' ) {
+		$is_solver_dns = ( $wildcard || 'dns' === $preferred_challenge ) ? true : false;
+		\EE::debug( ( 'Starting check with solver ' ) . ( $is_solver_dns ? 'dns' : 'http' ) );
+		$solver    = $is_solver_dns ? new SimpleDnsSolver( null, new ConsoleOutput() ) : new SimpleHttpSolver();
 		$validator = new ChainValidator(
 			[
 				new WaitingValidator( new HttpValidator() ),
