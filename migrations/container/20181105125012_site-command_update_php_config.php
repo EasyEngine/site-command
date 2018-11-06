@@ -65,6 +65,12 @@ class UpdatePhpConfig extends Base {
 			$data_in_array           = (array) $site;
 			$array_site_data         = array_pop( $data_in_array );
 
+			if( 'php' === $site->site_type ) {
+				$config_data_path_old  = $site->site_fs_path . '/config/php-fpm/php';
+			} else {
+				$config_data_path_old  = $site->site_fs_path . '/config/php-fpm';
+			}
+
 			self::$rsp->add_step(
 				"take-$site->site_url-docker-compose-backup",
 				'EE\Migration\SiteContainers::backup_restore',
@@ -77,8 +83,8 @@ class UpdatePhpConfig extends Base {
 				"take-$site->site_url-config-php-vol-backup",
 				'EE\Migration\SiteContainers::backup_restore',
 				'EE\Migration\SiteContainers::backup_restore',
-				[ $config_symlink_path_old, $backup_file_path ],
-				[ $backup_file_path, $config_symlink_path_old ]
+				[ $config_data_path_old, $backup_file_path ],
+				[ $backup_file_path, $config_data_path_old ]
 			);
 
 			self::$rsp->add_step(
@@ -151,7 +157,7 @@ class UpdatePhpConfig extends Base {
 				'EE\Migration\SiteContainers::backup_restore',
 				'EE\Migration\SiteContainers::backup_restore',
 				[ $backup_file_path, $restore_file_path ],
-				[ $backup_file_path, $config_symlink_path_old ]
+				[ $backup_file_path, $config_data_path_old ]
 			);
 
 			if ( $site->site_enabled ) {
