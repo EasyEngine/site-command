@@ -37,6 +37,8 @@ class UpdatePhpConfig extends Base {
 		}
 		self::$rsp = new RevertableStepProcessor();
 
+		$first_execution = true;
+
 		foreach ( $this->sites as $site ) {
 
 			EE::debug( "Found site: $site->site_url of type: $site->site_type" );
@@ -86,6 +88,17 @@ class UpdatePhpConfig extends Base {
 				[ $array_site_data, $ee_site_object ],
 				null
 			);
+
+			if ( $first_execution ) {
+				self::$rsp->add_step(
+					"pulling-images-for-$site->site_url",
+					'EE\Migration\SiteContainers::docker_compose_pull',
+					null,
+					[ $site->site_fs_path ],
+					null
+				);
+				$first_execution = false;
+			}
 
 			if ( $site->site_enabled ) {
 				self::$rsp->add_step(
