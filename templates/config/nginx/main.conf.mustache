@@ -53,7 +53,7 @@ server {
 		return 403;
 	}
 	# Status pages
-	location /nginx_status {
+	location = /ee-admin/nginx_status {
 		stub_status on;
 		access_log off;
 	}
