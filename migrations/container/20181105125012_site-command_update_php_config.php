@@ -67,6 +67,13 @@ class UpdatePhpConfig extends Base {
 
 			if( 'php' === $site->site_type ) {
 				$config_data_path_old  = $site->site_fs_path . '/config/php-fpm/php';
+				self::$rsp->add_step(
+					"take-$site->site_url-php-ini-backup",
+					'EE\Migration\SiteContainers::backup_restore',
+					null,
+					[ $site->site_fs_path . '/config/php-fpm/php.ini', $config_data_path_old . '/php.ini' ],
+					null
+				);
 			} else {
 				$config_data_path_old  = $site->site_fs_path . '/config/php-fpm';
 			}
