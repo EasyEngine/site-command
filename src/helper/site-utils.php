@@ -400,6 +400,20 @@ function restart_site_containers( $site_fs_path, $containers ) {
 }
 
 /**
+ * Function to stop given containers for a site.
+ *
+ * @param string $site_fs_path     Root directory of the site.
+ * @param string|array $containers Containers to stop.
+ */
+function stop_site_containers( $site_fs_path, $containers ) {
+
+	chdir( $site_fs_path );
+	$all_containers = is_array( $containers ) ? implode( ' ', $containers ) : $containers;
+	EE::exec( "docker-compose stop $all_containers" );
+	EE::exec( "docker-compose rm -f $all_containers" );
+}
+
+/**
  * Function to set nginx version.conf file.
  *
  * @param string $site_fs_path Root directory of the site.
