@@ -38,6 +38,7 @@ class UpdatePhpConfig extends Base {
 		self::$rsp = new RevertableStepProcessor();
 
 		$first_execution = true;
+		$updated_images  = [];
 
 		foreach ( $this->sites as $site ) {
 
@@ -113,6 +114,17 @@ class UpdatePhpConfig extends Base {
 					[ $site->site_fs_path ],
 					null
 				);
+
+				$img_versions     = EE\Utils\get_image_versions();
+				$current_versions = \EE\Migration\Containers::get_current_docker_images_versions();
+				$old_img_backup   = EE_BACKUP_DIR . '/img-version-old.json';
+				$this->fs->dumpFile( $old_img_backup, json_encode( $current_versions ) );
+
+				foreach ( $img_versions as $img => $version ) {
+					if ( $current_versions[ $img ] !== $version ) {
+						$updated_images[] = $img;
+					}
+				}
 				$first_execution = false;
 			}
 
@@ -183,7 +195,7 @@ class UpdatePhpConfig extends Base {
 
 			if ( $site->site_enabled ) {
 				self::$rsp->add_step(
-					"start-$site->site_url-containers",
+					"restart-$site->site_url-containers",
 					'EE\Site\Utils\restart_site_containers',
 					'EE\Site\Utils\restart_site_containers',
 					[ $site->site_fs_path, [ 'php' ] ],
@@ -194,6 +206,10 @@ class UpdatePhpConfig extends Base {
 
 		if ( ! self::$rsp->execute() ) {
 			throw new \Exception( 'Unable to run config-php migrations.' );
+		}
+
+		if ( ! empty( $updated_images ) && in_array( 'easyengine/php', $updated_images ) ) {
+			EE\Model\Option::update( [ [ 'key', 'easyengine/php' ] ], [ 'value' => $img_versions['easyengine/php'] ] );
 		}
 
 	}
@@ -306,5 +322,29 @@ class UpdatePhpConfig extends Base {
 			throw new \Exception( 'Unable to revert config-php migrations.' );
 		}
 
+		$img_versions   = EE\Utils\get_image_versions();
+		$old_img_backup = EE_BACKUP_DIR . '/img-version-old.json';
+		$updated_images = [];
+		if ( $this->fs->exists( $old_img_backup ) ) {
+			$old_img_versions = json_decode( $old_img_backup, true );
+			$json_error       = json_last_error();
+			if ( JSON_ERROR_NONE === $json_error ) {
+				foreach ( $img_versions as $img => $version ) {
+					if ( $old_img_versions[ $img ] !== $version ) {
+						$updated_images[] = $img;
+					}
+				}
+			}
+		}
+		if ( ! empty( $updated_images ) ) {
+			if ( ! empty( $updated_images ) && in_array( 'easyengine/php', $updated_images ) ) {
+				EE\Model\Option::update( [
+					[
+						'key',
+						'easyengine/php'
+					]
+				], [ 'value' => $old_img_versions['easyengine/php'] ] );
+			}
+		}
 	}
 }
