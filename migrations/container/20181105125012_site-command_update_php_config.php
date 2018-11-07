@@ -50,25 +50,22 @@ class UpdatePhpConfig extends Base {
 
 			EE::debug( "Starting php-config path and volume changes for: $site->site_url" );
 
-			$docker_yml                 = $site->site_fs_path . '/docker-compose.yml';
-			$docker_yml_backup          = EE_BACKUP_DIR . '/' . $site->site_url . '/docker-compose.yml.backup';
-			$prefix                     = \EE::docker()->get_docker_style_prefix( $site->site_url );
-			$config_volume_name         = 'config_php';
-			$log_volume_name            = 'log_php';
-			$postfix_config_volume_name = 'config_postfix';
-			$log_volume_to_check        = $prefix . '_log_php';
-			$postfix_volume_to_check    = $prefix . '_config_postfix';
-			$volume_to_be_deleted       = $prefix . '_config_php';
-			$log_symlink                = $site->site_fs_path . '/logs/php';
-			$postfix_config_symlink     = $site->site_fs_path . '/config/postfix';
-			$config_symlink_path_old    = $site->site_fs_path . '/config/php-fpm';
-			$config_symlink_path_new    = $site->site_fs_path . '/config/php';
-			$restore_file_path          = $site->site_fs_path . '/config/php/php';
-			$backup_file_path           = EE_BACKUP_DIR . '/' . $site->site_url . '/php-fpm';
-			$ee_site_object             = SiteContainers::get_site_object( $site->site_type );
-			$data_in_array              = (array) $site;
-			$array_site_data            = array_pop( $data_in_array );
-			$backup_to_restore          = $backup_file_path;
+			$docker_yml              = $site->site_fs_path . '/docker-compose.yml';
+			$docker_yml_backup       = EE_BACKUP_DIR . '/' . $site->site_url . '/docker-compose.yml.backup';
+			$prefix                  = \EE::docker()->get_docker_style_prefix( $site->site_url );
+			$config_volume_name      = 'config_php';
+			$log_volume_name         = 'log_php';
+			$log_volume_to_check     = $prefix . '_log_php';
+			$volume_to_be_deleted    = $prefix . '_config_php';
+			$log_symlink             = $site->site_fs_path . '/logs/php';
+			$config_symlink_path_old = $site->site_fs_path . '/config/php-fpm';
+			$config_symlink_path_new = $site->site_fs_path . '/config/php';
+			$restore_file_path       = $site->site_fs_path . '/config/php/php';
+			$backup_file_path        = EE_BACKUP_DIR . '/' . $site->site_url . '/php-fpm';
+			$ee_site_object          = SiteContainers::get_site_object( $site->site_type );
+			$data_in_array           = (array) $site;
+			$array_site_data         = array_pop( $data_in_array );
+			$backup_to_restore       = $backup_file_path;
 
 			if ( 'php' === $site->site_type ) {
 				$config_data_path_old = $site->site_fs_path . '/config/php-fpm/php';
@@ -154,16 +151,6 @@ class UpdatePhpConfig extends Base {
 					'EE\Migration\SiteContainers::delete_volume',
 					[ $site->site_url, $log_volume_name, $log_symlink ],
 					[ $log_volume_to_check, $log_symlink ]
-				);
-			}
-
-			if ( ! in_array( $postfix_volume_to_check, $existing_volumes ) ) {
-				self::$rsp->add_step(
-					"create-$site->site_url-postfix-config-volume",
-					'EE\Migration\SiteContainers::create_volume',
-					'EE\Migration\SiteContainers::delete_volume',
-					[ $site->site_url, $postfix_config_volume_name, $postfix_config_symlink ],
-					[ $postfix_volume_to_check, $postfix_config_symlink ]
 				);
 			}
 
