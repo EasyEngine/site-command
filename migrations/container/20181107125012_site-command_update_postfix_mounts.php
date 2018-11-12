@@ -63,10 +63,6 @@ class UpdatePostfixMounts extends Base {
 			$data_in_array           = (array) $site;
 			$array_site_data         = array_pop( $data_in_array );
 
-			try {
-				$this->fs->remove( $site->site_fs_path . '/config/postfix' );
-			} catch ( \IOException $e ) {}
-
 			self::$rsp->add_step(
 				"take-$site->site_url-docker-compose-backup",
 				'EE\Migration\SiteContainers::backup_restore',
