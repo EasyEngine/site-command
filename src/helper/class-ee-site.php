@@ -288,7 +288,7 @@ abstract class EE_Site_Command {
 	 *     # Force enable a site.
 	 *     $ ee site enable example.com --force
 	 */
-	public function enable( $args, $assoc_args ) {
+	public function enable( $args, $assoc_args, $exit_on_error = true ) {
 
 		\EE\Utils\delem_log( 'site enable start' );
 		$force           = \EE\Utils\get_flag_value( $assoc_args, 'force' );
@@ -319,7 +319,11 @@ abstract class EE_Site_Command {
 			\EE::success( sprintf( 'Site %s enabled.', $this->site_data->site_url ) );
 			\EE\Site\Utils\set_nginx_version_conf( $this->site_data->site_fs_path );
 		} else {
-			\EE::error( sprintf( 'There was error in enabling %s. Please check logs.', $this->site_data->site_url ) );
+			$err_msg = sprintf( 'There was error in enabling %s. Please check logs.', $this->site_data->site_url );
+			if ( $exit_on_error ) {
+				\EE::error( $err_msg );
+			}
+			throw new \Exception( $err_msg );
 		}
 
 		\EE::log( 'Running post enable configurations.' );
@@ -821,10 +825,22 @@ abstract class EE_Site_Command {
 		\EE::error( 'You can not create more than 27 sites' );
 	}
 
+	/**
+	 * Function to populate site-info from database.
+	 *
+	 * @param string $site_name Name of the site whose info needs to be populated.
+	 * @param string $in_array  Populate info in array if true, else in obj form.
+	 *
+	 * @ignorecommand
+	 */
+	public function populate_site_info( $site_name, $in_array = true ) {
+		$this->site_data = EE\Site\Utils\get_site_info( [ $site_name ], false, false, $in_array );
+	}
+
 	abstract public function create( $args, $assoc_args );
 
 	abstract protected function rollback();
 
-	abstract protected function dump_docker_compose_yml( $additional_filters = [] );
+	abstract public function dump_docker_compose_yml( $additional_filters = [] );
 
 }
