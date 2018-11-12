@@ -394,7 +394,7 @@ class Site_Letsencrypt {
 
 			// Distinguished name
 			\EE::debug( 'Loading domain distinguished name...' );
-			$distinguishedName = $this->getOrCreateDistinguishedName( $domain, $alternativeNames );
+			$distinguishedName = $this->getOrCreateDistinguishedName( $domain, $alternativeNames, \EE\Utils\get_config_value( 'le-mail' ) );
 
 			// Order
 			$domains = array_merge( [ $domain ], $alternativeNames );
@@ -411,7 +411,7 @@ class Site_Letsencrypt {
 			\EE::log( 'Certificate received' );
 
 			$this->repository->storeDomainCertificate( $domain, $response->getCertificate() );
-			$this->log( 'Certificate stored' );
+			\EE::log( 'Certificate stored' );
 
 			// Post-generate actions
 			$this->moveCertsToNginxProxy( $domain );
