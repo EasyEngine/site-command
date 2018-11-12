@@ -55,11 +55,15 @@ class UpdatePhpConfig extends Base {
 			$prefix                  = \EE::docker()->get_docker_style_prefix( $site->site_url );
 			$config_volume_name      = 'config_php';
 			$log_volume_name         = 'log_php';
+			$config_postfix          = 'config_postfix';
+			$ssl_postfix             = 'ssl_postfix';
 			$log_volume_to_check     = $prefix . '_log_php';
 			$volume_to_be_deleted    = $prefix . '_config_php';
 			$log_symlink             = $site->site_fs_path . '/logs/php';
 			$config_symlink_path_old = $site->site_fs_path . '/config/php-fpm';
 			$config_symlink_path_new = $site->site_fs_path . '/config/php';
+			$postfix_ssl_symlink     = $site->site_fs_path . '/services/postfix/ssl';
+			$postfix_config_symlink  = $site->site_fs_path . '/config/postfix';
 			$full_config_volume_name = $prefix . '_config_postfix';
 			$full_ssl_volume_name    = $prefix . '_ssl_postfix';
 			$restore_file_path       = $site->site_fs_path . '/config/php/php';
@@ -169,8 +173,8 @@ class UpdatePhpConfig extends Base {
 					"create-$site->site_url-postfix-config-volume",
 					'EE\Migration\SiteContainers::create_volume',
 					'EE\Migration\SiteContainers::delete_volume',
-					[ $site->site_url, $config_volume_name, $config_symlink ],
-					[ $full_config_volume_name, $config_symlink ]
+					[ $site->site_url, $config_postfix, $postfix_config_symlink ],
+					[ $full_config_volume_name, $postfix_config_symlink ]
 				);
 			}
 
@@ -179,8 +183,8 @@ class UpdatePhpConfig extends Base {
 					"create-$site->site_url-postfix-ssl-volume",
 					'EE\Migration\SiteContainers::create_volume',
 					'EE\Migration\SiteContainers::delete_volume',
-					[ $site->site_url, $ssl_volume_name, $ssl_symlink ],
-					[ $full_ssl_volume_name, $ssl_symlink ]
+					[ $site->site_url, $ssl_postfix, $postfix_ssl_symlink ],
+					[ $full_ssl_volume_name, $postfix_ssl_symlink ]
 				);
 			}
 
