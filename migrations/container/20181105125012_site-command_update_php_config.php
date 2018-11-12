@@ -60,6 +60,8 @@ class UpdatePhpConfig extends Base {
 			$log_symlink             = $site->site_fs_path . '/logs/php';
 			$config_symlink_path_old = $site->site_fs_path . '/config/php-fpm';
 			$config_symlink_path_new = $site->site_fs_path . '/config/php';
+			$full_config_volume_name = $prefix . '_config_postfix';
+			$full_ssl_volume_name    = $prefix . '_ssl_postfix';
 			$restore_file_path       = $site->site_fs_path . '/config/php/php';
 			$backup_file_path        = EE_BACKUP_DIR . '/' . $site->site_url . '/php-fpm';
 			$ee_site_object          = SiteContainers::get_site_object( $site->site_type );
@@ -161,6 +163,26 @@ class UpdatePhpConfig extends Base {
 				[ $site->site_url, $config_volume_name, $config_symlink_path_new ],
 				[ $volume_to_be_deleted, $config_symlink_path_new ]
 			);
+
+			if ( ! in_array( $full_config_volume_name, $existing_volumes ) ) {
+				self::$rsp->add_step(
+					"create-$site->site_url-postfix-config-volume",
+					'EE\Migration\SiteContainers::create_volume',
+					'EE\Migration\SiteContainers::delete_volume',
+					[ $site->site_url, $config_volume_name, $config_symlink ],
+					[ $full_config_volume_name, $config_symlink ]
+				);
+			}
+
+			if ( ! in_array( $full_ssl_volume_name, $existing_volumes ) ) {
+				self::$rsp->add_step(
+					"create-$site->site_url-postfix-ssl-volume",
+					'EE\Migration\SiteContainers::create_volume',
+					'EE\Migration\SiteContainers::delete_volume',
+					[ $site->site_url, $ssl_volume_name, $ssl_symlink ],
+					[ $full_ssl_volume_name, $ssl_symlink ]
+				);
+			}
 
 			if ( $site->site_enabled ) {
 				self::$rsp->add_step(
