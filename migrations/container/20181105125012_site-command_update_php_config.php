@@ -85,6 +85,10 @@ class UpdatePhpConfig extends Base {
 				$backup_to_restore = $backup_file_path . '/php';
 			}
 
+			try {
+				$this->fs->remove( $site->site_fs_path . '/config/postfix' );
+			} catch ( \IOException $e ) {}
+
 			self::$rsp->add_step(
 				"take-$site->site_url-docker-compose-backup",
 				'EE\Migration\SiteContainers::backup_restore',
