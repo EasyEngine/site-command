@@ -400,6 +400,20 @@ function restart_site_containers( $site_fs_path, $containers ) {
 }
 
 /**
+ * Function to stop given containers for a site.
+ *
+ * @param string $site_fs_path     Root directory of the site.
+ * @param string|array $containers Containers to stop.
+ */
+function stop_site_containers( $site_fs_path, $containers ) {
+
+	chdir( $site_fs_path );
+	$all_containers = is_array( $containers ) ? implode( ' ', $containers ) : $containers;
+	EE::exec( "docker-compose stop $all_containers" );
+	EE::exec( "docker-compose rm -f $all_containers" );
+}
+
+/**
  * Function to set nginx version.conf file.
  *
  * @param string $site_fs_path Root directory of the site.
@@ -440,15 +454,14 @@ function run_compose_command( $action, $container, $action_to_display = null, $s
 /**
  * Function to copy and configure files needed for postfix.
  *
- * @param string $site_url      Name of the site to configure postfix files for.
- * @param string $site_conf_dir Configuration directory of the site `site_root/config`.
+ * @param string $site_url         Name of the site to configure postfix files for.
+ * @param string $site_service_dir Configuration directory of the site `site_root/services`.
  */
-function set_postfix_files( $site_url, $site_conf_dir ) {
+function set_postfix_files( $site_url, $site_service_dir ) {
 
 	$fs = new Filesystem();
-	$fs->mkdir( $site_conf_dir . '/postfix' );
-	$fs->mkdir( $site_conf_dir . '/postfix/ssl' );
-	$ssl_dir = $site_conf_dir . '/postfix/ssl';
+	$fs->mkdir( $site_service_dir . '/postfix/ssl' );
+	$ssl_dir = $site_service_dir . '/postfix/ssl';
 
 	if ( ! EE::exec( sprintf( "openssl req -new -x509 -nodes -days 365 -subj \"/CN=smtp.%s\" -out $ssl_dir/server.crt -keyout $ssl_dir/server.key", $site_url ) )
 	     && EE::exec( "chmod 0600 $ssl_dir/server.key" ) ) {

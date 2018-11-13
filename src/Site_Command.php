@@ -72,6 +72,7 @@ class Site_Command {
 		$type = 'html';
 
 		if ( in_array( reset( $args ), [ 'create', 'update' ], true ) || empty( $args ) ) {
+			\EE\Auth\Utils\init_global_admin_tools_auth( false );
 			if ( isset( $assoc_args['type'] ) ) {
 				$type = $assoc_args['type'];
 				unset( $assoc_args['type'] );

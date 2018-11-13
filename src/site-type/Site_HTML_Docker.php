@@ -33,7 +33,7 @@ class Site_HTML_Docker {
 				[ 'name' => 'HSTS=off' ],
 			],
 		];
-		if ( ! empty( $filters['nohttps'] ) ) {
+		if ( ! empty( $filters['nohttps'] ) && $filters['nohttps'] ) {
 			$nginx['environment']['env'][] = [ 'name' => 'HTTPS_METHOD=nohttps' ];
 		}
 		$nginx['volumes'] = [
