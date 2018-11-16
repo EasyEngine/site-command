@@ -160,16 +160,8 @@ class HTML extends EE_Site_Command {
 		$custom_conf_dest        = $site_conf_dir . '/nginx/custom/user.conf';
 		$custom_conf_source      = SITE_TEMPLATE_ROOT . '/config/nginx/user.conf.mustache';
 
-		$volumes = [
-			[ 'name' => 'htdocs', 'path_to_symlink' => $this->site_data['site_fs_path'] . '/app' ],
-			[ 'name' => 'config_nginx', 'path_to_symlink' => dirname( dirname( $site_nginx_default_conf ) ) ],
-			[ 'name' => 'log_nginx', 'path_to_symlink' => $this->site_data['site_fs_path'] . '/logs/nginx' ],
-		];
-
 		\EE::log( sprintf( 'Creating site %s.', $this->site_data['site_url'] ) );
 		\EE::log( 'Copying configuration files.' );
-
-		$this->docker->create_volumes( $this->site_data['site_url'], $volumes );
 
 		$default_conf_content = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx/main.conf.mustache', [ 'server_name' => $this->site_data['site_url'] ] );
 
@@ -183,11 +175,17 @@ class HTML extends EE_Site_Command {
 		try {
 			$this->dump_docker_compose_yml( [ 'nohttps' => true ] );
 			$this->fs->dumpFile( $site_conf_env, $env_content );
-			\EE\Site\Utils\start_site_containers( $this->site_data['site_fs_path'] );
+			if ( ! IS_DARWIN ) {
+				\EE\Site\Utils\start_site_containers();
+			}
 			$this->fs->dumpFile( $site_nginx_default_conf, $default_conf_content );
 			$this->fs->copy( $custom_conf_source, $custom_conf_dest );
 			$this->fs->remove( $this->site_data['site_fs_path'] . '/app/html' );
-			\EE\Site\Utils\restart_site_containers( $this->site_data['site_fs_path'], 'nginx' );
+			if ( IS_DARWIN ) {
+				\EE\Site\Utils\start_site_containers( $this->site_data['site_fs_path'], [ 'nginx' ] );
+			} else {
+				\EE\Site\Utils\restart_site_containers( $this->site_data['site_fs_path'], [ 'nginx' ] );
+			}
 			$index_data = [
 				'version'       => 'v' . EE_VERSION,
 				'site_src_root' => $this->site_data['site_fs_path'] . '/app/htdocs',
@@ -210,6 +208,39 @@ class HTML extends EE_Site_Command {
 	 */
 	public function dump_docker_compose_yml( $additional_filters = [] ) {
 
+		$site_conf_dir           = $this->site_data['site_fs_path'] . '/config';
+		$site_nginx_default_conf = $site_conf_dir . '/nginx/conf.d/main.conf';
+
+		$volumes = [
+			[
+				'name'            => 'htdocs',
+				'path_to_symlink' => $this->site_data['site_fs_path'] . '/app',
+				'container_path'  => '/var/www',
+			],
+			[
+				'name'            => 'config_nginx',
+				'path_to_symlink' => dirname( dirname( $site_nginx_default_conf ) ),
+				'container_path'  => '/usr/local/openresty/nginx/conf',
+				'skip_darwin'     => true,
+			],
+			[
+				'name'            => 'config_nginx',
+				'path_to_symlink' => $site_nginx_default_conf,
+				'container_path'  => '/usr/local/openresty/nginx/conf/conf.d/main.conf',
+				'skip_linux'      => true,
+				'skip_volume'     => true,
+			],
+			[
+				'name'            => 'log_nginx',
+				'path_to_symlink' => $this->site_data['site_fs_path'] . '/logs/nginx',
+				'container_path'  => '/var/log/nginx',
+			],
+		];
+
+		if ( ! IS_DARWIN && empty( $this->docker->get_volumes_by_label( $this->site_data['site_url'] ) ) ) {
+			$this->docker->create_volumes( $this->site_data['site_url'], $volumes );
+		}
+
 		$site_docker_yml = $this->site_data['site_fs_path'] . '/docker-compose.yml';
 
 		$filter                = [];
@@ -222,7 +253,7 @@ class HTML extends EE_Site_Command {
 		}
 
 		$site_docker            = new Site_HTML_Docker();
-		$docker_compose_content = $site_docker->generate_docker_compose_yml( $filter );
+		$docker_compose_content = $site_docker->generate_docker_compose_yml( $filter, $volumes );
 		$this->fs->dumpFile( $site_docker_yml, $docker_compose_content );
 	}
 
