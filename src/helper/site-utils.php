@@ -321,6 +321,11 @@ function create_etc_hosts_entry( $site_url ) {
 	$host_line = LOCALHOST_IP . "\t$site_url";
 	$etc_hosts = file_get_contents( '/etc/hosts' );
 	if ( ! preg_match( "/\s+$site_url\$/m", $etc_hosts ) ) {
+		if ( IS_DARWIN && ! is_writable( '/etc/hosts' ) ) {
+			EE::log( 'You may need to enter password to create host entry for site.' );
+			EE::exec( 'sudo chmod g+rw /etc/hosts' );
+			EE::exec( 'sudo chown root:staff /etc/hosts' );
+		}
 		if ( EE::exec( "/bin/bash -c 'echo \"$host_line\" >> /etc/hosts'" ) ) {
 			EE::success( 'Host entry successfully added.' );
 		} else {
