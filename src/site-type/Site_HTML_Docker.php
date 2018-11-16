@@ -36,12 +36,8 @@ class Site_HTML_Docker {
 		if ( ! empty( $filters['nohttps'] ) && $filters['nohttps'] ) {
 			$nginx['environment']['env'][] = [ 'name' => 'HTTPS_METHOD=nohttps' ];
 		}
-		$nginx['volumes'] = [
-			'vol' => [
-				[ 'name' => 'htdocs:/var/www' ],
-				[ 'name' => 'config_nginx:/usr/local/openresty/nginx/conf' ],
-				[ 'name' => 'log_nginx:/var/log/nginx' ],
-			],
+		$nginx['volumes']  = [
+			'vol' => \EE_DOCKER::get_mounting_volume_array( $volumes ),
 		];
 		$nginx['labels']   = [
 			'label' => [
@@ -68,7 +64,7 @@ class Site_HTML_Docker {
 			];
 		}
 
-		$volumes = [
+		$external_volumes = [
 			'external_vols' => [
 				[ 'prefix' => $filters['site_prefix'], 'ext_vol_name' => 'htdocs' ],
 				[ 'prefix' => $filters['site_prefix'], 'ext_vol_name' => 'config_nginx' ],
@@ -79,8 +75,8 @@ class Site_HTML_Docker {
 		$base[] = $nginx;
 
 		$binding = [
-			'services'        => $base,
-			'network'         => [
+			'services' => $base,
+			'network'  => [
 				'networks_labels' => [
 					'label' => [
 						[ 'name' => 'org.label-schema.vendor=EasyEngine' ],
@@ -88,8 +84,11 @@ class Site_HTML_Docker {
 					],
 				],
 			],
-			'created_volumes' => $volumes,
 		];
+
+		if ( ! IS_DARWIN ) {
+			$binding['created_volumes'] = $external_volumes;
+		}
 
 		$docker_compose_yml = mustache_render( SITE_TEMPLATE_ROOT . '/docker-compose.mustache', $binding );
 
