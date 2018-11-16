@@ -87,7 +87,6 @@ class HTML extends EE_Site_Command {
 
 		$this->check_site_count();
 		\EE\Utils\delem_log( 'site create start' );
-		\EE::warning( 'This is a beta version. Please don\'t use it in production.' );
 		$this->logger->debug( 'args:', $args );
 		$this->logger->debug( 'assoc_args:', empty( $assoc_args ) ? [ 'NULL' ] : $assoc_args );
 		$this->site_data['site_url']  = strtolower( \EE\Utils\remove_trailing_slash( $args[0] ) );
