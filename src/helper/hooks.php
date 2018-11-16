@@ -53,7 +53,7 @@ function cleanup_redis_entries( $site_url ) {
 
 	$site_data = Site::find( $site_url );
 
-	if ( ! $site_data && GLOBAL_REDIS !== $site_data->cache_host ) {
+	if ( ! $site_data || GLOBAL_REDIS !== $site_data->cache_host ) {
 		return;
 	}
 
