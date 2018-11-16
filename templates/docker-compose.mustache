@@ -28,7 +28,7 @@ services:
     {{#volumes}}
     volumes:
     {{#vol}}
-      - "{{name}}"
+      - "{{.}}"
     {{/vol}}
     {{/volumes}}
     {{#environment}}
