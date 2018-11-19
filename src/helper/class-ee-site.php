@@ -533,7 +533,7 @@ abstract class EE_Site_Command {
 		// Need second reload sometimes for changes to reflect.
 		\EE\Site\Utils\reload_global_nginx_proxy();
 
-		$is_www_or_non_www_pointed = $this->check_www_or_non_www_domain( $this->site_data['site_url'], $this->site_data['site_fs_path'] );
+		$is_www_or_non_www_pointed = $this->check_www_or_non_www_domain( $this->site_data['site_url'], $this->site_data['site_fs_path'] ) || $$this->site_data['site_ssl_wildcard'];
 		if ( ! $is_www_or_non_www_pointed ) {
 			$fs          = new Filesystem();
 			$confd_path  = EE_ROOT_DIR . '/services/nginx-proxy/conf.d/';
@@ -544,7 +544,7 @@ abstract class EE_Site_Command {
 
 		if ( $this->site_data['site_ssl'] ) {
 			if ( ! $site_enable ) {
-				$this->init_ssl( $this->site_data['site_url'], $this->site_data['site_fs_path'], $this->site_data['site_ssl'], $this->site_data['site_ssl_wildcard'] );
+				$this->init_ssl( $this->site_data['site_url'], $this->site_data['site_fs_path'], $this->site_data['site_ssl'], $this->site_data['site_ssl_wildcard'], $is_www_or_non_www_pointed );
 
 				$this->dump_docker_compose_yml( [ 'nohttps' => false ] );
 				\EE\Site\Utils\start_site_containers( $this->site_data['site_fs_path'], $containers_to_start );
@@ -593,17 +593,17 @@ abstract class EE_Site_Command {
 	 * @param string $site_fs_path Webroot of the site.
 	 * @param string $ssl_type     Type of ssl cert to issue.
 	 * @param bool $wildcard       SSL with wildcard or not.
-	 * @param bool $add_le_on_www  Allow LetsEncrypt on www subdomain.
+	 * @param bool $www_or_non_www Allow LetsEncrypt on www or non-www subdomain.
 	 *
 	 * @throws \EE\ExitException If --ssl flag has unrecognized value.
 	 * @throws \Exception
 	 */
-	protected function init_ssl( $site_url, $site_fs_path, $ssl_type, $wildcard = false, $add_le_on_www = false ) {
+	protected function init_ssl( $site_url, $site_fs_path, $ssl_type, $wildcard = false, $www_or_non_www = false ) {
 
 		\EE::debug( 'Starting SSL procedure' );
 		if ( 'le' === $ssl_type ) {
 			\EE::debug( 'Initializing LE' );
-			$this->init_le( $site_url, $site_fs_path, $wildcard, $add_le_on_www );
+			$this->init_le( $site_url, $site_fs_path, $wildcard, $www_or_non_www );
 		} elseif ( 'inherit' === $ssl_type ) {
 			if ( $wildcard ) {
 				throw new \Exception( 'Cannot use --wildcard with --ssl=inherit', false );
@@ -621,14 +621,13 @@ abstract class EE_Site_Command {
 	 * @param string $site_url     Name of the site for ssl.
 	 * @param string $site_fs_path Webroot of the site.
 	 * @param bool $wildcard       SSL with wildcard or not.
-	 * @param bool $add_le_on_www  Allow LetsEncrypt on www subdomain.
+	 * @param bool $www_or_non_www Allow LetsEncrypt on www or non-www subdomain.
 	 */
-	protected function init_le( $site_url, $site_fs_path, $wildcard = false, $add_le_on_www = false ) {
+	protected function init_le( $site_url, $site_fs_path, $wildcard = false, $www_or_non_www ) {
 		$preferred_challenge = \EE\Utils\get_config_value( 'preferred_ssl_challenge', '' );
 		$is_solver_dns       = ( $wildcard || 'dns' === $preferred_challenge ) ? true : false;
 		\EE::debug( 'Wildcard in init_le: ' . ( bool ) $wildcard );
 
-		$this->site_data['site_url']          = $site_url;
 		$this->site_data['site_fs_path']      = $site_fs_path;
 		$this->site_data['site_ssl_wildcard'] = $wildcard;
 		$client                               = new Site_Letsencrypt();
@@ -640,36 +639,42 @@ abstract class EE_Site_Command {
 			return;
 		}
 
-		$domains = $this->get_cert_domains( $site_url, $wildcard, $add_le_on_www );
+		$domains = $this->get_cert_domains( $site_url, $wildcard, $www_or_non_www );
 
 		if ( ! $client->authorize( $domains, $wildcard, $preferred_challenge ) ) {
 			return;
 		}
 		if ( $is_solver_dns ) {
-			echo \cli\Colors::colorize( '%YIMPORTANT:%n Run `ee site ssl ' . $this->site_data['site_url'] . '` once the DNS changes have propagated to complete the certification generation and installation.', null );
+			echo \cli\Colors::colorize( '%YIMPORTANT:%n Run `ee site ssl ' . $site_url . '` once the DNS changes have propagated to complete the certification generation and installation.', null );
 		} else {
-			$this->ssl( [], [] );
+			$this->ssl( [], [], $www_or_non_www );
 		}
 	}
 
 	/**
 	 * Returns all domains required by cert
 	 *
-	 * @param string $site_url    Name of site
-	 * @param $wildcard           Wildcard cert required?
-	 * @param bool $add_le_on_www Allow LetsEncrypt on www subdomain.
+	 * @param string $site_url     Name of site
+	 * @param bool $wildcard       Wildcard cert required?
+	 * @param bool $www_or_non_www Allow LetsEncrypt on www subdomain.
 	 *
 	 * @return array
 	 */
-	private function get_cert_domains( string $site_url, $wildcard, $add_le_on_www = false ): array {
+	private function get_cert_domains( string $site_url, $wildcard, $www_or_non_www = false ): array {
+		$preferred_challenge = \EE\Utils\get_config_value( 'preferred_ssl_challenge', '' );
+		$is_solver_dns       = ( $wildcard || 'dns' === $preferred_challenge ) ? true : false;
 
 		$domains = [ $site_url ];
+
 		if ( $wildcard ) {
 			$domains[] = "*.{$site_url}";
-		} else {
-			if ( true === $add_le_on_www ) {
-				$domains[] = $this->get_www_domain( $site_url );
+		} elseif ( $www_or_non_www || $is_solver_dns ) {
+			if ( 0 === strpos( $site_url, 'www.' ) ) {
+				$www_or_non_www_site_url = ltrim( $site_url, 'www.' );
+			} else {
+				$www_or_non_www_site_url = 'www.' . $site_url;
 			}
+			$domains[] = $www_or_non_www_site_url;
 		}
 
 		return $domains;
@@ -719,26 +724,6 @@ abstract class EE_Site_Command {
 	}
 
 	/**
-	 * If the domain has www in it, returns a domain without www in it.
-	 * Else returns a domain with www in it.
-	 *
-	 * @param string $site_url Name of site
-	 *
-	 * @return string Domain name with or without www
-	 */
-	private function get_www_domain( string $site_url ): string {
-
-		$has_www = ( strpos( $site_url, 'www.' ) === 0 );
-
-		if ( $has_www ) {
-			return ltrim( $site_url, 'www.' );
-		} else {
-			return 'www.' . $site_url;
-		}
-	}
-
-
-	/**
 	 * Verifies ssl challenge and also renews certificates(if expired).
 	 *
 	 * ## OPTIONS
@@ -749,7 +734,7 @@ abstract class EE_Site_Command {
 	 * [--force]
 	 * : Force renewal.
 	 */
-	public function ssl( $args = [], $assoc_args = [] ) {
+	public function ssl( $args = [], $assoc_args = [], $www_or_non_www = false ) {
 
 		EE::log( 'Starting SSL verification.' );
 
@@ -765,7 +750,7 @@ abstract class EE_Site_Command {
 		}
 
 		$force   = \EE\Utils\get_flag_value( $assoc_args, 'force' );
-		$domains = $this->get_cert_domains( $this->site_data['site_url'], $this->site_data['site_ssl_wildcard'] );
+		$domains = $this->get_cert_domains( $this->site_data['site_url'], $this->site_data['site_ssl_wildcard'], $www_or_non_www );
 		$client  = new Site_Letsencrypt();
 
 		$preferred_challenge = \EE\Utils\get_config_value( 'preferred_ssl_challenge', '' );
