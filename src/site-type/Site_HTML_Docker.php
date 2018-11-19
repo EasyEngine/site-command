@@ -10,10 +10,11 @@ class Site_HTML_Docker {
 	 * Generate docker-compose.yml according to requirement.
 	 *
 	 * @param array $filters Array to determine the docker-compose.yml generation.
+	 ** @param array $volumes Array containing volume info passable to \EE_DOCKER::get_mounting_volume_array().
 	 *
 	 * @return String docker-compose.yml content string.
 	 */
-	public function generate_docker_compose_yml( array $filters = [] ) {
+	public function generate_docker_compose_yml( array $filters = [], $volumes ) {
 		$img_versions = \EE\Utils\get_image_versions();
 		$base         = [];
 
@@ -36,12 +37,8 @@ class Site_HTML_Docker {
 		if ( ! empty( $filters['nohttps'] ) && $filters['nohttps'] ) {
 			$nginx['environment']['env'][] = [ 'name' => 'HTTPS_METHOD=nohttps' ];
 		}
-		$nginx['volumes'] = [
-			'vol' => [
-				[ 'name' => 'htdocs:/var/www' ],
-				[ 'name' => 'config_nginx:/usr/local/openresty/nginx/conf' ],
-				[ 'name' => 'log_nginx:/var/log/nginx' ],
-			],
+		$nginx['volumes']  = [
+			'vol' => \EE_DOCKER::get_mounting_volume_array( $volumes ),
 		];
 		$nginx['labels']   = [
 			'label' => [
@@ -68,7 +65,7 @@ class Site_HTML_Docker {
 			];
 		}
 
-		$volumes = [
+		$external_volumes = [
 			'external_vols' => [
 				[ 'prefix' => $filters['site_prefix'], 'ext_vol_name' => 'htdocs' ],
 				[ 'prefix' => $filters['site_prefix'], 'ext_vol_name' => 'config_nginx' ],
@@ -79,8 +76,8 @@ class Site_HTML_Docker {
 		$base[] = $nginx;
 
 		$binding = [
-			'services'        => $base,
-			'network'         => [
+			'services' => $base,
+			'network'  => [
 				'networks_labels' => [
 					'label' => [
 						[ 'name' => 'org.label-schema.vendor=EasyEngine' ],
@@ -88,8 +85,11 @@ class Site_HTML_Docker {
 					],
 				],
 			],
-			'created_volumes' => $volumes,
 		];
+
+		if ( ! IS_DARWIN ) {
+			$binding['created_volumes'] = $external_volumes;
+		}
 
 		$docker_compose_yml = mustache_render( SITE_TEMPLATE_ROOT . '/docker-compose.mustache', $binding );
 
