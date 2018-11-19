@@ -534,7 +534,7 @@ abstract class EE_Site_Command {
 		// Need second reload sometimes for changes to reflect.
 		\EE\Site\Utils\reload_global_nginx_proxy();
 
-		$is_www_or_non_www_pointed = $this->check_www_or_non_www_domain( $this->site_data['site_url'], $this->site_data['site_fs_path'] ) || $$this->site_data['site_ssl_wildcard'];
+		$is_www_or_non_www_pointed = $this->check_www_or_non_www_domain( $this->site_data['site_url'], $this->site_data['site_fs_path'] ) || $this->site_data['site_ssl_wildcard'];
 		if ( ! $is_www_or_non_www_pointed ) {
 			$fs          = new Filesystem();
 			$confd_path  = EE_ROOT_DIR . '/services/nginx-proxy/conf.d/';
