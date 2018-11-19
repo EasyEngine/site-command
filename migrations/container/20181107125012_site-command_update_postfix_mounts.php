@@ -6,6 +6,7 @@ use EE;
 use EE\Migration\Base;
 use EE\Migration\SiteContainers;
 use EE\RevertableStepProcessor;
+use EE\Model\Option;
 use EE\Model\Site;
 
 class UpdatePostfixMounts extends Base {
@@ -30,7 +31,9 @@ class UpdatePostfixMounts extends Base {
 	 */
 	public function up() {
 
-		if ( $this->skip_this_migration ) {
+		$version = Option::where( 'key', 'version' );
+		$is_rc2  = '4.0.0-rc.2';
+		if ( $this->skip_this_migration || ( $is_rc2 === substr( $version[0]->value, 0, strlen( $is_rc2 ) ) ) ) {
 			EE::debug( 'Skipping no-overlap migration as it is not needed.' );
 
 			return;

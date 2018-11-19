@@ -6,6 +6,7 @@ use EE;
 use EE\Migration\Base;
 use EE\Migration\SiteContainers;
 use EE\RevertableStepProcessor;
+use EE\Model\Option;
 use EE\Model\Site;
 
 class UpdatePhpConfig extends Base {
@@ -30,7 +31,9 @@ class UpdatePhpConfig extends Base {
 	 */
 	public function up() {
 
-		if ( $this->skip_this_migration ) {
+		$version = Option::where( 'key', 'version' );
+		$is_rc2  = '4.0.0-rc.2';
+		if ( $this->skip_this_migration || ( $is_rc2 === substr( $version[0]->value, 0, strlen( $is_rc2 ) ) ) ) {
 			EE::debug( 'Skipping no-overlap migration as it is not needed.' );
 
 			return;
@@ -87,7 +90,8 @@ class UpdatePhpConfig extends Base {
 
 			try {
 				$this->fs->remove( $site->site_fs_path . '/config/postfix' );
-			} catch ( \IOException $e ) {}
+			} catch ( \IOException $e ) {
+			}
 
 			self::$rsp->add_step(
 				"take-$site->site_url-docker-compose-backup",
@@ -238,7 +242,9 @@ class UpdatePhpConfig extends Base {
 	 */
 	public function down() {
 
-		if ( $this->skip_this_migration ) {
+		$version = Option::where( 'key', 'version' );
+		$is_rc2  = '4.0.0-rc.2';
+		if ( $this->skip_this_migration || ( $is_rc2 === substr( $version[0]->value, 0, strlen( $is_rc2 ) ) ) ) {
 			EE::debug( 'Skipping no-overlap migration down as it is not needed.' );
 
 			return;
