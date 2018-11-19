@@ -317,7 +317,6 @@ abstract class EE_Site_Command {
 
 		if ( $success ) {
 			\EE::success( sprintf( 'Site %s enabled.', $this->site_data->site_url ) );
-			\EE\Site\Utils\set_nginx_version_conf( $this->site_data->site_fs_path );
 		} else {
 			$err_msg = sprintf( 'There was error in enabling %s. Please check logs.', $this->site_data->site_url );
 			if ( $exit_on_error ) {
@@ -342,11 +341,13 @@ abstract class EE_Site_Command {
 		}
 
 		if ( true === (bool) $this->site_data['admin_tools'] ) {
-			EE::runcommand( 'admin-tools enable ' . $this->site_data['site_url'] . ' --force' );
+			$admin_tools = new \Admin_Tools_Command();
+			$admin_tools->enable( [ $this->site_data['site_url'] ], [ 'force' => true ] );
 		}
 
 		if ( true === (bool) $this->site_data['mailhog_enabled'] ) {
-			EE::runcommand( 'mailhog enable ' . $this->site_data['site_url'] );
+			$mailhog = new \Mailhog_Command();
+			$mailhog->enable( [ $this->site_data['site_url'] ], [ 'force' => true ] );
 		}
 
 		\EE::success( 'Post enable configurations complete.' );
