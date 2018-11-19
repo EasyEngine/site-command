@@ -288,7 +288,7 @@ abstract class EE_Site_Command {
 	 *     # Force enable a site.
 	 *     $ ee site enable example.com --force
 	 */
-	public function enable( $args, $assoc_args ) {
+	public function enable( $args, $assoc_args, $exit_on_error = true ) {
 
 		\EE\Utils\delem_log( 'site enable start' );
 		$force           = \EE\Utils\get_flag_value( $assoc_args, 'force' );
@@ -319,13 +319,19 @@ abstract class EE_Site_Command {
 			\EE::success( sprintf( 'Site %s enabled.', $this->site_data->site_url ) );
 			\EE\Site\Utils\set_nginx_version_conf( $this->site_data->site_fs_path );
 		} else {
-			\EE::error( sprintf( 'There was error in enabling %s. Please check logs.', $this->site_data->site_url ) );
+			$err_msg = sprintf( 'There was error in enabling %s. Please check logs.', $this->site_data->site_url );
+			if ( $exit_on_error ) {
+				\EE::error( $err_msg );
+			}
+			throw new \Exception( $err_msg );
 		}
 
 		\EE::log( 'Running post enable configurations.' );
 
 		$postfix_exists      = EE::docker()::service_exists( 'postfix', $this->site_data->site_fs_path );
 		$containers_to_start = $postfix_exists ? [ 'nginx', 'postfix' ] : [ 'nginx' ];
+
+		\EE\Site\Utils\start_site_containers( $this->site_data->site_fs_path, $containers_to_start );
 
 		$site_data_array = (array) $this->site_data;
 		$this->site_data = reset( $site_data_array );
@@ -618,7 +624,8 @@ abstract class EE_Site_Command {
 	 * @param bool $add_le_on_www  Allow LetsEncrypt on www subdomain.
 	 */
 	protected function init_le( $site_url, $site_fs_path, $wildcard = false, $add_le_on_www = false ) {
-
+		$preferred_challenge = \EE\Utils\get_config_value( 'preferred_ssl_challenge', '' );
+		$is_solver_dns       = ( $wildcard || 'dns' === $preferred_challenge ) ? true : false;
 		\EE::debug( 'Wildcard in init_le: ' . ( bool ) $wildcard );
 
 		$this->site_data['site_url']          = $site_url;
@@ -635,10 +642,10 @@ abstract class EE_Site_Command {
 
 		$domains = $this->get_cert_domains( $site_url, $wildcard, $add_le_on_www );
 
-		if ( ! $client->authorize( $domains, $wildcard ) ) {
+		if ( ! $client->authorize( $domains, $wildcard, $preferred_challenge ) ) {
 			return;
 		}
-		if ( $wildcard ) {
+		if ( $is_solver_dns ) {
 			echo \cli\Colors::colorize( '%YIMPORTANT:%n Run `ee site ssl ' . $this->site_data['site_url'] . '` once the DNS changes have propagated to complete the certification generation and installation.', null );
 		} else {
 			$this->ssl( [], [] );
@@ -761,13 +768,16 @@ abstract class EE_Site_Command {
 		$domains = $this->get_cert_domains( $this->site_data['site_url'], $this->site_data['site_ssl_wildcard'] );
 		$client  = new Site_Letsencrypt();
 
+		$preferred_challenge = \EE\Utils\get_config_value( 'preferred_ssl_challenge', '' );
+
 		try {
-			$client->check( $domains, $this->site_data['site_ssl_wildcard'] );
+			$client->check( $domains, $this->site_data['site_ssl_wildcard'], $preferred_challenge );
 		} catch ( \Exception $e ) {
 			if ( $called_by_ee ) {
 				throw $e;
 			}
 			EE::error( 'Failed to verify SSL: ' . $e->getMessage() );
+
 			return;
 		}
 
@@ -815,10 +825,22 @@ abstract class EE_Site_Command {
 		\EE::error( 'You can not create more than 27 sites' );
 	}
 
+	/**
+	 * Function to populate site-info from database.
+	 *
+	 * @param string $site_name Name of the site whose info needs to be populated.
+	 * @param string $in_array  Populate info in array if true, else in obj form.
+	 *
+	 * @ignorecommand
+	 */
+	public function populate_site_info( $site_name, $in_array = true ) {
+		$this->site_data = EE\Site\Utils\get_site_info( [ $site_name ], false, false, $in_array );
+	}
+
 	abstract public function create( $args, $assoc_args );
 
 	abstract protected function rollback();
 
-	abstract protected function dump_docker_compose_yml( $additional_filters = [] );
+	abstract public function dump_docker_compose_yml( $additional_filters = [] );
 
 }
