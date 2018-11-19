@@ -176,7 +176,7 @@ class HTML extends EE_Site_Command {
 			$this->dump_docker_compose_yml( [ 'nohttps' => true ] );
 			$this->fs->dumpFile( $site_conf_env, $env_content );
 			if ( ! IS_DARWIN ) {
-				\EE\Site\Utils\start_site_containers();
+				\EE\Site\Utils\start_site_containers( $this->site_data['site_fs_path'] );
 			}
 			$this->fs->dumpFile( $site_nginx_default_conf, $default_conf_content );
 			$this->fs->copy( $custom_conf_source, $custom_conf_dest );
