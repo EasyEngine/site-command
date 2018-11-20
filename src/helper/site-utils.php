@@ -321,6 +321,11 @@ function create_etc_hosts_entry( $site_url ) {
 	$host_line = LOCALHOST_IP . "\t$site_url";
 	$etc_hosts = file_get_contents( '/etc/hosts' );
 	if ( ! preg_match( "/\s+$site_url\$/m", $etc_hosts ) ) {
+		if ( IS_DARWIN && ! is_writable( '/etc/hosts' ) ) {
+			EE::log( 'You may need to enter password to create host entry for site.' );
+			EE::exec( 'sudo chmod g+rw /etc/hosts' );
+			EE::exec( 'sudo chown root:staff /etc/hosts' );
+		}
 		if ( EE::exec( "/bin/bash -c 'echo \"$host_line\" >> /etc/hosts'" ) ) {
 			EE::success( 'Host entry successfully added.' );
 		} else {
@@ -382,7 +387,6 @@ function start_site_containers( $site_fs_path, $containers = [] ) {
 	if ( ! EE::docker()::docker_compose_up( $site_fs_path, $containers ) ) {
 		throw new \Exception( 'There was some error in docker-compose up.' );
 	}
-	set_nginx_version_conf( $site_fs_path );
 }
 
 /**
@@ -396,7 +400,6 @@ function restart_site_containers( $site_fs_path, $containers ) {
 	chdir( $site_fs_path );
 	$all_containers = is_array( $containers ) ? implode( ' ', $containers ) : $containers;
 	EE::exec( "docker-compose restart $all_containers" );
-	set_nginx_version_conf( $site_fs_path );
 }
 
 /**
@@ -411,27 +414,6 @@ function stop_site_containers( $site_fs_path, $containers ) {
 	$all_containers = is_array( $containers ) ? implode( ' ', $containers ) : $containers;
 	EE::exec( "docker-compose stop $all_containers" );
 	EE::exec( "docker-compose rm -f $all_containers" );
-}
-
-/**
- * Function to set nginx version.conf file.
- *
- * @param string $site_fs_path Root directory of the site.
- */
-function set_nginx_version_conf( $site_fs_path ) {
-	if ( ! EE::docker()::service_exists( 'nginx', $site_fs_path ) ) {
-		return;
-	}
-	chdir( $site_fs_path );
-	$version_line    = sprintf( 'add_header X-Powered-By \"EasyEngine v%s\";', EE_VERSION );
-	$version_file    = '/version.conf';
-	$version_success = EE::exec( sprintf( 'docker-compose exec nginx bash -c \'echo "%s" > %s\'', $version_line, $version_file ), false, false, [
-		$version_file,
-		$version_line,
-	] );
-	if ( $version_success ) {
-		EE::exec( 'docker-compose exec nginx bash -c "nginx -t && nginx -s reload"' );
-	}
 }
 
 /**
