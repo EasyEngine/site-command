@@ -48,22 +48,9 @@ class Site_HTML_Docker {
 		$nginx['networks'] = [
 			'net' => [
 				[ 'name' => 'global-frontend-network' ],
+				[ 'name' => 'site-network' ],
 			],
 		];
-		if ( $filters['is_ssl'] ) {
-			$nginx['networks']['net'][] = [
-				'name'    => 'site-network',
-				'aliases' => [
-					'alias' => [
-						'name' => '${VIRTUAL_HOST}',
-					],
-				],
-			];
-		} else {
-			$nginx['networks']['net'][] = [
-				'name' => 'site-network',
-			];
-		}
 
 		$external_volumes = [
 			'external_vols' => [

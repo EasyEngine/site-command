@@ -37,16 +37,13 @@ services:
       - {{name}}
     {{/env}}
     {{/environment}}
+    external_links:
+      - ee-global-nginx-proxy:${VIRTUAL_HOST}
+    {{#volumes}}
     {{#networks}}
     networks:
     {{#net}}
       {{name}}:
-      {{#aliases}}
-        aliases:
-        {{#alias}}
-          - {{name}}
-        {{/alias}}
-      {{/aliases}}
     {{/net}}
     {{/networks}}
 {{/services}}
