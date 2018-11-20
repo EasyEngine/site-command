@@ -16,7 +16,12 @@ function get_site_name() {
 	$sites = Site::all( [ 'site_url' ] );
 
 	if ( ! empty( $sites ) ) {
-		$cwd          = getcwd();
+		if ( IS_DARWIN ) {
+			$cwd = getcwd();
+		} else {
+			$launch = EE::launch( 'pwd' );
+			$cwd    = trim( $launch->stdout );
+		}
 		$name_in_path = explode( '/', $cwd );
 
 		$site_url = array_intersect( array_column( $sites, 'site_url' ), $name_in_path );
