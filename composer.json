@@ -37,7 +37,7 @@
         ]
     },
     "require": {
-        "acmephp/core": "dev-master",
+        "acmephp/core": "1.0.0",
         "ext-openssl": "*",
         "guzzlehttp/guzzle": "^6.0",
         "league/flysystem": "^1.0.19",
