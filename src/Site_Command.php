@@ -205,12 +205,13 @@ class Site_Command {
 		}
 
 		// backward compatibility error for deprecated flags.
-		$unsupported_create_old_args = array(
+		$unsupported_create_old_args = [
 			'w3tc',
 			'wpsc',
 			'wpfc',
 			'pagespeed',
-		);
+			'hhvm',
+		];
 
 		$old_arg = array_intersect( $unsupported_create_old_args, array_keys( $assoc_args ) );
 
