@@ -71,6 +71,12 @@ class Site_Command {
 			return;
 		}
 
+		$last_arg = array_pop( $args );
+		if ( substr( $last_arg, 0, 4 ) === 'http' ) {
+			$last_arg = str_replace( [ 'https://', 'http://' ], '', $last_arg );
+		}
+		$args[] = EE\Utils\remove_trailing_slash( $last_arg );
+
 		$site_types = self::get_site_types();
 		$assoc_args = $this->convert_old_args_to_new_args( $args, $assoc_args );
 
@@ -124,12 +130,8 @@ class Site_Command {
 		$type = $default_type;
 
 		$last_arg = array_pop( $args );
-		if ( substr( $last_arg, 0, 4 ) === 'http' ) {
-			$last_arg = str_replace( [ 'https://', 'http://' ], '', $last_arg );
-		}
-		$url_path = EE\Utils\remove_trailing_slash( $last_arg );
 
-		$arg_search = Site::find( $url_path, [ 'site_type' ] );
+		$arg_search = Site::find( $last_arg, [ 'site_type' ] );
 
 		if ( $arg_search ) {
 			return $arg_search->site_type;
@@ -137,7 +139,7 @@ class Site_Command {
 
 		$site_name = EE\Site\Utils\get_site_name();
 		if ( $site_name ) {
-			if ( strpos( $url_path, '.' ) !== false ) {
+			if ( strpos( $last_arg, '.' ) !== false ) {
 				$args[] = $site_name;
 				EE::error(
 					sprintf(
