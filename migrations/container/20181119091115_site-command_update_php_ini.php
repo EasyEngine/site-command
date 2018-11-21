@@ -46,7 +46,6 @@ class UpdatePhpIni extends Base {
 			}
 
 			EE::debug( "Starting php-ini path update for: $site->site_url" );
-			EE::exec( 'sed -i "s/^#\(.*\)/;\1/g" ' . $old_php_ini );
 
 			$old_php_ini           = $site->site_fs_path . '/config/php/php/php.ini';
 			$new_php_ini           = $site->site_fs_path . '/config/php/php/conf.d/custom.ini';
@@ -55,6 +54,8 @@ class UpdatePhpIni extends Base {
 			$backup_prefix         = EE_BACKUP_DIR . '/' . $site->site_url . '/php';
 			$old_ini_backup        = $backup_prefix . '/php.ini';
 			$old_production_backup = $backup_prefix . '/php.ini-production';
+
+			EE::exec( 'sed -i "s/^#\(.*\)/;\1/g" ' . $old_php_ini );
 
 			self::$rsp->add_step(
 				"take-$site->site_url-php-ini-backup",
