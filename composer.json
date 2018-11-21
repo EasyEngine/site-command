@@ -22,10 +22,22 @@
         "branch-alias": {
             "dev-master": "1.x-dev"
         },
-        "bundled": true
+        "bundled": true,
+        "commands": [
+            "site create --type=html",
+            "site delete",
+            "site info --type=html",
+            "site enable",
+            "site disable",
+            "site info",
+            "site ssl",
+            "site list",
+            "site reload --type=html",
+            "site restart --type=html"
+        ]
     },
     "require": {
-        "acmephp/core": "dev-master",
+        "acmephp/core": "1.0.0",
         "ext-openssl": "*",
         "guzzlehttp/guzzle": "^6.0",
         "league/flysystem": "^1.0.19",

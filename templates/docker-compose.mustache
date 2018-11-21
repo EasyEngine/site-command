@@ -28,7 +28,7 @@ services:
     {{#volumes}}
     volumes:
     {{#vol}}
-      - "{{name}}"
+      - "{{.}}"
     {{/vol}}
     {{/volumes}}
     {{#environment}}
@@ -37,13 +37,30 @@ services:
       - {{name}}
     {{/env}}
     {{/environment}}
+    external_links:
+      - ee-global-nginx-proxy:${VIRTUAL_HOST}
     {{#networks}}
     networks:
     {{#net}}
-      - {{name}}
+      {{name}}:
+      {{#aliases}}
+        aliases:
+        {{#alias}}
+          - {{name}}
+        {{/alias}}
+      {{/aliases}}
     {{/net}}
     {{/networks}}
 {{/services}}
+
+{{#created_volumes}}
+volumes:
+  {{#external_vols}}
+  {{ext_vol_name}}:
+    external:
+      name: {{prefix}}_{{ext_vol_name}}
+  {{/external_vols}}
+{{/created_volumes}}
 
 {{#network}}
 networks:
@@ -55,7 +72,7 @@ networks:
      - "{{name}}"
     {{/label}}
     {{/networks_labels}}
-  global-network:
+  global-frontend-network:
     external:
-      name: ee-global-network
+      name: ee-global-frontend-network
 {{/network}}

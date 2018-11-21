@@ -2,7 +2,7 @@
 
 namespace EE\Site\Type;
 
-use function \EE\Utils\mustache_render;
+use function EE\Utils\mustache_render;
 
 class Site_HTML_Docker {
 
@@ -10,19 +10,15 @@ class Site_HTML_Docker {
 	 * Generate docker-compose.yml according to requirement.
 	 *
 	 * @param array $filters Array to determine the docker-compose.yml generation.
+	 ** @param array $volumes Array containing volume info passable to \EE_DOCKER::get_mounting_volume_array().
 	 *
 	 * @return String docker-compose.yml content string.
 	 */
-	public function generate_docker_compose_yml( array $filters = [] ) {
+	public function generate_docker_compose_yml( array $filters = [], $volumes ) {
 		$img_versions = \EE\Utils\get_image_versions();
 		$base         = [];
 
 		$restart_default = [ 'name' => 'always' ];
-		$network_default = [
-			'net' => [
-				[ 'name' => 'site-network' ]
-			]
-		];
 
 		// nginx configuration.
 		$nginx['service_name'] = [ 'name' => 'nginx' ];
@@ -38,24 +34,30 @@ class Site_HTML_Docker {
 				[ 'name' => 'HSTS=off' ],
 			],
 		];
-		$nginx['volumes']     = [
-			'vol' => [
-				[ 'name' => './app/src:/var/www/htdocs' ],
-				[ 'name' => './config/nginx/default.conf:/etc/nginx/conf.d/default.conf' ],
-				[ 'name' => './logs/nginx:/var/log/nginx' ],
-				[ 'name' => './config/nginx/common:/usr/local/openresty/nginx/conf/common' ],
-			],
+		if ( ! empty( $filters['nohttps'] ) && $filters['nohttps'] ) {
+			$nginx['environment']['env'][] = [ 'name' => 'HTTPS_METHOD=nohttps' ];
+		}
+		$nginx['volumes']  = [
+			'vol' => \EE_DOCKER::get_mounting_volume_array( $volumes ),
 		];
-		$nginx['labels']      = [
+		$nginx['labels']   = [
 			'label' => [
 				'name' => 'io.easyengine.site=${VIRTUAL_HOST}',
 			],
 		];
-		$nginx['networks']    = [
+		$nginx['networks'] = [
 			'net' => [
+				[ 'name' => 'global-frontend-network' ],
 				[ 'name' => 'site-network' ],
-				[ 'name' => 'global-network' ],
-			]
+			],
+		];
+
+		$external_volumes = [
+			'external_vols' => [
+				[ 'prefix' => $filters['site_prefix'], 'ext_vol_name' => 'htdocs' ],
+				[ 'prefix' => $filters['site_prefix'], 'ext_vol_name' => 'config_nginx' ],
+				[ 'prefix' => $filters['site_prefix'], 'ext_vol_name' => 'log_nginx' ],
+			],
 		];
 
 		$base[] = $nginx;
@@ -71,6 +73,10 @@ class Site_HTML_Docker {
 				],
 			],
 		];
+
+		if ( ! IS_DARWIN ) {
+			$binding['created_volumes'] = $external_volumes;
+		}
 
 		$docker_compose_yml = mustache_render( SITE_TEMPLATE_ROOT . '/docker-compose.mustache', $binding );
 

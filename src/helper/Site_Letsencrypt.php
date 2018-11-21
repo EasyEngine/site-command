@@ -7,34 +7,32 @@ use AcmePhp\Cli\Serializer\PemEncoder;
 use AcmePhp\Cli\Serializer\PemNormalizer;
 use AcmePhp\Core\AcmeClient;
 use AcmePhp\Core\Challenge\ChainValidator;
-use AcmePhp\Core\Challenge\WaitingValidator;
-use AcmePhp\Core\Challenge\Http\SimpleHttpSolver;
-use AcmePhp\Core\Challenge\Http\HttpValidator;
-use AcmePhp\Core\Challenge\Dns\SimpleDnsSolver;
 use AcmePhp\Core\Challenge\Dns\DnsValidator;
+use AcmePhp\Core\Challenge\Dns\SimpleDnsSolver;
+use AcmePhp\Core\Challenge\Http\HttpValidator;
+use AcmePhp\Core\Challenge\Http\SimpleHttpSolver;
+use AcmePhp\Core\Challenge\WaitingValidator;
 use AcmePhp\Core\Exception\Protocol\ChallengeNotSupportedException;
-use AcmePhp\Core\Http\SecureHttpClient;
 use AcmePhp\Core\Http\Base64SafeEncoder;
+use AcmePhp\Core\Http\SecureHttpClient;
 use AcmePhp\Core\Http\ServerErrorHandler;
-use AcmePhp\Ssl\Certificate;
 use AcmePhp\Ssl\CertificateRequest;
-use AcmePhp\Ssl\CertificateResponse;
 use AcmePhp\Ssl\DistinguishedName;
-use AcmePhp\Ssl\Parser\KeyParser;
-use AcmePhp\Ssl\Parser\CertificateParser;
 use AcmePhp\Ssl\Generator\KeyPairGenerator;
+use AcmePhp\Ssl\Parser\CertificateParser;
+use AcmePhp\Ssl\Parser\KeyParser;
 use AcmePhp\Ssl\Signer\CertificateRequestSigner;
 use AcmePhp\Ssl\Signer\DataSigner;
+use GuzzleHttp\Client;
+use League\Flysystem\Adapter\Local;
+use League\Flysystem\Adapter\NullAdapter;
+use League\Flysystem\Filesystem;
 use Symfony\Component\Console\Helper\Table;
 use Symfony\Component\Console\Output\ConsoleOutput;
 use Symfony\Component\Serializer\Encoder\JsonEncoder;
 use Symfony\Component\Serializer\Normalizer\GetSetMethodNormalizer;
 use Symfony\Component\Serializer\Serializer;
-use League\Flysystem\Filesystem;
-use League\Flysystem\Adapter\Local;
-use League\Flysystem\Adapter\NullAdapter;
-use GuzzleHttp\Client;
-use function \EE\Site\Utils\reload_global_nginx_proxy;
+use function EE\Site\Utils\reload_global_nginx_proxy;
 
 
 class Site_Letsencrypt {
@@ -53,7 +51,7 @@ class Site_Letsencrypt {
 	private $conf_dir;
 
 	function __construct() {
-		$this->conf_dir = EE_CONF_ROOT . '/acme-conf';
+		$this->conf_dir = EE_ROOT_DIR . '/services/nginx-proxy/acme-conf';
 		$this->setRepository();
 		$this->setAcmeClient();
 	}
@@ -115,16 +113,15 @@ class Site_Letsencrypt {
 	 *
 	 * @param string $email Mail id to be registered.
 	 *
+	 * @throws \Exception
 	 * @return bool Success.
 	 */
 	public function register( $email ) {
 		try {
 			$this->client->registerAccount( null, $email );
 		} catch ( \Exception $e ) {
-			\EE::warning( $e->getMessage() );
 			\EE::warning( 'It seems you\'re in local environment or used invalid email or there is some issue with network, please check logs. Skipping letsencrypt.' );
-
-			return false;
+			throw  $e;
 		}
 		\EE::debug( "Account with email id: $email registered successfully!" );
 
@@ -137,18 +134,18 @@ class Site_Letsencrypt {
 	 * @param array $domains Domains to be authorized.
 	 * @param bool $wildcard Is the authorization for wildcard or not.
 	 *
+	 * @throws \Exception
 	 * @return bool Success.
 	 */
-	public function authorize( Array $domains, $wildcard = false ) {
-		$solver     = $wildcard ? new SimpleDnsSolver( null, new ConsoleOutput() ) : new SimpleHttpSolver();
-		$solverName = $wildcard ? 'dns-01' : 'http-01';
+	public function authorize( Array $domains, $wildcard = false, $preferred_challenge = '' ) {
+		$is_solver_dns = ( $wildcard || 'dns' === $preferred_challenge ) ? true : false;
+		$solver        = $is_solver_dns ? new SimpleDnsSolver( null, new ConsoleOutput() ) : new SimpleHttpSolver();
+		$solverName    = $is_solver_dns ? 'dns-01' : 'http-01';
 		try {
 			$order = $this->client->requestOrder( $domains );
 		} catch ( \Exception $e ) {
-			\EE::warning( $e->getMessage() );
 			\EE::warning( 'It seems you\'re in local environment or using non-public domain, please check logs. Skipping letsencrypt.' );
-
-			return false;
+			throw $e;
 		}
 
 		$authorizationChallengesToSolve = [];
@@ -177,13 +174,13 @@ class Site_Letsencrypt {
 			\EE::debug( 'Solving authorization challenge: Domain: ' . $authorizationChallenge->getDomain() . ' Challenge: ' . print_r( $authorizationChallenge->toArray(), true ) );
 			$solver->solve( $authorizationChallenge );
 
-			if ( ! $wildcard ) {
+			if ( ! $is_solver_dns ) {
 				$token   = $authorizationChallenge->toArray()['token'];
 				$payload = $authorizationChallenge->toArray()['payload'];
 
 				$fs = new \Symfony\Component\Filesystem\Filesystem();
-				$fs->copy( SITE_TEMPLATE_ROOT . '/vhost.d_default_letsencrypt.mustache', EE_CONF_ROOT . '/nginx/vhost.d/default' );
-				$challange_dir = EE_CONF_ROOT . '/nginx/html/.well-known/acme-challenge';
+				$fs->copy( SITE_TEMPLATE_ROOT . '/vhost.d_default_letsencrypt.mustache', EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/default' );
+				$challange_dir = EE_ROOT_DIR . '/services/nginx-proxy/html/.well-known/acme-challenge';
 				if ( ! $fs->exists( $challange_dir ) ) {
 					$fs->mkdir( $challange_dir );
 				}
@@ -199,9 +196,10 @@ class Site_Letsencrypt {
 		return true;
 	}
 
-	public function check( Array $domains, $wildcard = false ) {
-		\EE::debug( ( 'Starting check with solver ' ) . ( $wildcard ? 'dns' : 'http' ) );
-		$solver    = $wildcard ? new SimpleDnsSolver( null, new ConsoleOutput() ) : new SimpleHttpSolver();
+	public function check( Array $domains, $wildcard = false, $preferred_challenge = '' ) {
+		$is_solver_dns = ( $wildcard || 'dns' === $preferred_challenge ) ? true : false;
+		\EE::debug( ( 'Starting check with solver ' ) . ( $is_solver_dns ? 'dns' : 'http' ) );
+		$solver    = $is_solver_dns ? new SimpleDnsSolver( null, new ConsoleOutput() ) : new SimpleHttpSolver();
 		$validator = new ChainValidator(
 			[
 				new WaitingValidator( new HttpValidator() ),
@@ -244,7 +242,7 @@ class Site_Letsencrypt {
 			if ( ! $authorizationChallenge->isValid() ) {
 				\EE::debug( sprintf( 'Testing the challenge for domain %s', $domain ) );
 				if ( ! $validator->isValid( $authorizationChallenge ) ) {
-					\EE::warning( sprintf( 'Can not valid challenge for domain %s', $domain ) );
+					throw new \Exception( sprintf( 'Can not validate challenge for domain %s', $domain ) );
 				}
 
 				\EE::debug( sprintf( 'Requesting authorization check for domain %s', $domain ) );
@@ -252,11 +250,13 @@ class Site_Letsencrypt {
 					$this->client->challengeAuthorization( $authorizationChallenge );
 				} catch ( \Exception $e ) {
 					\EE::debug( $e->getMessage() );
-					\EE::warning( 'Challange Authorization failed. Check logs and check if your domain is pointed correctly to this server.' );
-					$site_name = isset( $domains[1] ) ? $domains[1] : $domains[0];
-					\EE::log( "Re-run `ee site le $site_name` after fixing the issue." );
+					\EE::warning( 'Challenge Authorization failed. Check logs and check if your domain is pointed correctly to this server.' );
 
-					return false;
+					$site_name = isset( $domains[1] ) ? $domains[1] : $domains[0];
+					$site_name = str_replace( '*.', '', $site_name, 1 );
+					
+					\EE::log( "Re-run `ee site ssl $site_name` after fixing the issue." );
+					throw $e;
 				}
 				$authorizationChallengeToCleanup[] = $authorizationChallenge;
 			}
@@ -341,9 +341,9 @@ class Site_Letsencrypt {
 		$crt_source_file   = strtr( $this->conf_dir . '/' . Repository::PATH_DOMAIN_CERT_FULLCHAIN, [ '{domain}' => $domain ] );
 		$chain_source_file = strtr( $this->conf_dir . '/' . Repository::PATH_DOMAIN_CERT_CHAIN, [ '{domain}' => $domain ] );
 
-		$key_dest_file   = EE_CONF_ROOT . '/nginx/certs/' . $domain . '.key';
-		$crt_dest_file   = EE_CONF_ROOT . '/nginx/certs/' . $domain . '.crt';
-		$chain_dest_file = EE_CONF_ROOT . '/nginx/certs/' . $domain . '.chain.pem';
+		$key_dest_file   = EE_ROOT_DIR . '/services/nginx-proxy/certs/' . $domain . '.key';
+		$crt_dest_file   = EE_ROOT_DIR . '/services/nginx-proxy/certs/' . $domain . '.crt';
+		$chain_dest_file = EE_ROOT_DIR . '/services/nginx-proxy/certs/' . $domain . '.chain.pem';
 
 		copy( $key_source_file, $key_dest_file );
 		copy( $crt_source_file, $crt_dest_file );
@@ -396,7 +396,7 @@ class Site_Letsencrypt {
 
 			// Distinguished name
 			\EE::debug( 'Loading domain distinguished name...' );
-			$distinguishedName = $this->getOrCreateDistinguishedName( $domain, $alternativeNames );
+			$distinguishedName = $this->getOrCreateDistinguishedName( $domain, $alternativeNames, \EE\Utils\get_config_value( 'le-mail' ) );
 
 			// Order
 			$domains = array_merge( [ $domain ], $alternativeNames );
@@ -413,7 +413,7 @@ class Site_Letsencrypt {
 			\EE::log( 'Certificate received' );
 
 			$this->repository->storeDomainCertificate( $domain, $response->getCertificate() );
-			$this->log( 'Certificate stored' );
+			\EE::log( 'Certificate stored' );
 
 			// Post-generate actions
 			$this->moveCertsToNginxProxy( $domain );
@@ -548,8 +548,8 @@ class Site_Letsencrypt {
 
 		$fs = new \Symfony\Component\Filesystem\Filesystem();
 
-		$challange_dir = EE_CONF_ROOT . '/nginx/html/.well-known';
-		$challange_rule_file = EE_CONF_ROOT . '/nginx/vhost.d/default';
+		$challange_dir = EE_ROOT_DIR . '/services/nginx-proxy/html/.well-known';
+		$challange_rule_file = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/default';
 		if ( $fs->exists( $challange_rule_file ) ) {
 			$fs->remove( $challange_rule_file );
 		}
