@@ -46,6 +46,7 @@ class UpdatePhpIni extends Base {
 			}
 
 			EE::debug( "Starting php-ini path update for: $site->site_url" );
+			EE::exec( 'sed -i "s/^#\(.*\)/;\1/g" ' . $old_php_ini );
 
 			$old_php_ini           = $site->site_fs_path . '/config/php/php/php.ini';
 			$new_php_ini           = $site->site_fs_path . '/config/php/php/conf.d/custom.ini';
