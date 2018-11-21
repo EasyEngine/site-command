@@ -75,7 +75,9 @@ class Site_Command {
 		if ( substr( $last_arg, 0, 4 ) === 'http' ) {
 			$last_arg = str_replace( [ 'https://', 'http://' ], '', $last_arg );
 		}
-		$args[] = EE\Utils\remove_trailing_slash( $last_arg );
+		if ( ! empty( $last_arg ) ) {
+			$args[] = EE\Utils\remove_trailing_slash( $last_arg );
+		}
 
 		$site_types = self::get_site_types();
 		$assoc_args = $this->convert_old_args_to_new_args( $args, $assoc_args );
