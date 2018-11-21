@@ -165,9 +165,14 @@ class Site_Command {
 	 */
 	private function convert_old_args_to_new_args( $args, $assoc_args ) {
 
-		if ( ! in_array( reset( $args ), [ 'create', 'update' ], true ) && ! empty( $args ) ) {
+		if (
+			( ! in_array( reset( $args ), [ 'create', 'update' ], true ) &&
+			  ! empty( $args ) ) ||
+			! empty( $assoc_args['type'] )
+		) {
 			return $assoc_args;
 		}
+
 		$ee3_compat_array_map_to_type = [
 			'wp'          => [ 'type' => 'wp' ],
 			'wpsubdom'    => [ 'type' => 'wp', 'mu' => 'subdom' ],
