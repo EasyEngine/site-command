@@ -71,6 +71,12 @@ class Site_Command {
 			return;
 		}
 
+		$last_arg = array_pop( $args );
+		if ( substr( $last_arg, 0, 4 ) === 'http' ) {
+			$last_arg = str_replace( [ 'https://', 'http://' ], '', $last_arg );
+		}
+		$args[] = EE\Utils\remove_trailing_slash( $last_arg );
+
 		$site_types = self::get_site_types();
 		$assoc_args = $this->convert_old_args_to_new_args( $args, $assoc_args );
 
@@ -124,12 +130,8 @@ class Site_Command {
 		$type = $default_type;
 
 		$last_arg = array_pop( $args );
-		if ( substr( $last_arg, 0, 4 ) === 'http' ) {
-			$last_arg = str_replace( [ 'https://', 'http://' ], '', $last_arg );
-		}
-		$url_path = EE\Utils\remove_trailing_slash( $last_arg );
 
-		$arg_search = Site::find( $url_path, [ 'site_type' ] );
+		$arg_search = Site::find( $last_arg, [ 'site_type' ] );
 
 		if ( $arg_search ) {
 			return $arg_search->site_type;
@@ -137,7 +139,7 @@ class Site_Command {
 
 		$site_name = EE\Site\Utils\get_site_name();
 		if ( $site_name ) {
-			if ( strpos( $url_path, '.' ) !== false ) {
+			if ( strpos( $last_arg, '.' ) !== false ) {
 				$args[] = $site_name;
 				EE::error(
 					sprintf(
@@ -163,9 +165,14 @@ class Site_Command {
 	 */
 	private function convert_old_args_to_new_args( $args, $assoc_args ) {
 
-		if ( ! in_array( reset( $args ), [ 'create', 'update' ], true ) && ! empty( $args ) ) {
+		if (
+			( ! in_array( reset( $args ), [ 'create', 'update' ], true ) &&
+			  ! empty( $args ) ) ||
+			! empty( $assoc_args['type'] )
+		) {
 			return $assoc_args;
 		}
+
 		$ee3_compat_array_map_to_type = [
 			'wp'          => [ 'type' => 'wp' ],
 			'wpsubdom'    => [ 'type' => 'wp', 'mu' => 'subdom' ],
@@ -203,12 +210,13 @@ class Site_Command {
 		}
 
 		// backward compatibility error for deprecated flags.
-		$unsupported_create_old_args = array(
+		$unsupported_create_old_args = [
 			'w3tc',
 			'wpsc',
 			'wpfc',
 			'pagespeed',
-		);
+			'hhvm',
+		];
 
 		$old_arg = array_intersect( $unsupported_create_old_args, array_keys( $assoc_args ) );
 
