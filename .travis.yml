@@ -24,7 +24,7 @@ script:
   - sudo ./vendor/bin/behat
 
 after_script:
-  - cat /opt/easyengine/ee.log
+  - cat /opt/easyengine/logs/ee.log
 
 cache:
   directories:

@@ -17,6 +17,7 @@ cp -R ../$TEST_COMMAND/features .
 
 # Update repo branches
 if [[ "$TRAVIS_BRANCH" != "master" ]]; then
+    sed -i 's/\:\ \"\(.*\)\"/\:\ \"\1-nightly\"/g' img-versions.json
     sed -i 's/\(easyengine\/.*\):\ \".*\"/\1:\ \"dev-develop\"/' composer.json
 fi
 
