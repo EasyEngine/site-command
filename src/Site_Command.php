@@ -177,6 +177,7 @@ class Site_Command {
 
 		$ee3_compat_array_map_to_type = [
 			'wp'          => [ 'type' => 'wp' ],
+			'vip'         => [ 'type' => 'wp', 'vip' => ( $assoc_args['vip'] ?? '' ) ],
 			'wpsubdom'    => [ 'type' => 'wp', 'mu' => 'subdom' ],
 			'wpsubdir'    => [ 'type' => 'wp', 'mu' => 'subdir' ],
 			'wpredis'     => [ 'type' => 'wp', 'cache' => true ],
@@ -189,8 +190,8 @@ class Site_Command {
 
 		foreach ( $ee3_compat_array_map_to_type as $from => $to ) {
 			if ( isset( $assoc_args[ $from ] ) ) {
-				$assoc_args = array_merge( $assoc_args, $to );
 				unset( $assoc_args[ $from ] );
+				$assoc_args = array_merge( $assoc_args, $to );
 			}
 		}
 

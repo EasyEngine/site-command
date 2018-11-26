@@ -40,6 +40,11 @@ abstract class EE_Site_Command {
 	 */
 	protected $site_data;
 
+	/**
+	 * @var array $site_meta Associative array containing essential site meta related information.
+	 */
+	protected $site_meta;
+
 	public function __construct() {
 
 		pcntl_signal( SIGTERM, [ $this, 'rollback' ] );
