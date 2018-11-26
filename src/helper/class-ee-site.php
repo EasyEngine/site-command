@@ -479,6 +479,51 @@ abstract class EE_Site_Command {
 	}
 
 	/**
+	 * Checkout to root directory of particular website.
+	 *
+	 * * ## OPTIONS
+	 *
+	 * [<site-name>]
+	 * : Name of website to be checkout.
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     $ ee site cd example.com
+	 *
+	 * @subcommand cd
+	 */
+	public function checkout( $args, $assoc_args ) {
+
+		\EE\Utils\delem_log( 'site checkout start' );
+		$args            = auto_site_name( $args, 'site', __FUNCTION__ );
+		$this->site_data = get_site_info( $args, false, true, false );
+
+		if ( empty( $this->site_data->site_fs_path ) ) {
+
+			\EE::error( sprintf( '%s site\'s path is missing.', $this->site_data->site_url ) );
+
+			return false;
+		}
+
+		\EE::log( sprintf( 'Checking out for %s.', $this->site_data->site_url ) );
+
+		$success = chdir( $this->site_data->site_fs_path );
+
+		if ( $success ) {
+
+			\EE::success( sprintf( 'Site %s is checkout.', $this->site_data->site_url ) );
+
+		} else {
+
+			$err_msg = sprintf( 'There was error in checking out %s. Please check logs.', $this->site_data->site_url );
+
+			throw new \Exception( $err_msg );
+		}
+
+		\EE\Utils\delem_log( 'site checkout end' );
+	}
+
+	/**
 	 * Executes reload commands. It needs separate handling as commands to reload each service is different.
 	 *
 	 * @param array $services        Services to reload.
