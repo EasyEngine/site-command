@@ -438,6 +438,83 @@ abstract class EE_Site_Command {
 	}
 
 	/**
+	 * Clears Object and Page cache for site.
+	 *
+	 * ## OPTIONS
+	 *
+	 * [<site-name>]
+	 * : Name of website to be enabled.
+	 *
+	 * [--page]
+	 * : Clear page cache.
+	 *
+	 * [--object]
+	 * : Clear object cache.
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     # Clear Both cache type for site.
+	 *     $ ee site clean example.com
+	 *
+	 *     # Clear Object cache for site.
+	 *     $ ee site clean example.com --object
+	 *
+	 *     # Clear Page cache for site.
+	 *     $ ee site clean example.com --page
+	 */
+	public function clean( $args, $assoc_args ) {
+
+		\EE\Utils\delem_log( 'site clean start' );
+		$object          = \EE\Utils\get_flag_value( $assoc_args, 'object' );
+		$page            = \EE\Utils\get_flag_value( $assoc_args, 'page' );
+		$args            = auto_site_name( $args, 'site', __FUNCTION__ );
+		$this->site_data = get_site_info( $args, false, true, false );
+		$purge_key       = '';
+		$error           = [];
+
+		// No param passed.
+		if ( empty( $object ) && empty( $page ) ) {
+			$object = $page = true;
+		}
+
+		// Object cache clean.
+		if ( ! empty( $object ) ) {
+			if ( 1 === intval( $this->site_data->cache_mysql_query ) ) {
+				$purge_key = $this->site_data->site_url . '_obj';
+			} else {
+				$error[] = 'Site object cache is disabled.';
+			}
+		}
+
+		// Page cache clean.
+		if ( ! empty( $page ) ) {
+			if ( 1 === intval( $this->site_data->cache_nginx_fullpage ) ) {
+				$purge_key = $this->site_data->site_url . '_page';
+			} else {
+				$error[] = 'Site page cache is disabled.';
+			}
+		}
+
+		// If Page and Object both passed.
+		if ( ! empty( $object ) && ! empty( $page ) ) {
+			if ( 1 === intval( $this->site_data->cache_mysql_query ) || 1 === intval( $this->site_data->cache_nginx_fullpage ) ) {
+				$purge_key = $this->site_data->site_url;
+			}
+		}
+
+		if ( ! empty( $error ) ) {
+			\EE::error( implode(' ',$error) );
+		}
+
+		EE\Site\Utils\clean_site_cache( $purge_key );
+
+		\EE::success( 'Clean done.' );
+
+		\EE\Utils\delem_log( 'site clean end' );
+
+	}
+
+	/**
 	 * Reload services in containers without restarting container(s) associated with site.
 	 * When no service(--nginx etc.) is specified, all services will be reloaded.
 	 *
