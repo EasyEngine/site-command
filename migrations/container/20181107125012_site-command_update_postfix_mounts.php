@@ -52,7 +52,7 @@ class UpdatePostfixMounts extends Base {
 
 			$docker_yml              = $site->site_fs_path . '/docker-compose.yml';
 			$docker_yml_backup       = EE_BACKUP_DIR . '/' . $site->site_url . '/docker-compose.yml.backup';
-			$prefix                  = \EE::docker()->get_docker_style_prefix( $site->site_url );
+			$prefix                  = \EE_DOCKER::get_docker_style_prefix( $site->site_url );
 			$config_volume_name      = 'config_postfix';
 			$ssl_volume_name         = 'ssl_postfix';
 			$data_volume_name        = 'data_postfix';
@@ -108,7 +108,7 @@ class UpdatePostfixMounts extends Base {
 				[ $full_data_volume_name, $data_symlink ]
 			);
 
-			$existing_volumes = \EE::docker()->get_volumes_by_label( $site->site_url );
+			$existing_volumes = \EE_DOCKER::get_volumes_by_label( $site->site_url );
 			if ( ! in_array( $full_config_volume_name, $existing_volumes ) ) {
 				self::$rsp->add_step(
 					"create-$site->site_url-postfix-config-volume",
