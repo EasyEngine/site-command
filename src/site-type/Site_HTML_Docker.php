@@ -2,7 +2,8 @@
 
 namespace EE\Site\Type;
 
-use function EE\Utils\mustache_render;
+use EE\Utils as EE_Utils;
+use EE_DOCKER;
 
 class Site_HTML_Docker {
 
@@ -10,12 +11,12 @@ class Site_HTML_Docker {
 	 * Generate docker-compose.yml according to requirement.
 	 *
 	 * @param array $filters Array to determine the docker-compose.yml generation.
-	 ** @param array $volumes Array containing volume info passable to \EE_DOCKER::get_mounting_volume_array().
+	 ** @param array $volumes Array containing volume info passable to EE_DOCKER::get_mounting_volume_array().
 	 *
 	 * @return String docker-compose.yml content string.
 	 */
 	public function generate_docker_compose_yml( array $filters = [], $volumes ) {
-		$img_versions = \EE\Utils\get_image_versions();
+		$img_versions = EE_Utils\get_image_versions();
 		$base         = [];
 
 		$restart_default = [ 'name' => 'always' ];
@@ -38,7 +39,7 @@ class Site_HTML_Docker {
 			$nginx['environment']['env'][] = [ 'name' => 'HTTPS_METHOD=nohttps' ];
 		}
 		$nginx['volumes']  = [
-			'vol' => \EE_DOCKER::get_mounting_volume_array( $volumes ),
+			'vol' => EE_DOCKER::get_mounting_volume_array( $volumes ),
 		];
 		$nginx['labels']   = [
 			'label' => [
@@ -78,7 +79,7 @@ class Site_HTML_Docker {
 			$binding['created_volumes'] = $external_volumes;
 		}
 
-		$docker_compose_yml = mustache_render( SITE_TEMPLATE_ROOT . '/docker-compose.mustache', $binding );
+		$docker_compose_yml = EE_Utils\mustache_render( SITE_TEMPLATE_ROOT . '/docker-compose.mustache', $binding );
 
 		return $docker_compose_yml;
 	}

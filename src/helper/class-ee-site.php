@@ -5,9 +5,13 @@ namespace EE\Site\Type;
 use EE;
 use EE\Model\Site;
 use Symfony\Component\Filesystem\Filesystem;
-use function EE\Site\Utils\auto_site_name;
-use function EE\Site\Utils\get_site_info;
-use function EE\Site\Utils\reload_global_nginx_proxy;
+use EE\Utils as EE_Utils;
+use EE\Site\Utils as Site_Utils;
+use EE\Service\Utils as Service_Utils;
+use EE\Formatter;
+use Admin_Tools_Command;
+use Mailhog_Command;
+use cli\Colors;
 
 /**
  * Base class for Site command
@@ -99,10 +103,10 @@ abstract class EE_Site_Command {
 	 */
 	public function _list( $args, $assoc_args ) {
 
-		\EE\Utils\delem_log( 'site list start' );
-		$format   = \EE\Utils\get_flag_value( $assoc_args, 'format' );
-		$enabled  = \EE\Utils\get_flag_value( $assoc_args, 'enabled' );
-		$disabled = \EE\Utils\get_flag_value( $assoc_args, 'disabled' );
+		EE_Utils\delem_log( 'site list start' );
+		$format   = EE_Utils\get_flag_value( $assoc_args, 'format' );
+		$enabled  = EE_Utils\get_flag_value( $assoc_args, 'enabled' );
+		$disabled = EE_Utils\get_flag_value( $assoc_args, 'disabled' );
 
 		$sites = Site::all();
 
@@ -113,12 +117,12 @@ abstract class EE_Site_Command {
 		}
 
 		if ( empty( $sites ) ) {
-			\EE::error( 'No sites found!' );
+			EE::error( 'No sites found!' );
 		}
 
 		if ( 'text' === $format ) {
 			foreach ( $sites as $site ) {
-				\EE::log( $site->site_url );
+				EE::log( $site->site_url );
 			}
 		} else {
 			$result = array_map(
@@ -130,12 +134,12 @@ abstract class EE_Site_Command {
 				}, $sites
 			);
 
-			$formatter = new \EE\Formatter( $assoc_args, [ 'site', 'status' ] );
+			$formatter = new Formatter( $assoc_args, [ 'site', 'status' ] );
 
 			$formatter->display_items( $result );
 		}
 
-		\EE\Utils\delem_log( 'site list end' );
+		EE_Utils\delem_log( 'site list end' );
 	}
 
 
@@ -158,8 +162,8 @@ abstract class EE_Site_Command {
 	 */
 	public function delete( $args, $assoc_args ) {
 
-		\EE\Utils\delem_log( 'site delete start' );
-		$this->site_data = get_site_info( $args, false );
+		EE_Utils\delem_log( 'site delete start' );
+		$this->site_data = Site_Utils\get_site_info( $args, false );
 
 		$db_data = ( empty( $this->site_data['db_host'] ) || 'db' === $this->site_data['db_host'] ) ? [] : [
 			'db_host' => $this->site_data['db_host'],
@@ -167,9 +171,9 @@ abstract class EE_Site_Command {
 			'db_name' => $this->site_data['db_name'],
 		];
 
-		\EE::confirm( sprintf( 'Are you sure you want to delete %s?', $this->site_data['site_url'] ), $assoc_args );
+		EE::confirm( sprintf( 'Are you sure you want to delete %s?', $this->site_data['site_url'] ), $assoc_args );
 		$this->delete_site( 5, $this->site_data['site_url'], $this->site_data['site_fs_path'], $db_data );
-		\EE\Utils\delem_log( 'site delete end' );
+		EE_Utils\delem_log( 'site delete end' );
 	}
 
 	/**
@@ -192,34 +196,34 @@ abstract class EE_Site_Command {
 		$this->fs = new Filesystem();
 
 		if ( $level >= 3 ) {
-			if ( \EE::docker()::docker_compose_down( $site_fs_path ) ) {
-				\EE::log( "[$site_url] Docker Containers removed." );
+			if ( EE::docker()::docker_compose_down( $site_fs_path ) ) {
+				EE::log( "[$site_url] Docker Containers removed." );
 			} else {
-				\EE::exec( "docker rm -f $(docker ps -q -f=label=created_by=EasyEngine -f=label=site_name=$site_url)" );
+				EE::exec( "docker rm -f $(docker ps -q -f=label=created_by=EasyEngine -f=label=site_name=$site_url)" );
 				if ( $level > 3 ) {
-					\EE::warning( 'Error in removing docker containers.' );
+					EE::warning( 'Error in removing docker containers.' );
 				}
 			}
 		}
 
-		$volumes = \EE::docker()::get_volumes_by_label( $site_url );
+		$volumes = EE::docker()::get_volumes_by_label( $site_url );
 		foreach ( $volumes as $volume ) {
-			\EE::exec( 'docker volume rm ' . $volume );
+			EE::exec( 'docker volume rm ' . $volume );
 		}
 
 		if ( ! empty( $db_data['db_host'] ) ) {
-			\EE\Site\Utils\cleanup_db( $db_data['db_host'], $db_data['db_name'] );
-			\EE\Site\Utils\cleanup_db_user( $db_data['db_host'], $db_data['db_user'] );
+			Site_Utils\cleanup_db( $db_data['db_host'], $db_data['db_name'] );
+			Site_Utils\cleanup_db_user( $db_data['db_host'], $db_data['db_user'] );
 		}
 
 		if ( $this->fs->exists( $site_fs_path ) ) {
 			try {
 				$this->fs->remove( $site_fs_path );
 			} catch ( \Exception $e ) {
-				\EE::debug( $e );
-				\EE::error( 'Could not remove site root. Please check if you have sufficient rights.' );
+				EE::debug( $e );
+				EE::error( 'Could not remove site root. Please check if you have sufficient rights.' );
 			}
-			\EE::log( "[$site_url] site root removed." );
+			EE::log( "[$site_url] site root removed." );
 		}
 
 		$config_file_path = EE_ROOT_DIR . '/services/nginx-proxy/conf.d/' . $site_url . '-redirect.conf';
@@ -228,8 +232,8 @@ abstract class EE_Site_Command {
 			try {
 				$this->fs->remove( $config_file_path );
 			} catch ( \Exception $e ) {
-				\EE::debug( $e );
-				\EE::error( 'Could not remove site redirection file. Please check if you have sufficient rights.' );
+				EE::debug( $e );
+				EE::error( 'Could not remove site redirection file. Please check if you have sufficient rights.' );
 			}
 		}
 
@@ -239,11 +243,11 @@ abstract class EE_Site_Command {
 		 *
 		 * @param string $site_url Url of site which data is cleanup.
 		 */
-		\EE::do_hook( 'site_cleanup', $site_url );
+		EE::do_hook( 'site_cleanup', $site_url );
 
 		if ( $level > 4 ) {
 			if ( $this->site_data['site_ssl'] ) {
-				\EE::log( 'Removing ssl certs.' );
+				EE::log( 'Removing ssl certs.' );
 				$crt_file   = EE_ROOT_DIR . "/services/nginx-proxy/certs/$site_url.crt";
 				$key_file   = EE_ROOT_DIR . "/services/nginx-proxy/certs/$site_url.key";
 				$pem_file   = EE_ROOT_DIR . "/services/nginx-proxy/certs/$site_url.chain.pem";
@@ -254,17 +258,17 @@ abstract class EE_Site_Command {
 				try {
 					$this->fs->remove( $cert_files );
 				} catch ( \Exception $e ) {
-					\EE::warning( $e );
+					EE::warning( $e );
 				}
 			}
 
 			if ( Site::find( $site_url )->delete() ) {
-				\EE::log( 'Removed database entry.' );
+				EE::log( 'Removed database entry.' );
 			} else {
-				\EE::error( 'Could not remove the database entry' );
+				EE::error( 'Could not remove the database entry' );
 			}
 		}
-		\EE::log( "Site $site_url deleted." );
+		EE::log( "Site $site_url deleted." );
 	}
 
 	/**
@@ -295,69 +299,69 @@ abstract class EE_Site_Command {
 	 */
 	public function enable( $args, $assoc_args, $exit_on_error = true ) {
 
-		\EE\Utils\delem_log( 'site enable start' );
-		$force           = \EE\Utils\get_flag_value( $assoc_args, 'force' );
-		$verify          = \EE\Utils\get_flag_value( $assoc_args, 'verify' );
-		$args            = auto_site_name( $args, 'site', __FUNCTION__ );
-		$this->site_data = get_site_info( $args, false, true, false );
+		EE_Utils\delem_log( 'site enable start' );
+		$force           = EE_Utils\get_flag_value( $assoc_args, 'force' );
+		$verify          = EE_Utils\get_flag_value( $assoc_args, 'verify' );
+		$args            = Site_Utils\auto_site_name( $args, 'site', __FUNCTION__ );
+		$this->site_data = Site_Utils\get_site_info( $args, false, true, false );
 
 		if ( $this->site_data->site_enabled && ! $force ) {
-			\EE::error( sprintf( '%s is already enabled!', $this->site_data->site_url ) );
+			EE::error( sprintf( '%s is already enabled!', $this->site_data->site_url ) );
 		}
 
 		if ( $verify ) {
 			$this->verify_services();
 		}
 
-		\EE::log( sprintf( 'Enabling site %s.', $this->site_data->site_url ) );
+		EE::log( sprintf( 'Enabling site %s.', $this->site_data->site_url ) );
 
 		$success             = false;
 		$containers_to_start = [ 'nginx' ];
 
-		if ( \EE::docker()::docker_compose_up( $this->site_data->site_fs_path, $containers_to_start ) ) {
+		if ( EE::docker()::docker_compose_up( $this->site_data->site_fs_path, $containers_to_start ) ) {
 			$this->site_data->site_enabled = 1;
 			$this->site_data->save();
 			$success = true;
 		}
 
 		if ( $success ) {
-			\EE::success( sprintf( 'Site %s enabled.', $this->site_data->site_url ) );
+			EE::success( sprintf( 'Site %s enabled.', $this->site_data->site_url ) );
 		} else {
 			$err_msg = sprintf( 'There was error in enabling %s. Please check logs.', $this->site_data->site_url );
 			if ( $exit_on_error ) {
-				\EE::error( $err_msg );
+				EE::error( $err_msg );
 			}
 			throw new \Exception( $err_msg );
 		}
 
-		\EE::log( 'Running post enable configurations.' );
+		EE::log( 'Running post enable configurations.' );
 
 		$postfix_exists      = EE::docker()::service_exists( 'postfix', $this->site_data->site_fs_path );
 		$containers_to_start = $postfix_exists ? [ 'nginx', 'postfix' ] : [ 'nginx' ];
 
-		\EE\Site\Utils\start_site_containers( $this->site_data->site_fs_path, $containers_to_start );
+		Site_Utils\start_site_containers( $this->site_data->site_fs_path, $containers_to_start );
 
 		$site_data_array = (array) $this->site_data;
 		$this->site_data = reset( $site_data_array );
 		$this->www_ssl_wrapper( $containers_to_start, true );
 
 		if ( $postfix_exists ) {
-			\EE\Site\Utils\configure_postfix( $this->site_data['site_url'], $this->site_data['site_fs_path'] );
+			Site_Utils\configure_postfix( $this->site_data['site_url'], $this->site_data['site_fs_path'] );
 		}
 
 		if ( true === (bool) $this->site_data['admin_tools'] ) {
-			$admin_tools = new \Admin_Tools_Command();
+			$admin_tools = new Admin_Tools_Command();
 			$admin_tools->enable( [ $this->site_data['site_url'] ], [ 'force' => true ] );
 		}
 
 		if ( true === (bool) $this->site_data['mailhog_enabled'] ) {
-			$mailhog = new \Mailhog_Command();
+			$mailhog = new Mailhog_Command();
 			$mailhog->enable( [ $this->site_data['site_url'] ], [ 'force' => true ] );
 		}
 
-		\EE::success( 'Post enable configurations complete.' );
+		EE::success( 'Post enable configurations complete.' );
 
-		\EE\Utils\delem_log( 'site enable end' );
+		EE_Utils\delem_log( 'site enable end' );
 	}
 
 	/**
@@ -376,28 +380,28 @@ abstract class EE_Site_Command {
 	 */
 	public function disable( $args, $assoc_args ) {
 
-		\EE\Utils\delem_log( 'site disable start' );
-		$args            = auto_site_name( $args, 'site', __FUNCTION__ );
-		$this->site_data = get_site_info( $args, false, true, false );
+		EE_Utils\delem_log( 'site disable start' );
+		$args            = Site_Utils\auto_site_name( $args, 'site', __FUNCTION__ );
+		$this->site_data = Site_Utils\get_site_info( $args, false, true, false );
 
-		\EE::log( sprintf( 'Disabling site %s.', $this->site_data->site_url ) );
+		EE::log( sprintf( 'Disabling site %s.', $this->site_data->site_url ) );
 
 		$fs                        = new Filesystem();
 		$redirect_config_file_path = EE_ROOT_DIR . '/services/nginx-proxy/conf.d/' . $args[0] . '-redirect.conf';
 		if ( $fs->exists( $redirect_config_file_path ) ) {
 			$fs->remove( $redirect_config_file_path );
-			\EE\Site\Utils\reload_global_nginx_proxy();
+			Site_Utils\reload_global_nginx_proxy();
 		}
 
-		if ( \EE::docker()::docker_compose_down( $this->site_data->site_fs_path ) ) {
+		if ( EE::docker()::docker_compose_down( $this->site_data->site_fs_path ) ) {
 			$this->site_data->site_enabled = 0;
 			$this->site_data->save();
 
-			\EE::success( sprintf( 'Site %s disabled.', $this->site_data->site_url ) );
+			EE::success( sprintf( 'Site %s disabled.', $this->site_data->site_url ) );
 		} else {
-			\EE::error( sprintf( 'There was error in disabling %s. Please check logs.', $this->site_data->site_url ) );
+			EE::error( sprintf( 'There was error in disabling %s. Please check logs.', $this->site_data->site_url ) );
 		}
-		\EE\Utils\delem_log( 'site disable end' );
+		EE_Utils\delem_log( 'site disable end' );
 	}
 
 	/**
@@ -421,12 +425,12 @@ abstract class EE_Site_Command {
 	 */
 	public function restart( $args, $assoc_args, $whitelisted_containers = [] ) {
 
-		\EE\Utils\delem_log( 'site restart start' );
-		$args                 = auto_site_name( $args, 'site', __FUNCTION__ );
-		$all                  = \EE\Utils\get_flag_value( $assoc_args, 'all' );
+		EE_Utils\delem_log( 'site restart start' );
+		$args                 = Site_Utils\auto_site_name( $args, 'site', __FUNCTION__ );
+		$all                  = EE_Utils\get_flag_value( $assoc_args, 'all' );
 		$no_service_specified = count( $assoc_args ) === 0;
 
-		$this->site_data = get_site_info( $args );
+		$this->site_data = Site_Utils\get_site_info( $args );
 
 		chdir( $this->site_data['site_fs_path'] );
 
@@ -437,9 +441,9 @@ abstract class EE_Site_Command {
 		}
 
 		foreach ( $containers as $container ) {
-			\EE\Site\Utils\run_compose_command( 'restart', $container );
+			Site_Utils\run_compose_command( 'restart', $container );
 		}
-		\EE\Utils\delem_log( 'site restart stop' );
+		EE_Utils\delem_log( 'site restart stop' );
 	}
 
 	/**
@@ -463,15 +467,15 @@ abstract class EE_Site_Command {
 	 */
 	public function reload( $args, $assoc_args, $whitelisted_containers = [], $reload_commands = [] ) {
 
-		\EE\Utils\delem_log( 'site reload start' );
-		$args = auto_site_name( $args, 'site', __FUNCTION__ );
-		$all  = \EE\Utils\get_flag_value( $assoc_args, 'all' );
+		EE_Utils\delem_log( 'site reload start' );
+		$args = Site_Utils\auto_site_name( $args, 'site', __FUNCTION__ );
+		$all  = EE_Utils\get_flag_value( $assoc_args, 'all' );
 		if ( ! array_key_exists( 'nginx', $reload_commands ) ) {
 			$reload_commands['nginx'] = 'nginx sh -c \'nginx -t && service openresty reload\'';
 		}
 		$no_service_specified = count( $assoc_args ) === 0;
 
-		$this->site_data = get_site_info( $args );
+		$this->site_data = Site_Utils\get_site_info( $args );
 
 		chdir( $this->site_data['site_fs_path'] );
 
@@ -480,7 +484,7 @@ abstract class EE_Site_Command {
 		} else {
 			$this->reload_services( array_keys( $assoc_args ), $reload_commands );
 		}
-		\EE\Utils\delem_log( 'site reload stop' );
+		EE_Utils\delem_log( 'site reload stop' );
 	}
 
 	/**
@@ -492,7 +496,7 @@ abstract class EE_Site_Command {
 	private function reload_services( $services, $reload_commands ) {
 
 		foreach ( $services as $service ) {
-			\EE\Site\Utils\run_compose_command( 'exec', $reload_commands[ $service ], 'reload', $service );
+			Site_Utils\run_compose_command( 'exec', $reload_commands[ $service ], 'reload', $service );
 		}
 	}
 
@@ -503,15 +507,15 @@ abstract class EE_Site_Command {
 	private function verify_services() {
 
 		if ( 'running' !== EE::docker()::container_status( EE_PROXY_TYPE ) ) {
-			EE\Service\Utils\nginx_proxy_check();
+			Service_Utils\nginx_proxy_check();
 		}
 
 		if ( 'global-db' === $this->site_data->db_host ) {
-			EE\Service\Utils\init_global_container( 'global-db' );
+			Service_Utils\init_global_container( 'global-db' );
 		}
 
 		if ( 'global-redis' === $this->site_data->cache_host ) {
-			EE\Service\Utils\init_global_container( 'global-redis' );
+			Service_Utils\init_global_container( 'global-redis' );
 		}
 	}
 
@@ -534,10 +538,10 @@ abstract class EE_Site_Command {
 		 * We add redirection config two times in case of ssl as we need http redirection
 		 * when certs are being requested and http+https redirection after we have certs.
 		 */
-		\EE\Site\Utils\add_site_redirects( $this->site_data['site_url'], false, 'inherit' === $this->site_data['site_ssl'] );
-		\EE\Site\Utils\reload_global_nginx_proxy();
+		Site_Utils\add_site_redirects( $this->site_data['site_url'], false, 'inherit' === $this->site_data['site_ssl'] );
+		Site_Utils\reload_global_nginx_proxy();
 		// Need second reload sometimes for changes to reflect.
-		\EE\Site\Utils\reload_global_nginx_proxy();
+		Site_Utils\reload_global_nginx_proxy();
 
 		$is_www_or_non_www_pointed = $this->check_www_or_non_www_domain( $this->site_data['site_url'], $this->site_data['site_fs_path'] ) || $this->site_data['site_ssl_wildcard'];
 		if ( ! $is_www_or_non_www_pointed ) {
@@ -545,7 +549,7 @@ abstract class EE_Site_Command {
 			$confd_path  = EE_ROOT_DIR . '/services/nginx-proxy/conf.d/';
 			$config_file = $confd_path . $this->site_data['site_url'] . '-redirect.conf';
 			$fs->remove( $config_file );
-			\EE\Site\Utils\reload_global_nginx_proxy();
+			Site_Utils\reload_global_nginx_proxy();
 		}
 
 		if ( $this->site_data['site_ssl'] ) {
@@ -553,14 +557,14 @@ abstract class EE_Site_Command {
 				$this->init_ssl( $this->site_data['site_url'], $this->site_data['site_fs_path'], $this->site_data['site_ssl'], $this->site_data['site_ssl_wildcard'], $is_www_or_non_www_pointed );
 
 				$this->dump_docker_compose_yml( [ 'nohttps' => false ] );
-				\EE\Site\Utils\start_site_containers( $this->site_data['site_fs_path'], $containers_to_start );
+				Site_Utils\start_site_containers( $this->site_data['site_fs_path'], $containers_to_start );
 			}
 
 			if ( $is_www_or_non_www_pointed ) {
-				\EE\Site\Utils\add_site_redirects( $this->site_data['site_url'], true, 'inherit' === $this->site_data['site_ssl'] );
+				Site_Utils\add_site_redirects( $this->site_data['site_url'], true, 'inherit' === $this->site_data['site_ssl'] );
 			}
 
-			\EE\Site\Utils\reload_global_nginx_proxy();
+			Site_Utils\reload_global_nginx_proxy();
 		}
 	}
 
@@ -589,7 +593,7 @@ abstract class EE_Site_Command {
 		}
 
 		// We don't have to do anything now as nginx-proxy handles everything for us.
-		\EE::success( 'Inherited certs from parent' );
+		EE::success( 'Inherited certs from parent' );
 	}
 
 	/**
@@ -606,15 +610,15 @@ abstract class EE_Site_Command {
 	 */
 	protected function init_ssl( $site_url, $site_fs_path, $ssl_type, $wildcard = false, $www_or_non_www = false ) {
 
-		\EE::debug( 'Starting SSL procedure' );
+		EE::debug( 'Starting SSL procedure' );
 		if ( 'le' === $ssl_type ) {
-			\EE::debug( 'Initializing LE' );
+			EE::debug( 'Initializing LE' );
 			$this->init_le( $site_url, $site_fs_path, $wildcard, $www_or_non_www );
 		} elseif ( 'inherit' === $ssl_type ) {
 			if ( $wildcard ) {
 				throw new \Exception( 'Cannot use --wildcard with --ssl=inherit', false );
 			}
-			\EE::debug( 'Inheriting certs' );
+			EE::debug( 'Inheriting certs' );
 			$this->inherit_certs( $site_url );
 		} else {
 			throw new \Exception( "Unrecognized value in --ssl flag: $ssl_type" );
@@ -630,15 +634,15 @@ abstract class EE_Site_Command {
 	 * @param bool $www_or_non_www Allow LetsEncrypt on www or non-www subdomain.
 	 */
 	protected function init_le( $site_url, $site_fs_path, $wildcard = false, $www_or_non_www ) {
-		$preferred_challenge = \EE\Utils\get_config_value( 'preferred_ssl_challenge', '' );
+		$preferred_challenge = EE_Utils\get_config_value( 'preferred_ssl_challenge', '' );
 		$is_solver_dns       = ( $wildcard || 'dns' === $preferred_challenge ) ? true : false;
-		\EE::debug( 'Wildcard in init_le: ' . ( bool ) $wildcard );
+		EE::debug( 'Wildcard in init_le: ' . ( bool ) $wildcard );
 
 		$this->site_data['site_fs_path']      = $site_fs_path;
 		$this->site_data['site_ssl_wildcard'] = $wildcard;
 		$client                               = new Site_Letsencrypt();
-		$this->le_mail                        = \EE::get_runner()->config['le-mail'] ?? \EE::input( 'Enter your mail id: ' );
-		\EE::get_runner()->ensure_present_in_config( 'le-mail', $this->le_mail );
+		$this->le_mail                        = EE::get_runner()->config['le-mail'] ?? EE::input( 'Enter your mail id: ' );
+		EE::get_runner()->ensure_present_in_config( 'le-mail', $this->le_mail );
 		if ( ! $client->register( $this->le_mail ) ) {
 			$this->site_data['site_ssl'] = null;
 
@@ -651,7 +655,7 @@ abstract class EE_Site_Command {
 			return;
 		}
 		if ( $is_solver_dns ) {
-			echo \cli\Colors::colorize( '%YIMPORTANT:%n Run `ee site ssl ' . $site_url . '` once the DNS changes have propagated to complete the certification generation and installation.', null );
+			echo Colors::colorize( '%YIMPORTANT:%n Run `ee site ssl ' . $site_url . '` once the DNS changes have propagated to complete the certification generation and installation.', null );
 		} else {
 			$this->ssl( [], [], $www_or_non_www );
 		}
@@ -667,7 +671,7 @@ abstract class EE_Site_Command {
 	 * @return array
 	 */
 	private function get_cert_domains( string $site_url, $wildcard, $www_or_non_www = false ): array {
-		$preferred_challenge = \EE\Utils\get_config_value( 'preferred_ssl_challenge', '' );
+		$preferred_challenge = EE_Utils\get_config_value( 'preferred_ssl_challenge', '' );
 		$is_solver_dns       = ( $wildcard || 'dns' === $preferred_challenge ) ? true : false;
 
 		$domains = [ $site_url ];
@@ -696,7 +700,7 @@ abstract class EE_Site_Command {
 	 */
 	protected function check_www_or_non_www_domain( $site_url, $site_path ): bool {
 
-		$random_string = EE\Utils\random_password();
+		$random_string = EE_Utils\random_password();
 		$successful    = false;
 		$file_path     = $site_path . '/app/htdocs/check.html';
 		file_put_contents( $file_path, $random_string );
@@ -748,18 +752,18 @@ abstract class EE_Site_Command {
 		$called_by_ee = isset( $this->site_data['site_url'] );
 
 		if ( ! $called_by_ee ) {
-			$this->site_data = get_site_info( $args );
+			$this->site_data = Site_Utils\get_site_info( $args );
 		}
 
 		if ( ! isset( $this->le_mail ) ) {
-			$this->le_mail = \EE::get_config( 'le-mail' ) ?? \EE::input( 'Enter your mail id: ' );
+			$this->le_mail = EE::get_config( 'le-mail' ) ?? EE::input( 'Enter your mail id: ' );
 		}
 
-		$force   = \EE\Utils\get_flag_value( $assoc_args, 'force' );
+		$force   = EE_Utils\get_flag_value( $assoc_args, 'force' );
 		$domains = $this->get_cert_domains( $this->site_data['site_url'], $this->site_data['site_ssl_wildcard'], $www_or_non_www );
 		$client  = new Site_Letsencrypt();
 
-		$preferred_challenge = \EE\Utils\get_config_value( 'preferred_ssl_challenge', '' );
+		$preferred_challenge = EE_Utils\get_config_value( 'preferred_ssl_challenge', '' );
 
 		try {
 			$client->check( $domains, $this->site_data['site_ssl_wildcard'], $preferred_challenge );
@@ -779,7 +783,7 @@ abstract class EE_Site_Command {
 			$client->cleanup();
 		}
 
-		reload_global_nginx_proxy();
+		Site_Utils\reload_global_nginx_proxy();
 
 		EE::log( 'SSL verification completed.' );
 	}
@@ -789,10 +793,10 @@ abstract class EE_Site_Command {
 	 */
 	protected function shut_down_function() {
 
-		$logger = \EE::get_file_logger()->withName( 'site-command' );
+		$logger = EE::get_file_logger()->withName( 'site-command' );
 		$error  = error_get_last();
 		if ( isset( $error ) && $error['type'] === E_ERROR ) {
-			\EE::warning( 'An Error occurred. Initiating clean-up.' );
+			EE::warning( 'An Error occurred. Initiating clean-up.' );
 			$logger->error( 'Type: ' . $error['type'] );
 			$logger->error( 'Message: ' . $error['message'] );
 			$logger->error( 'File: ' . $error['file'] );
@@ -813,7 +817,7 @@ abstract class EE_Site_Command {
 			return;
 		}
 
-		\EE::error( 'You can not create more than 27 sites' );
+		EE::error( 'You can not create more than 27 sites' );
 	}
 
 	/**
@@ -825,7 +829,7 @@ abstract class EE_Site_Command {
 	 * @ignorecommand
 	 */
 	public function populate_site_info( $site_name, $in_array = true ) {
-		$this->site_data = EE\Site\Utils\get_site_info( [ $site_name ], false, false, $in_array );
+		$this->site_data = Site_Utils\get_site_info( [ $site_name ], false, false, $in_array );
 	}
 
 	abstract public function create( $args, $assoc_args );

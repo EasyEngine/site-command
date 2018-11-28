@@ -2,6 +2,9 @@
 
 use EE\Dispatcher\CommandFactory;
 use EE\Model\Site;
+use EE\Utils as EE_Utils;
+use EE\Auth\Utils as Auth_Utils;
+use EE\Site\Utils as Site_Utils;
 
 /**
  * Adds site related functionality to EasyEngine
@@ -76,7 +79,7 @@ class Site_Command {
 			$last_arg = str_replace( [ 'https://', 'http://' ], '', $last_arg );
 		}
 		if ( ! empty( $last_arg ) ) {
-			$args[] = EE\Utils\remove_trailing_slash( $last_arg );
+			$args[] = EE_Utils\remove_trailing_slash( $last_arg );
 		}
 
 		$site_types = self::get_site_types();
@@ -86,7 +89,7 @@ class Site_Command {
 		$type = 'html';
 
 		if ( in_array( reset( $args ), [ 'create', 'update' ], true ) || empty( $args ) ) {
-			\EE\Auth\Utils\init_global_admin_tools_auth( false );
+			Auth_Utils\init_global_admin_tools_auth( false );
 			if ( isset( $assoc_args['type'] ) ) {
 				$type = $assoc_args['type'];
 				unset( $assoc_args['type'] );
@@ -139,7 +142,7 @@ class Site_Command {
 			return $arg_search->site_type;
 		}
 
-		$site_name = EE\Site\Utils\get_site_name();
+		$site_name = Site_Utils\get_site_name();
 		if ( $site_name ) {
 			if ( strpos( $last_arg, '.' ) !== false ) {
 				$args[] = $site_name;
@@ -225,7 +228,7 @@ class Site_Command {
 
 		$old_args = implode( ' --', $old_arg );
 		if ( isset( $args[1] ) && 'create' === $args[1] && ! empty ( $old_arg ) ) {
-			\EE::error( "Sorry, --$old_args flag/s is/are no longer supported in EE v4.\nPlease run `ee help " . implode( ' ', $args ) . '`.' );
+			EE::error( "Sorry, --$old_args flag/s is/are no longer supported in EE v4.\nPlease run `ee help " . implode( ' ', $args ) . '`.' );
 		}
 
 		return $assoc_args;

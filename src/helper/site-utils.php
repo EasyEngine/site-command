@@ -5,6 +5,7 @@ namespace EE\Site\Utils;
 use EE;
 use EE\Model\Site;
 use Symfony\Component\Filesystem\Filesystem;
+use EE\Utils as EE_Utils;
 
 /**
  * Get the site-name from the path from where ee is running if it is a valid site path.
@@ -59,7 +60,7 @@ function auto_site_name( $args, $command, $function, $arg_pos = 0 ) {
 		if ( substr( $possible_site_name, 0, 4 ) === 'http' ) {
 			$possible_site_name = str_replace( [ 'https', 'http' ], '', $possible_site_name );
 		}
-		$url_path = parse_url( EE\Utils\remove_trailing_slash( $possible_site_name ), PHP_URL_PATH );
+		$url_path = parse_url( EE_Utils\remove_trailing_slash( $possible_site_name ), PHP_URL_PATH );
 		if ( Site::find( $url_path ) ) {
 			return $args;
 		}
@@ -88,21 +89,21 @@ function auto_site_name( $args, $command, $function, $arg_pos = 0 ) {
  */
 function get_site_info( $args, $site_enabled_check = true, $exit_if_not_found = true, $return_array = true ) {
 
-	$site_url   = \EE\Utils\remove_trailing_slash( $args[0] );
+	$site_url   = EE_Utils\remove_trailing_slash( $args[0] );
 	$data       = Site::find( $site_url );
 	$array_data = ( array ) $data;
 	$site_data  = $return_array ? reset( $array_data ) : $data;
 
 	if ( ! $data ) {
 		if ( $exit_if_not_found ) {
-			\EE::error( sprintf( 'Site %s does not exist.', $site_url ) );
+			EE::error( sprintf( 'Site %s does not exist.', $site_url ) );
 		}
 
 		return false;
 	}
 
 	if ( ! $data->site_enabled && $site_enabled_check ) {
-		\EE::error( sprintf( 'Site %1$s is not enabled. Use `ee site enable %1$s` to enable it.', $data->site_url ) );
+		EE::error( sprintf( 'Site %1$s is not enabled. Use `ee site enable %1$s` to enable it.', $data->site_url ) );
 	}
 
 	return $site_data;
@@ -114,7 +115,7 @@ function get_site_info( $args, $site_enabled_check = true, $exit_if_not_found = 
  * @param Filesystem $fs Filesystem object to write file
  */
 function generate_global_docker_compose_yml( Filesystem $fs ) {
-	$img_versions = EE\Utils\get_image_versions();
+	$img_versions = EE_Utils\get_image_versions();
 
 	$data = [
 		'services' => [
@@ -150,7 +151,7 @@ function generate_global_docker_compose_yml( Filesystem $fs ) {
 				'image'          => 'easyengine/mariadb:' . $img_versions['easyengine/mariadb'],
 				'restart'        => 'always',
 				'environment'    => [
-					'MYSQL_ROOT_PASSWORD=' . \EE\Utils\random_password(),
+					'MYSQL_ROOT_PASSWORD=' . EE_Utils\random_password(),
 				],
 				'volumes'        => [ './app/db:/var/lib/mysql' ],
 				'networks'       => [
@@ -160,7 +161,7 @@ function generate_global_docker_compose_yml( Filesystem $fs ) {
 		],
 	];
 
-	$contents = EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/global_docker_compose.yml.mustache', $data );
+	$contents = EE_Utils\mustache_render( SITE_TEMPLATE_ROOT . '/global_docker_compose.yml.mustache', $data );
 	$fs->dumpFile( EE_ROOT_DIR . '/services/docker-compose.yml', $contents );
 }
 
@@ -176,16 +177,16 @@ function generate_global_docker_compose_yml( Filesystem $fs ) {
  */
 function create_user_in_db( $db_host, $db_name = '', $db_user = '', $db_pass = '' ) {
 
-	$db_name = empty( $db_name ) ? \EE\Utils\random_password( 5 ) : $db_name;
-	$db_user = empty( $db_user ) ? \EE\Utils\random_password( 5 ) : $db_user;
-	$db_pass = empty( $db_pass ) ? \EE\Utils\random_password() : $db_pass;
+	$db_name = empty( $db_name ) ? EE_Utils\random_password( 5 ) : $db_name;
+	$db_user = empty( $db_user ) ? EE_Utils\random_password( 5 ) : $db_user;
+	$db_pass = empty( $db_pass ) ? EE_Utils\random_password() : $db_pass;
 
 	$create_string = sprintf( "CREATE USER '%1\$s'@'%%' IDENTIFIED BY '%2\$s'; CREATE DATABASE %3\$s; GRANT ALL PRIVILEGES ON %3\$s.* TO '%1\$s'@'%%'; FLUSH PRIVILEGES;", $db_user, $db_pass, $db_name );
 
 	if ( GLOBAL_DB === $db_host ) {
 
 		$health_script  = 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e"exit"';
-		$db_script_path = \EE\Utils\get_temp_dir() . 'db_exec';
+		$db_script_path = EE_Utils\get_temp_dir() . 'db_exec';
 		file_put_contents( $db_script_path, $health_script );
 		$mysql_unhealthy = true;
 		EE::exec( sprintf( 'docker cp %s ee-global-db:/db_exec', $db_script_path ) );
@@ -198,7 +199,7 @@ function create_user_in_db( $db_host, $db_name = '', $db_user = '', $db_pass = '
 			sleep( 1 );
 		}
 
-		$db_script_path = \EE\Utils\get_temp_dir() . 'db_exec';
+		$db_script_path = EE_Utils\get_temp_dir() . 'db_exec';
 		file_put_contents( $db_script_path, sprintf( 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e"%s"', $create_string ) );
 
 		EE::exec( sprintf( 'docker cp %s ee-global-db:/db_exec', $db_script_path ) );
@@ -229,7 +230,7 @@ function cleanup_db( $db_host, $db_name, $db_user = '', $db_pass = '' ) {
 	$cleanup_string = sprintf( 'DROP DATABASE %s;', $db_name );
 
 	if ( GLOBAL_DB === $db_host ) {
-		$db_script_path = \EE\Utils\get_temp_dir() . 'db_exec';
+		$db_script_path = EE_Utils\get_temp_dir() . 'db_exec';
 		file_put_contents( $db_script_path, sprintf( 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e"%s"', $cleanup_string ) );
 
 		EE::exec( sprintf( 'docker cp %s ee-global-db:/db_exec', $db_script_path ) );
@@ -251,7 +252,7 @@ function cleanup_db_user( $db_host, $db_user_to_be_cleaned, $db_privileged_pass 
 	$cleanup_string = sprintf( 'DROP USER \'%s\'@\'%%\';', $db_user_to_be_cleaned );
 
 	if ( GLOBAL_DB === $db_host ) {
-		$db_script_path = \EE\Utils\get_temp_dir() . 'db_exec';
+		$db_script_path = EE_Utils\get_temp_dir() . 'db_exec';
 		file_put_contents( $db_script_path, sprintf( 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e"%s"', $cleanup_string ) );
 
 		EE::exec( sprintf( 'docker cp %s ee-global-db:/db_exec', $db_script_path ) );
@@ -312,7 +313,7 @@ function add_site_redirects( string $site_url, bool $ssl, bool $inherit ) {
 		'ssl'            => $ssl,
 	];
 
-	$content = EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/redirect.conf.mustache', $conf_data );
+	$content = EE_Utils\mustache_render( SITE_TEMPLATE_ROOT . '/redirect.conf.mustache', $conf_data );
 	$fs->dumpFile( $config_file_path, ltrim( $content, PHP_EOL ) );
 }
 
@@ -352,8 +353,8 @@ function create_etc_hosts_entry( $site_url ) {
 function site_status_check( $site_url ) {
 
 	EE::log( 'Checking and verifying site-up status. This may take some time.' );
-	$config_80_port = \EE\Utils\get_config_value( 'proxy_80_port', 80 );
-	$httpcode       = \EE\Utils\get_curl_info( $site_url, $config_80_port );
+	$config_80_port = EE_Utils\get_config_value( 'proxy_80_port', 80 );
+	$httpcode       = EE_Utils\get_curl_info( $site_url, $config_80_port );
 	$i              = 0;
 	$auth           = false;
 	while ( 200 !== $httpcode && 302 !== $httpcode && 301 !== $httpcode ) {
@@ -362,7 +363,7 @@ function site_status_check( $site_url ) {
 			$user_pass = get_global_auth();
 			$auth      = $user_pass['username'] . ':' . $user_pass['password'];
 		}
-		$httpcode = \EE\Utils\get_curl_info( $site_url, $config_80_port, false, $auth );
+		$httpcode = EE_Utils\get_curl_info( $site_url, $config_80_port, false, $auth );
 		echo '.';
 		sleep( 2 );
 		if ( $i ++ > 60 ) {
@@ -480,8 +481,8 @@ function configure_postfix( $site_url, $site_fs_path ) {
  */
 function reload_global_nginx_proxy() {
 
-	if ( \EE::launch( sprintf( 'docker exec %s sh -c "nginx -t"', EE_PROXY_TYPE ) ) ) {
-		return \EE::launch( sprintf( 'docker exec %s sh -c "/app/docker-entrypoint.sh /usr/local/bin/docker-gen /app/nginx.tmpl /etc/nginx/conf.d/default.conf; /usr/sbin/nginx -s reload"', EE_PROXY_TYPE ) );
+	if ( EE::launch( sprintf( 'docker exec %s sh -c "nginx -t"', EE_PROXY_TYPE ) ) ) {
+		return EE::launch( sprintf( 'docker exec %s sh -c "/app/docker-entrypoint.sh /usr/local/bin/docker-gen /app/nginx.tmpl /etc/nginx/conf.d/default.conf; /usr/sbin/nginx -s reload"', EE_PROXY_TYPE ) );
 	}
 
 	return false;

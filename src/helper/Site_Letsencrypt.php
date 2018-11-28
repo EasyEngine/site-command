@@ -33,6 +33,9 @@ use Symfony\Component\Serializer\Encoder\JsonEncoder;
 use Symfony\Component\Serializer\Normalizer\GetSetMethodNormalizer;
 use Symfony\Component\Serializer\Serializer;
 use function EE\Site\Utils\reload_global_nginx_proxy;
+use EE;
+use EE\Utils as EE_Utils;
+use Symfony\Component\Filesystem as Symfony_Filesystem;
 
 
 class Site_Letsencrypt {
@@ -59,15 +62,15 @@ class Site_Letsencrypt {
 	private function setAcmeClient() {
 
 		if ( ! $this->repository->hasAccountKeyPair() ) {
-			\EE::debug( 'No account key pair was found, generating one.' );
-			\EE::debug( 'Generating a key pair' );
+			EE::debug( 'No account key pair was found, generating one.' );
+			EE::debug( 'Generating a key pair' );
 
 			$keygen         = new KeyPairGenerator();
 			$accountKeyPair = $keygen->generateKeyPair();
-			\EE::debug( 'Key pair generated, storing' );
+			EE::debug( 'Key pair generated, storing' );
 			$this->repository->storeAccountKeyPair( $accountKeyPair );
 		} else {
-			\EE::debug( 'Loading account keypair' );
+			EE::debug( 'Loading account keypair' );
 			$accountKeyPair = $this->repository->loadAccountKeyPair();
 		}
 
@@ -120,10 +123,10 @@ class Site_Letsencrypt {
 		try {
 			$this->client->registerAccount( null, $email );
 		} catch ( \Exception $e ) {
-			\EE::warning( 'It seems you\'re in local environment or used invalid email or there is some issue with network, please check logs. Skipping letsencrypt.' );
+			EE::warning( 'It seems you\'re in local environment or used invalid email or there is some issue with network, please check logs. Skipping letsencrypt.' );
 			throw  $e;
 		}
-		\EE::debug( "Account with email id: $email registered successfully!" );
+		EE::debug( "Account with email id: $email registered successfully!" );
 
 		return true;
 	}
@@ -144,7 +147,7 @@ class Site_Letsencrypt {
 		try {
 			$order = $this->client->requestOrder( $domains );
 		} catch ( \Exception $e ) {
-			\EE::warning( 'It seems you\'re in local environment or using non-public domain, please check logs. Skipping letsencrypt.' );
+			EE::warning( 'It seems you\'re in local environment or using non-public domain, please check logs. Skipping letsencrypt.' );
 			throw $e;
 		}
 
@@ -154,16 +157,16 @@ class Site_Letsencrypt {
 			foreach ( $authorizationChallenges as $candidate ) {
 				if ( $solver->supports( $candidate ) ) {
 					$authorizationChallenge = $candidate;
-					\EE::debug( 'Authorization challenge supported by solver. Solver: ' . $solverName . ' Challenge: ' . $candidate->getType() );
+					EE::debug( 'Authorization challenge supported by solver. Solver: ' . $solverName . ' Challenge: ' . $candidate->getType() );
 					break;
 				}
 				// Should not get here as we are handling it.
-				\EE::debug( 'Authorization challenge not supported by solver. Solver: ' . $solverName . ' Challenge: ' . $candidate->getType() );
+				EE::debug( 'Authorization challenge not supported by solver. Solver: ' . $solverName . ' Challenge: ' . $candidate->getType() );
 			}
 			if ( null === $authorizationChallenge ) {
 				throw new ChallengeNotSupportedException();
 			}
-			\EE::debug( 'Storing authorization challenge. Domain: ' . $domainKey . ' Challenge: ' . print_r( $authorizationChallenge->toArray(), true ) );
+			EE::debug( 'Storing authorization challenge. Domain: ' . $domainKey . ' Challenge: ' . print_r( $authorizationChallenge->toArray(), true ) );
 
 			$this->repository->storeDomainAuthorizationChallenge( $domainKey, $authorizationChallenge );
 			$authorizationChallengesToSolve[] = $authorizationChallenge;
@@ -171,21 +174,21 @@ class Site_Letsencrypt {
 
 		/** @var AuthorizationChallenge $authorizationChallenge */
 		foreach ( $authorizationChallengesToSolve as $authorizationChallenge ) {
-			\EE::debug( 'Solving authorization challenge: Domain: ' . $authorizationChallenge->getDomain() . ' Challenge: ' . print_r( $authorizationChallenge->toArray(), true ) );
+			EE::debug( 'Solving authorization challenge: Domain: ' . $authorizationChallenge->getDomain() . ' Challenge: ' . print_r( $authorizationChallenge->toArray(), true ) );
 			$solver->solve( $authorizationChallenge );
 
 			if ( ! $is_solver_dns ) {
 				$token   = $authorizationChallenge->toArray()['token'];
 				$payload = $authorizationChallenge->toArray()['payload'];
 
-				$fs = new \Symfony\Component\Filesystem\Filesystem();
+				$fs = new Symfony_Filesystem\Filesystem();
 				$fs->copy( SITE_TEMPLATE_ROOT . '/vhost.d_default_letsencrypt.mustache', EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/default' );
 				$challange_dir = EE_ROOT_DIR . '/services/nginx-proxy/html/.well-known/acme-challenge';
 				if ( ! $fs->exists( $challange_dir ) ) {
 					$fs->mkdir( $challange_dir );
 				}
 				$challange_file = $challange_dir . '/' . $token;
-				\EE::debug( 'Creating challange file ' . $challange_file );
+				EE::debug( 'Creating challange file ' . $challange_file );
 				$fs->dumpFile( $challange_file, $payload );
 				reload_global_nginx_proxy();
 			}
@@ -198,7 +201,7 @@ class Site_Letsencrypt {
 
 	public function check( Array $domains, $wildcard = false, $preferred_challenge = '' ) {
 		$is_solver_dns = ( $wildcard || 'dns' === $preferred_challenge ) ? true : false;
-		\EE::debug( ( 'Starting check with solver ' ) . ( $is_solver_dns ? 'dns' : 'http' ) );
+		EE::debug( ( 'Starting check with solver ' ) . ( $is_solver_dns ? 'dns' : 'http' ) );
 		$solver    = $is_solver_dns ? new SimpleDnsSolver( null, new ConsoleOutput() ) : new SimpleHttpSolver();
 		$validator = new ChainValidator(
 			[
@@ -210,7 +213,7 @@ class Site_Letsencrypt {
 		$order = null;
 		if ( $this->repository->hasCertificateOrder( $domains ) ) {
 			$order = $this->repository->loadCertificateOrder( $domains );
-			\EE::debug( sprintf( 'Loading the authorization token for domains %s ...', implode( ', ', $domains ) ) );
+			EE::debug( sprintf( 'Loading the authorization token for domains %s ...', implode( ', ', $domains ) ) );
 		}
 
 		$authorizationChallengeToCleanup = [];
@@ -229,40 +232,40 @@ class Site_Letsencrypt {
 				}
 			} else {
 				if ( ! $this->repository->hasDomainAuthorizationChallenge( $domain ) ) {
-					\EE::error( "Domain: $domain not yet authorized/has not been started of with EasyEngine letsencrypt site creation." );
+					EE::error( "Domain: $domain not yet authorized/has not been started of with EasyEngine letsencrypt site creation." );
 				}
 				$authorizationChallenge = $this->repository->loadDomainAuthorizationChallenge( $domain );
 				if ( ! $solver->supports( $authorizationChallenge ) ) {
 					throw new ChallengeNotSupportedException();
 				}
 			}
-			\EE::debug( 'Challenge loaded.' );
+			EE::debug( 'Challenge loaded.' );
 
 			$authorizationChallenge = $this->client->reloadAuthorization( $authorizationChallenge );
 			if ( ! $authorizationChallenge->isValid() ) {
-				\EE::debug( sprintf( 'Testing the challenge for domain %s', $domain ) );
+				EE::debug( sprintf( 'Testing the challenge for domain %s', $domain ) );
 				if ( ! $validator->isValid( $authorizationChallenge ) ) {
 					throw new \Exception( sprintf( 'Can not validate challenge for domain %s', $domain ) );
 				}
 
-				\EE::debug( sprintf( 'Requesting authorization check for domain %s', $domain ) );
+				EE::debug( sprintf( 'Requesting authorization check for domain %s', $domain ) );
 				try {
 					$this->client->challengeAuthorization( $authorizationChallenge );
 				} catch ( \Exception $e ) {
-					\EE::debug( $e->getMessage() );
-					\EE::warning( 'Challenge Authorization failed. Check logs and check if your domain is pointed correctly to this server.' );
+					EE::debug( $e->getMessage() );
+					EE::warning( 'Challenge Authorization failed. Check logs and check if your domain is pointed correctly to this server.' );
 
 					$site_name = isset( $domains[1] ) ? $domains[1] : $domains[0];
 					$site_name = str_replace( '*.', '', $site_name, 1 );
-					
-					\EE::log( "Re-run `ee site ssl $site_name` after fixing the issue." );
+
+					EE::log( "Re-run `ee site ssl $site_name` after fixing the issue." );
 					throw $e;
 				}
 				$authorizationChallengeToCleanup[] = $authorizationChallenge;
 			}
 		}
 
-		\EE::log( 'The authorization check was successful!' );
+		EE::log( 'The authorization check was successful!' );
 
 		if ( $solver instanceof MultipleChallengesSolverInterface ) {
 			$solver->cleanupAll( $authorizationChallengeToCleanup );
@@ -282,12 +285,12 @@ class Site_Letsencrypt {
 
 		// Certificate renewal
 		if ( $this->hasValidCertificate( $domain, $alternativeNames ) ) {
-			\EE::debug( "Certificate found for $domain, executing renewal" );
+			EE::debug( "Certificate found for $domain, executing renewal" );
 
 			return $this->executeRenewal( $domain, $alternativeNames, $force );
 		}
 
-		\EE::debug( "No certificate found, executing first request for $domain" );
+		EE::debug( "No certificate found, executing first request for $domain" );
 
 		// Certificate first request
 		return $this->executeFirstRequest( $domain, $alternativeNames, $email );
@@ -300,36 +303,36 @@ class Site_Letsencrypt {
 	 * @param array $alternativeNames
 	 */
 	private function executeFirstRequest( $domain, array $alternativeNames, $email ) {
-		\EE::log( 'Executing first request.' );
+		EE::log( 'Executing first request.' );
 
 		// Generate domain key pair
 		$keygen        = new KeyPairGenerator();
 		$domainKeyPair = $keygen->generateKeyPair();
 		$this->repository->storeDomainKeyPair( $domain, $domainKeyPair );
 
-		\EE::debug( "$domain Domain key pair generated and stored" );
+		EE::debug( "$domain Domain key pair generated and stored" );
 
 		$distinguishedName = $this->getOrCreateDistinguishedName( $domain, $alternativeNames, $email );
 		// TODO: ask them ;)
-		\EE::debug( 'Distinguished name informations have been stored locally for this domain (they won\'t be asked on renewal).' );
+		EE::debug( 'Distinguished name informations have been stored locally for this domain (they won\'t be asked on renewal).' );
 
 		// Order
 		$domains = array_merge( [ $domain ], $alternativeNames );
-		\EE::debug( sprintf( 'Loading the order related to the domains %s .', implode( ', ', $domains ) ) );
+		EE::debug( sprintf( 'Loading the order related to the domains %s .', implode( ', ', $domains ) ) );
 		if ( ! $this->repository->hasCertificateOrder( $domains ) ) {
-			\EE::error( "$domain has not yet been authorized." );
+			EE::error( "$domain has not yet been authorized." );
 		}
 		$order = $this->repository->loadCertificateOrder( $domains );
 
 		// Request
-		\EE::log( sprintf( 'Requesting first certificate for domain %s.', $domain ) );
+		EE::log( sprintf( 'Requesting first certificate for domain %s.', $domain ) );
 		$csr      = new CertificateRequest( $distinguishedName, $domainKeyPair );
 		$response = $this->client->finalizeOrder( $order, $csr );
-		\EE::log( 'Certificate received' );
+		EE::log( 'Certificate received' );
 
 		// Store
 		$this->repository->storeDomainCertificate( $domain, $response->getCertificate() );
-		\EE::log( 'Certificate stored' );
+		EE::log( 'Certificate stored' );
 
 		// Post-generate actions
 		$this->moveCertsToNginxProxy( $domain );
@@ -360,7 +363,7 @@ class Site_Letsencrypt {
 	private function executeRenewal( $domain, array $alternativeNames, $force = false ) {
 		try {
 			// Check expiration date to avoid too much renewal
-			\EE::log( "Loading current certificate for $domain" );
+			EE::log( "Loading current certificate for $domain" );
 
 			$certificate = $this->repository->loadDomainCertificate( $domain );
 
@@ -370,7 +373,7 @@ class Site_Letsencrypt {
 
 				if ( $parsedCertificate->getValidTo()->format( 'U' ) - time() >= 604800 ) {
 
-					\EE::log(
+					EE::log(
 						sprintf(
 							'Current certificate is valid until %s, renewal is not necessary.',
 							$parsedCertificate->getValidTo()->format( 'Y-m-d H:i:s' )
@@ -380,53 +383,53 @@ class Site_Letsencrypt {
 					return;
 				}
 
-				\EE::log(
+				EE::log(
 					sprintf(
 						'Current certificate will expire in less than a week (%s), renewal is required.',
 						$parsedCertificate->getValidTo()->format( 'Y-m-d H:i:s' )
 					)
 				);
 			} else {
-				\EE::log( 'Forced renewal.' );
+				EE::log( 'Forced renewal.' );
 			}
 
 			// Key pair
-			\EE::debug( 'Loading domain key pair...' );
+			EE::debug( 'Loading domain key pair...' );
 			$domainKeyPair = $this->repository->loadDomainKeyPair( $domain );
 
 			// Distinguished name
-			\EE::debug( 'Loading domain distinguished name...' );
-			$distinguishedName = $this->getOrCreateDistinguishedName( $domain, $alternativeNames, \EE\Utils\get_config_value( 'le-mail' ) );
+			EE::debug( 'Loading domain distinguished name...' );
+			$distinguishedName = $this->getOrCreateDistinguishedName( $domain, $alternativeNames, EE_Utils\get_config_value( 'le-mail' ) );
 
 			// Order
 			$domains = array_merge( [ $domain ], $alternativeNames );
-			\EE::debug( sprintf( 'Loading the order related to the domains %s.', implode( ', ', $domains ) ) );
+			EE::debug( sprintf( 'Loading the order related to the domains %s.', implode( ', ', $domains ) ) );
 			if ( ! $this->repository->hasCertificateOrder( $domains ) ) {
-				\EE::error( "$domain has not yet been authorized." );
+				EE::error( "$domain has not yet been authorized." );
 			}
 			$order = $this->repository->loadCertificateOrder( $domains );
 
 			// Renewal
-			\EE::log( sprintf( 'Renewing certificate for domain %s.', $domain ) );
+			EE::log( sprintf( 'Renewing certificate for domain %s.', $domain ) );
 			$csr      = new CertificateRequest( $distinguishedName, $domainKeyPair );
 			$response = $this->client->finalizeOrder( $order, $csr );
-			\EE::log( 'Certificate received' );
+			EE::log( 'Certificate received' );
 
 			$this->repository->storeDomainCertificate( $domain, $response->getCertificate() );
-			\EE::log( 'Certificate stored' );
+			EE::log( 'Certificate stored' );
 
 			// Post-generate actions
 			$this->moveCertsToNginxProxy( $domain );
-			\EE::log( 'Certificate renewed successfully!' );
+			EE::log( 'Certificate renewed successfully!' );
 
 		} catch ( \Exception $e ) {
-			\EE::warning( 'A critical error occured during certificate renewal' );
-			\EE::debug( print_r( $e, true ) );
+			EE::warning( 'A critical error occured during certificate renewal' );
+			EE::debug( print_r( $e, true ) );
 
 			throw $e;
 		} catch ( \Throwable $e ) {
-			\EE::warning( 'A critical error occured during certificate renewal' );
-			\EE::debug( print_r( $e, true ) );
+			EE::warning( 'A critical error occured during certificate renewal' );
+			EE::debug( print_r( $e, true ) );
 
 			throw $e;
 		}
@@ -546,7 +549,7 @@ class Site_Letsencrypt {
 	 */
 	public function cleanup() {
 
-		$fs = new \Symfony\Component\Filesystem\Filesystem();
+		$fs = new Symfony_Filesystem\Filesystem();
 
 		$challange_dir = EE_ROOT_DIR . '/services/nginx-proxy/html/.well-known';
 		$challange_rule_file = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/default';
