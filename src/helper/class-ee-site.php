@@ -192,7 +192,7 @@ abstract class EE_Site_Command {
 		$this->fs = new Filesystem();
 
 		if ( $level >= 3 ) {
-			if ( \EE::docker()::docker_compose_down( $site_fs_path ) ) {
+			if ( \EE_DOCKER::docker_compose_down( $site_fs_path ) ) {
 				\EE::log( "[$site_url] Docker Containers removed." );
 			} else {
 				\EE::exec( "docker rm -f $(docker ps -q -f=label=created_by=EasyEngine -f=label=site_name=$site_url)" );
@@ -202,7 +202,7 @@ abstract class EE_Site_Command {
 			}
 		}
 
-		$volumes = \EE::docker()::get_volumes_by_label( $site_url );
+		$volumes = \EE_DOCKER::get_volumes_by_label( $site_url );
 		foreach ( $volumes as $volume ) {
 			\EE::exec( 'docker volume rm ' . $volume );
 		}
@@ -314,7 +314,7 @@ abstract class EE_Site_Command {
 		$success             = false;
 		$containers_to_start = [ 'nginx' ];
 
-		if ( \EE::docker()::docker_compose_up( $this->site_data->site_fs_path, $containers_to_start ) ) {
+		if ( \EE_DOCKER::docker_compose_up( $this->site_data->site_fs_path, $containers_to_start ) ) {
 			$this->site_data->site_enabled = 1;
 			$this->site_data->save();
 			$success = true;
@@ -332,7 +332,7 @@ abstract class EE_Site_Command {
 
 		\EE::log( 'Running post enable configurations.' );
 
-		$postfix_exists      = EE::docker()::service_exists( 'postfix', $this->site_data->site_fs_path );
+		$postfix_exists      = \EE_DOCKER::service_exists( 'postfix', $this->site_data->site_fs_path );
 		$containers_to_start = $postfix_exists ? [ 'nginx', 'postfix' ] : [ 'nginx' ];
 
 		\EE\Site\Utils\start_site_containers( $this->site_data->site_fs_path, $containers_to_start );
@@ -389,7 +389,7 @@ abstract class EE_Site_Command {
 			\EE\Site\Utils\reload_global_nginx_proxy();
 		}
 
-		if ( \EE::docker()::docker_compose_down( $this->site_data->site_fs_path ) ) {
+		if ( \EE_DOCKER::docker_compose_down( $this->site_data->site_fs_path ) ) {
 			$this->site_data->site_enabled = 0;
 			$this->site_data->save();
 
@@ -502,7 +502,7 @@ abstract class EE_Site_Command {
 	 */
 	private function verify_services() {
 
-		if ( 'running' !== EE::docker()::container_status( EE_PROXY_TYPE ) ) {
+		if ( 'running' !== \EE_DOCKER::container_status( EE_PROXY_TYPE ) ) {
 			EE\Service\Utils\nginx_proxy_check();
 		}
 

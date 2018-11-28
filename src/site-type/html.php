@@ -18,11 +18,6 @@ use function EE\Site\Utils\get_site_info;
 class HTML extends EE_Site_Command {
 
 	/**
-	 * @var object $docker Object to access `\EE::docker()` functions.
-	 */
-	private $docker;
-
-	/**
 	 * @var int $level The level of creation in progress. Essential for rollback in case of failure.
 	 */
 	private $level;
@@ -46,7 +41,6 @@ class HTML extends EE_Site_Command {
 
 		parent::__construct();
 		$this->level  = 0;
-		$this->docker = \EE::docker();
 		$this->logger = \EE::get_file_logger()->withName( 'html_type' );
 		$this->fs     = new Filesystem();
 	}
@@ -237,15 +231,15 @@ class HTML extends EE_Site_Command {
 			],
 		];
 
-		if ( ! IS_DARWIN && empty( $this->docker->get_volumes_by_label( $this->site_data['site_url'] ) ) ) {
-			$this->docker->create_volumes( $this->site_data['site_url'], $volumes );
+		if ( ! IS_DARWIN && empty( \EE_DOCKER::get_volumes_by_label( $this->site_data['site_url'] ) ) ) {
+			\EE_DOCKER::create_volumes( $this->site_data['site_url'], $volumes );
 		}
 
 		$site_docker_yml = $this->site_data['site_fs_path'] . '/docker-compose.yml';
 
 		$filter                = [];
 		$filter[]              = $this->site_data['site_type'];
-		$filter['site_prefix'] = $this->docker->get_docker_style_prefix( $this->site_data['site_url'] );
+		$filter['site_prefix'] = \EE_DOCKER::get_docker_style_prefix( $this->site_data['site_url'] );
 		$filter['is_ssl']      = $this->site_data['site_ssl'];
 
 		foreach ( $additional_filters as $key => $addon_filter ) {
