@@ -363,7 +363,7 @@ function site_status_check( $site_url ) {
 			$user_pass = get_global_auth();
 			$auth      = $user_pass['username'] . ':' . $user_pass['password'];
 		}
-		$httpcode = EE_Utils\get_curl_info( $site_url, $config_80_port, false, $auth );
+		$httpcode = EE_Utils\get_curl_info( $site_url, $config_80_port, false, $auth, true );
 		echo '.';
 		sleep( 2 );
 		if ( $i ++ > 60 ) {
