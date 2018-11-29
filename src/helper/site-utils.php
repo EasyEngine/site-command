@@ -509,3 +509,12 @@ function get_global_auth() {
 	];
 
 }
+
+/**
+ * Clear site cache with specific key.
+ *
+ * @param string $key Cache key to clear.
+ */
+function clean_site_cache( $key ) {
+	EE::exec( sprintf( 'docker exec -it %s redis-cli --eval purge_all_cache.lua 0 , "%s*"', GLOBAL_REDIS_CONTAINER, $key ) );
+}
