@@ -55,7 +55,7 @@ class UpdatePhpConfig extends Base {
 
 			$docker_yml              = $site->site_fs_path . '/docker-compose.yml';
 			$docker_yml_backup       = EE_BACKUP_DIR . '/' . $site->site_url . '/docker-compose.yml.backup';
-			$prefix                  = \EE::docker()->get_docker_style_prefix( $site->site_url );
+			$prefix                  = \EE_DOCKER::get_docker_style_prefix( $site->site_url );
 			$config_volume_name      = 'config_php';
 			$log_volume_name         = 'log_php';
 			$config_postfix          = 'config_postfix';
@@ -157,7 +157,7 @@ class UpdatePhpConfig extends Base {
 				[ $site->site_url, $config_volume_name, $config_symlink_path_old ]
 			);
 
-			$existing_volumes = \EE::docker()->get_volumes_by_label( $site->site_url );
+			$existing_volumes = \EE_DOCKER::get_volumes_by_label( $site->site_url );
 			if ( ! in_array( $log_volume_to_check, $existing_volumes ) ) {
 				self::$rsp->add_step(
 					"create-$site->site_url-log-php-volume",
@@ -261,7 +261,7 @@ class UpdatePhpConfig extends Base {
 
 			$docker_yml              = $site->site_fs_path . '/docker-compose.yml';
 			$docker_yml_backup       = EE_BACKUP_DIR . '/' . $site->site_url . '/docker-compose.yml.backup';
-			$prefix                  = \EE::docker()->get_docker_style_prefix( $site->site_url );
+			$prefix                  = \EE_DOCKER::get_docker_style_prefix( $site->site_url );
 			$config_volume_name      = 'config_php';
 			$volume_to_be_deleted    = $prefix . '_config_php';
 			$config_symlink_path_old = $site->site_fs_path . '/config/php-fpm';

@@ -362,7 +362,7 @@ function site_status_check( $site_url ) {
 			$user_pass = get_global_auth();
 			$auth      = $user_pass['username'] . ':' . $user_pass['password'];
 		}
-		$httpcode = \EE\Utils\get_curl_info( $site_url, $config_80_port, false, $auth );
+		$httpcode = \EE\Utils\get_curl_info( $site_url, $config_80_port, false, $auth, true );
 		echo '.';
 		sleep( 2 );
 		if ( $i ++ > 60 ) {
@@ -389,7 +389,7 @@ function start_site_containers( $site_fs_path, $containers = [] ) {
 
 	chdir( $site_fs_path );
 	EE::log( 'Starting site\'s services.' );
-	if ( ! EE::docker()::docker_compose_up( $site_fs_path, $containers ) ) {
+	if ( ! \EE_DOCKER::docker_compose_up( $site_fs_path, $containers ) ) {
 		throw new \Exception( 'There was some error in docker-compose up.' );
 	}
 }
