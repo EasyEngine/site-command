@@ -488,7 +488,7 @@ abstract class EE_Site_Command {
 			if ( 1 === intval( $this->site_data->cache_mysql_query ) ) {
 				$purge_key = $this->site_data->site_url . '_obj';
 			} else {
-				$error[] = 'Site object cache is disabled.';
+				$error[] = 'Site object cache is not enabled.';
 			}
 		}
 
@@ -497,7 +497,7 @@ abstract class EE_Site_Command {
 			if ( 1 === intval( $this->site_data->cache_nginx_fullpage ) ) {
 				$purge_key = $this->site_data->site_url . '_page';
 			} else {
-				$error[] = 'Site page cache is disabled.';
+				$error[] = 'Site page cache is not enabled.';
 			}
 		}
 
@@ -512,7 +512,12 @@ abstract class EE_Site_Command {
 
 		EE\Site\Utils\clean_site_cache( $purge_key );
 
-		\EE::success( 'Clean done.' );
+		if ( $page ) {
+			\EE::success( 'Page cache cleared for ' . $this->site_data->site_url );
+		}
+		if ( $object ) {
+			\EE::success( 'Object cache cleared for ' . $this->site_data->site_url );
+		}
 
 		\EE\Utils\delem_log( 'site clean end' );
 
