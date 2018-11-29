@@ -503,9 +503,7 @@ abstract class EE_Site_Command {
 
 		// If Page and Object both passed.
 		if ( ! empty( $object ) && ! empty( $page ) ) {
-			if ( 1 === intval( $this->site_data->cache_mysql_query ) || 1 === intval( $this->site_data->cache_nginx_fullpage ) ) {
-				$purge_key = $this->site_data->site_url;
-			}
+			$purge_key = $this->site_data->site_url;
 		}
 
 		if ( ! empty( $error ) ) {
