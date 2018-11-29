@@ -479,7 +479,8 @@ abstract class EE_Site_Command {
 
 		// No param passed.
 		if ( empty( $object ) && empty( $page ) ) {
-			$object = $page = true;
+			$object = true;
+			$page   = true;
 		}
 
 		// Object cache clean.
@@ -508,7 +509,7 @@ abstract class EE_Site_Command {
 		}
 
 		if ( ! empty( $error ) ) {
-			\EE::error( implode(' ',$error) );
+			\EE::error( implode( ' ', $error ) );
 		}
 
 		EE\Site\Utils\clean_site_cache( $purge_key );
