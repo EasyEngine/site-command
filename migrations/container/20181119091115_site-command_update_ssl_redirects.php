@@ -68,7 +68,7 @@ class UpdateSslRedirects extends Base {
 class UpdateSslRedirectsExtendor extends EE\Site\Type\EE_Site_Command {
 	public function update_ssl_redirects( $site_url ) {
 		$this->site_data = \EE\Site\Utils\get_site_info( [ $site_url ], false, false, true );
-		$postfix_exists  = EE::docker()::service_exists( 'postfix', $this->site_data['site_fs_path'] );
+		$postfix_exists  = \EE_DOCKER::service_exists( 'postfix', $this->site_data['site_fs_path'] );
 		if ( $this->site_data['site_ssl'] ) {
 			$this->site_data['site_ssl'] = 'le';
 		}

@@ -390,7 +390,7 @@ function start_site_containers( $site_fs_path, $containers = [] ) {
 
 	chdir( $site_fs_path );
 	EE::log( 'Starting site\'s services.' );
-	if ( ! EE::docker()::docker_compose_up( $site_fs_path, $containers ) ) {
+	if ( ! \EE_DOCKER::docker_compose_up( $site_fs_path, $containers ) ) {
 		throw new \Exception( 'There was some error in docker-compose up.' );
 	}
 }
