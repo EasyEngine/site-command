@@ -86,6 +86,10 @@ class Site_Command {
 		$type = 'html';
 
 		if ( in_array( reset( $args ), [ 'create', 'update' ], true ) || empty( $args ) ) {
+			$reserved_keywords = [ 'global', 'services', 'cli' ];
+			if ( ! empty( $args[0] ) && 'create' === $args[0] && ! empty( $args[1] ) && in_array( strtolower( $args[1] ), $reserved_keywords, true ) ) {
+				EE::error( "`{$args[1]}` is a reserved EasyEngine keyword. Cannot create site with it.\nCheck: https://github.com/EasyEngine/site-command/issues/247 for more info." );
+			}
 			\EE\Auth\Utils\init_global_admin_tools_auth( false );
 			if ( isset( $assoc_args['type'] ) ) {
 				$type = $assoc_args['type'];
