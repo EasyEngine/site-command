@@ -257,7 +257,7 @@ class Site_Command {
 
 		if ( false !== strpos( $site_url, '.' ) ) {
 			if ( IS_DARWIN ) {
-				EE::warning( 'There seems to be a tld in the site-name apart from `.test` in dev enviournment. Please configure it\'s dns entry manually.' );
+				EE::warning( 'We only support the `.test` TLD in dev environment. Please configure it\'s dns entry manually.' );
 			}
 		} else {
 			$site_url .= $ends_with_string;
