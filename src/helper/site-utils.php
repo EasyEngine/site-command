@@ -360,7 +360,7 @@ function setup_dnsmasq_for_darwin() {
 	}
 
 	// create config directory.
-	EE::exec( 'mkdir -pv $(brew --prefix)/etc/' );
+	EE::exec( 'mkdir -p $(brew --prefix)/etc/' );
 
 	// Setup `*.test` domain.
 	EE::exec( "echo 'address=/.test/127.0.0.1' > $(brew --prefix)/etc/dnsmasq.conf" );
