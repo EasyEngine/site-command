@@ -323,14 +323,20 @@ function add_site_redirects( string $site_url, bool $ssl, bool $inherit ) {
  */
 function create_etc_hosts_entry( $site_url ) {
 
+	if ( IS_DARWIN ) {
+		// check if brew is installed.
+		if ( EE::exec( 'command -v brew' ) ) {
+			$fs = new Filesystem();
+			if ( ! $fs->exists( '/etc/resolvers/test' ) ) {
+				setup_dnsmasq_for_darwin();
+			}
+		}
+
+		return;
+	}
 	$host_line = LOCALHOST_IP . "\t$site_url";
 	$etc_hosts = file_get_contents( '/etc/hosts' );
 	if ( ! preg_match( "/\s+$site_url\$/m", $etc_hosts ) ) {
-		if ( IS_DARWIN && ! is_writable( '/etc/hosts' ) ) {
-			EE::log( 'You may need to enter password to create host entry for site.' );
-			EE::exec( 'sudo chmod g+rw /etc/hosts' );
-			EE::exec( 'sudo chown root:staff /etc/hosts' );
-		}
 		if ( EE::exec( "/bin/bash -c 'echo \"$host_line\" >> /etc/hosts'" ) ) {
 			EE::success( 'Host entry successfully added.' );
 		} else {
@@ -341,6 +347,38 @@ function create_etc_hosts_entry( $site_url ) {
 	}
 }
 
+/**
+ * Setup dnsmasq for darwin to resolve `*.test` domain.
+ *
+ * @return bool success.
+ */
+function setup_dnsmasq_for_darwin() {
+
+	// check if dnsmasq is installed.
+	if ( ! EE::exec( 'brew ls --versions dnsmasq' ) ) {
+		return false;
+	}
+
+	// create config directory.
+	EE::exec( 'mkdir -p $(brew --prefix)/etc/' );
+
+	// Setup `*.test` domain.
+	EE::exec( "echo 'address=/.test/127.0.0.1' > $(brew --prefix)/etc/dnsmasq.conf" );
+
+	EE::log( 'Setting up dnsmasq for *.test domain. You might need to enter password.' );
+
+	// Add to LaunchDaemons so that it works after reboot.
+	EE::exec( 'sudo cp -v $(brew --prefix dnsmasq)/homebrew.mxcl.dnsmasq.plist /Library/LaunchDaemons' );
+
+	// Create resolver directory.
+	EE::exec( 'sudo mkdir -v /etc/resolver' );
+
+	// Adding 127.0.0.1 nameserver to resolvers.
+	EE::exec( "sudo bash -c 'echo \"nameserver 127.0.0.1\" > /etc/resolver/test'" );
+
+	// start it.
+	EE::exec( 'sudo launchctl load -w /Library/LaunchDaemons/homebrew.mxcl.dnsmasq.plist' );
+}
 
 /**
  * Checking site is running or not.
