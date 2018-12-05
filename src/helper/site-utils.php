@@ -356,8 +356,10 @@ function setup_dnsmasq_for_darwin() {
 	if ( EE::exec( 'command -v brew' ) ) {
 		$fs = new Filesystem();
 		if ( $fs->exists( '/etc/resolvers/test' ) ) {
-			return false;
+			return true;
 		}
+	} else {
+		return false;
 	}
 
 	// check if dnsmasq is installed.
