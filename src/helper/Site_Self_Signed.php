@@ -142,6 +142,7 @@ class Site_Self_signed {
 	private function trust_certificate( $crt_path ) {
 
 		if ( IS_DARWIN ) {
+			EE::log( 'You may need to enter password once for adding root certificate as trusted on your system.' );
 			EE::exec( sprintf(
 				'sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain %s', $crt_path
 			) );
