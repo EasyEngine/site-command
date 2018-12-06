@@ -324,7 +324,13 @@ function add_site_redirects( string $site_url, bool $ssl, bool $inherit ) {
 function create_etc_hosts_entry( $site_url ) {
 
 	if ( IS_DARWIN ) {
-		setup_dnsmasq_for_darwin();
+
+		// setup_dnsmasq_for_darwin only if domain ends with `.test`
+		$ends_with_string = '.test';
+		$diff             = strlen( $site_url ) - strlen( $ends_with_string );
+		if ( $diff >= 0 && false !== strpos( $site_url, $ends_with_string, $diff ) ) {
+			setup_dnsmasq_for_darwin();
+		}
 
 		return;
 	}
@@ -355,7 +361,7 @@ function setup_dnsmasq_for_darwin() {
 	// check if brew is installed.
 	if ( EE::exec( 'command -v brew' ) ) {
 		$fs = new Filesystem();
-		if ( $fs->exists( '/etc/resolvers/test' ) ) {
+		if ( $fs->exists( '/etc/resolver/test' ) ) {
 			return true;
 		}
 	} else {
