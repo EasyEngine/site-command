@@ -148,7 +148,7 @@ class Site_Self_signed {
 		} else {
 			$cert_path = '/usr/local/share/ca-certificates';
 			$this->fs->copy( $this->root_pem, '/usr/local/share/ca-certificates/easyengine.crt' );
-			EE::exec( 'update-ca-certificates ' );
+			EE::exec( 'update-ca-certificates' );
 		}
 	}
 
