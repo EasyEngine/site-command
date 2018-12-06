@@ -140,10 +140,15 @@ class Site_Self_signed {
 	 * @return void
 	 */
 	private function trust_certificate( $crt_path ) {
+
 		if ( IS_DARWIN ) {
 			EE::exec( sprintf(
 				'sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain %s', $crt_path
 			) );
+		} else {
+			$cert_path = '/usr/local/share/ca-certificates';
+			$this->fs->copy( $this->root_pem, '/usr/local/share/ca-certificates/easyengine.crt' );
+			EE::exec( 'update-ca-certificates ' );
 		}
 	}
 
