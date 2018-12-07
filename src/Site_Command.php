@@ -257,7 +257,7 @@ class Site_Command {
 
 		if ( false !== strpos( $site_url, '.' ) ) {
 			if ( IS_DARWIN ) {
-				EE::warning( 'We only support the `.test` TLD in dev environment. Please configure it\'s dns entry manually.' );
+				EE::warning( sprintf( 'We only support the `.test` TLD in dev environment. Please configure dns entry manually for %s', $site_url ) );
 			}
 		} else {
 			$site_url .= $ends_with_string;

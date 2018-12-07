@@ -268,12 +268,12 @@ function add_site_redirects( string $site_url, bool $ssl, bool $inherit ) {
 function create_etc_hosts_entry( $site_url ) {
 
 	if ( IS_DARWIN ) {
-		// check if brew is installed.
-		if ( EE::exec( 'command -v brew' ) ) {
-			$fs = new Filesystem();
-			if ( ! $fs->exists( '/etc/resolvers/test' ) ) {
-				setup_dnsmasq_for_darwin();
-			}
+
+		// setup_dnsmasq_for_darwin only if domain ends with `.test`
+		$ends_with_string = '.test';
+		$diff             = strlen( $site_url ) - strlen( $ends_with_string );
+		if ( $diff >= 0 && false !== strpos( $site_url, $ends_with_string, $diff ) ) {
+			setup_dnsmasq_for_darwin();
 		}
 
 		return;
@@ -298,6 +298,20 @@ function create_etc_hosts_entry( $site_url ) {
  */
 function setup_dnsmasq_for_darwin() {
 
+	if ( ! IS_DARWIN ) {
+		return false;
+	}
+
+	// check if brew is installed.
+	if ( EE::exec( 'command -v brew' ) ) {
+		$fs = new Filesystem();
+		if ( $fs->exists( '/etc/resolver/test' ) ) {
+			return true;
+		}
+	} else {
+		return false;
+	}
+
 	// check if dnsmasq is installed.
 	if ( ! EE::exec( 'brew ls --versions dnsmasq' ) ) {
 		return false;
@@ -321,7 +335,11 @@ function setup_dnsmasq_for_darwin() {
 	EE::exec( "sudo bash -c 'echo \"nameserver 127.0.0.1\" > /etc/resolver/test'" );
 
 	// start it.
-	EE::exec( 'sudo launchctl load -w /Library/LaunchDaemons/homebrew.mxcl.dnsmasq.plist' );
+	if ( EE::exec( 'sudo launchctl load -w /Library/LaunchDaemons/homebrew.mxcl.dnsmasq.plist' ) ) {
+		return true;
+	}
+
+	return false;
 }
 
 /**
