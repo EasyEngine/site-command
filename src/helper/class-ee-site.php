@@ -4,7 +4,10 @@ namespace EE\Site\Type;
 
 use EE;
 use EE\Model\Site;
+use EE\Model\Option;
 use Symfony\Component\Filesystem\Filesystem;
+use function EE\Utils\download;
+use function EE\Utils\extract_zip;
 use function EE\Site\Utils\auto_site_name;
 use function EE\Site\Utils\get_site_info;
 use function EE\Site\Utils\reload_global_nginx_proxy;
@@ -863,6 +866,136 @@ abstract class EE_Site_Command {
 		reload_global_nginx_proxy();
 
 		EE::log( 'SSL verification completed.' );
+	}
+
+	/**
+	 * Publishes site online using ngrok.
+	 *
+	 * ## OPTIONS
+	 *
+	 * <site-name>
+	 * : Name of website.
+	 *
+	 * [--disable]
+	 * : Take it down.
+	 *
+	 * [--token=<token>]
+	 * : ngrok token.
+	 */
+	public function publish( $args, $assoc_args ) {
+
+		$args            = auto_site_name( $args, 'site', __FUNCTION__ );
+		$this->site_data = get_site_info( $args, false, true, false );
+		$disable         = \EE\Utils\get_flag_value( $assoc_args, 'disable', false );
+		$token           = \EE\Utils\get_flag_value( $assoc_args, 'token', false );
+		$active_publish  = Option::get( 'publish_site' );
+		$publish_url     = Option::get( 'publish_url' );
+
+		$this->fs = new Filesystem();
+		$ngrok    = EE_SERVICE_DIR . '/ngrok/ngrok';
+		$this->maybe_setup_ngrok( $ngrok );
+
+		if ( $disable ) {
+			if ( $this->site_data->site_url === $active_publish ) {
+				$this->ngrok_curl( false );
+			} else {
+				EE::error( $this->site_data->site_url . ' does not have active publish running.' );
+			}
+
+			return;
+		}
+
+		if ( ! empty( $active_publish ) ) {
+			if ( $this->site_data->site_url === $active_publish ) {
+				$error = $this->site_data->site_url . ' is already published online. Visit link: ' . $publish_url . ' to view it online.';
+			} else {
+				$error = "$active_publish site is published currently. Publishing of only one site at a time is supported.\nTo publish {$this->site_data->site_url} , first run: `ee site publish $active_publish --disable`";
+			}
+			EE::error( $error );
+		}
+
+		if ( ! empty( $token ) ) {
+			EE::exec( "$ngrok authtoken $token" );
+		}
+		EE::log( "Publishing site: {$this->site_data->site_url} online." );
+		EE::debug( "$ngrok http -host-header={$this->site_data->site_url} 80 > /dev/null &" );
+		EE::debug( shell_exec( "$ngrok http -host-header={$this->site_data->site_url} 80 > /dev/null &" ) );
+		$published_url = $this->ngrok_curl();
+		if ( empty( $published_url ) ) {
+			EE::error( 'Could not publish site.' );
+		}
+		EE::success( "Successfully published {$this->site_data->site_url} to url: $published_url" );
+		Option::set( 'publish_site', $this->site_data->site_url );
+		Option::set( 'publish_url', $published_url );
+	}
+
+	private function maybe_setup_ngrok( $ngrok ) {
+
+		if ( $this->fs->exists( $ngrok ) ) {
+			return;
+		}
+		EE::log( 'Setting up ngrok. This may take some time.' );
+		$ngrok_zip = $ngrok . '.zip';
+		$this->fs->mkdir( dirname( $ngrok ) );
+		$uname_m      = 'x86_64' === php_uname( 'm' ) ? 'amd64.zip' : '386.zip';
+		$download_url = IS_DARWIN ? 'https://bin.equinox.io/c/4VmDzA7iaHb/ngrok-stable-darwin-' . $uname_m : 'https://bin.equinox.io/c/4VmDzA7iaHb/ngrok-stable-linux-' . $uname_m;
+		download( $ngrok_zip, $download_url );
+		extract_zip( $ngrok_zip, dirname( $ngrok ) );
+		chmod( $ngrok, 0755 );
+		$this->fs->remove( $ngrok_zip );
+	}
+
+	private function ngrok_curl( $get_url = true ) {
+
+		$tries      = 0;
+		$loop       = true;
+		while ( $loop ) {
+			$ch = curl_init( 'http://localhost:4040/api/tunnels/' );
+			curl_setopt( $ch, CURLOPT_RETURNTRANSFER, true );
+			curl_setopt( $ch, CURLOPT_FOLLOWLOCATION, true );
+			curl_setopt( $ch, CURLOPT_AUTOREFERER, true );
+			$ngrok_curl = curl_exec( $ch );
+
+			if ( ! empty( $ngrok_curl ) ) {
+				$ngrok_data = json_decode( $ngrok_curl, true );
+				if ( ! empty( $ngrok_data['tunnels'] ) ) {
+					$loop = false;
+				}
+			}
+			$tries ++;
+			EE::debug( $ngrok_curl );
+			sleep( 1 );
+			if ( $tries > 20 ) {
+				$loop = false;
+			}
+		}
+
+		$json_error = json_last_error();
+		if ( $json_error !== JSON_ERROR_NONE ) {
+			EE::debug( 'Json last error: ' . $json_error );
+			EE::error( 'Error fetching ngrok url. Check logs.' );
+		}
+
+		$ngrok_tunnel = '';
+		if ( ! empty( $ngrok_data['tunnels'] ) ) {
+			if ( $get_url ) {
+				return str_replace( 'https', 'http', $ngrok_data['tunnels'][0]['public_url'] );
+			} else {
+				$ngrok_tunnel = urlencode( $ngrok_data['tunnels'][0]['name'] );
+			}
+		}
+		EE::log( 'Disabling publish.' );
+		if ( ! empty( $ngrok_tunnel ) ) {
+			$ch = curl_init();
+			curl_setopt( $ch, CURLOPT_URL, 'http://localhost:4040/api/tunnels/' . $ngrok_tunnel );
+			curl_setopt( $ch, CURLOPT_CUSTOMREQUEST, "DELETE" );
+			$disable = curl_exec( $ch );
+			EE::debug( $disable );
+			curl_close( $ch );
+		}
+		Option::set( 'publish_site', '' );
+		Option::set( 'publish_url', '' );
+		EE::success( 'Site publish disabled.' );
 	}
 
 	/**
