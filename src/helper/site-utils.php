@@ -109,62 +109,6 @@ function get_site_info( $args, $site_enabled_check = true, $exit_if_not_found = 
 }
 
 /**
- * Generates global docker-compose.yml at EE_ROOT_DIR/services
- *
- * @param Filesystem $fs Filesystem object to write file
- */
-function generate_global_docker_compose_yml( Filesystem $fs ) {
-	$img_versions = EE\Utils\get_image_versions();
-
-	$data = [
-		'services' => [
-			[
-				'name'           => 'nginx-proxy',
-				'container_name' => EE_PROXY_TYPE,
-				'image'          => 'easyengine/nginx-proxy:' . $img_versions['easyengine/nginx-proxy'],
-				'restart'        => 'always',
-				'ports'          => [
-					'80:80',
-					'443:443',
-				],
-				'environment'    => [
-					'LOCAL_USER_ID=' . posix_geteuid(),
-					'LOCAL_GROUP_ID=' . posix_getegid(),
-				],
-				'volumes'        => [
-					EE_ROOT_DIR . '/services/nginx-proxy/certs:/etc/nginx/certs',
-					EE_ROOT_DIR . '/services/nginx-proxy/dhparam:/etc/nginx/dhparam',
-					EE_ROOT_DIR . '/services/nginx-proxy/conf.d:/etc/nginx/conf.d',
-					EE_ROOT_DIR . '/services/nginx-proxy/htpasswd:/etc/nginx/htpasswd',
-					EE_ROOT_DIR . '/services/nginx-proxy/vhost.d:/etc/nginx/vhost.d',
-					EE_ROOT_DIR . '/services/nginx-proxy/html:/usr/share/nginx/html',
-					'/var/run/docker.sock:/tmp/docker.sock:ro',
-				],
-				'networks'       => [
-					'global-frontend-network',
-				],
-			],
-			[
-				'name'           => GLOBAL_DB,
-				'container_name' => GLOBAL_DB_CONTAINER,
-				'image'          => 'easyengine/mariadb:' . $img_versions['easyengine/mariadb'],
-				'restart'        => 'always',
-				'environment'    => [
-					'MYSQL_ROOT_PASSWORD=' . \EE\Utils\random_password(),
-				],
-				'volumes'        => [ './app/db:/var/lib/mysql' ],
-				'networks'       => [
-					'global-backend-network',
-				],
-			],
-		],
-	];
-
-	$contents = EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/global_docker_compose.yml.mustache', $data );
-	$fs->dumpFile( EE_ROOT_DIR . '/services/docker-compose.yml', $contents );
-}
-
-/**
  * Create user in remote or global db.
  *
  * @param string $db_host Database Hostname.
