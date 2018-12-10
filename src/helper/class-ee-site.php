@@ -877,7 +877,10 @@ abstract class EE_Site_Command {
 	 * : Name of website.
 	 *
 	 * [--disable]
-	 * : Take it down.
+	 * : Take online link down.
+	 *
+	 * [--refresh]
+	 * : Refresh site publish if link has expired.
 	 *
 	 * [--token=<token>]
 	 * : ngrok token.
@@ -885,8 +888,9 @@ abstract class EE_Site_Command {
 	public function publish( $args, $assoc_args ) {
 
 		$args            = auto_site_name( $args, 'site', __FUNCTION__ );
-		$this->site_data = get_site_info( $args, false, true, false );
+		$this->site_data = get_site_info( $args, true, true, false );
 		$disable         = \EE\Utils\get_flag_value( $assoc_args, 'disable', false );
+		$refresh         = \EE\Utils\get_flag_value( $assoc_args, 'refresh', false );
 		$token           = \EE\Utils\get_flag_value( $assoc_args, 'token', false );
 		$active_publish  = Option::get( 'publish_site' );
 		$publish_url     = Option::get( 'publish_url' );
@@ -894,14 +898,16 @@ abstract class EE_Site_Command {
 		$this->fs = new Filesystem();
 		$ngrok    = EE_SERVICE_DIR . '/ngrok/ngrok';
 
-		if ( $disable ) {
+		if ( $disable || $refresh ) {
 			if ( $this->site_data->site_url === $active_publish ) {
-				$this->ngrok_curl( false );
+				$this->ngrok_curl( false, $refresh );
 			} else {
 				EE::error( $this->site_data->site_url . ' does not have active publish running.' );
 			}
 
-			return;
+			if ( ! $refresh ) {
+				return;
+			}
 		}
 
 		if ( $this->site_data->site_ssl ) {
@@ -910,19 +916,23 @@ abstract class EE_Site_Command {
 
 		$this->maybe_setup_ngrok( $ngrok );
 		if ( ! empty( $active_publish ) ) {
-			if ( $this->site_data->site_url === $active_publish ) {
-				$error = $this->site_data->site_url . ' is already published online. Visit link: ' . $publish_url . ' to view it online.';
+			if ( ( $this->site_data->site_url === $active_publish ) ) {
+				$error = $refresh ? '' : "{$this->site_data->site_url} has already been published. Visit link: $publish_url to view it online.\nNote: This link is only valid for few hours. In case it has expired run: `ee site publish {$this->site_data->site_url} --refresh`";
 			} else {
 				$error = "$active_publish site is published currently. Publishing of only one site at a time is supported.\nTo publish {$this->site_data->site_url} , first run: `ee site publish $active_publish --disable`";
 			}
-			EE::error( $error );
+			if ( ! empty( $error ) ) {
+				EE::error( $error );
+			}
 		}
 
 		if ( ! empty( $token ) ) {
 			EE::exec( "$ngrok authtoken $token" );
 		}
 		$config_80_port = \EE\Utils\get_config_value( 'proxy_80_port', 80 );
-		EE::log( "Publishing site: {$this->site_data->site_url} online." );
+		if ( ! $refresh ) {
+			EE::log( "Publishing site: {$this->site_data->site_url} online." );
+		}
 		EE::debug( "$ngrok http -host-header={$this->site_data->site_url} $config_80_port > /dev/null &" );
 		EE::debug( shell_exec( "$ngrok http -host-header={$this->site_data->site_url} $config_80_port > /dev/null &" ) );
 		$published_url = $this->ngrok_curl();
@@ -934,6 +944,11 @@ abstract class EE_Site_Command {
 		Option::set( 'publish_url', $published_url );
 	}
 
+	/**
+	 * Check if ngrok binary is setup. If not, set it up.
+	 *
+	 * @param $ngrok Path to ngrok binary.
+	 */
 	private function maybe_setup_ngrok( $ngrok ) {
 
 		if ( $this->fs->exists( $ngrok ) ) {
@@ -950,8 +965,15 @@ abstract class EE_Site_Command {
 		$this->fs->remove( $ngrok_zip );
 	}
 
-	private function ngrok_curl( $get_url = true ) {
+	/**
+	 * Function to curl and get data from ngrok api.
+	 *
+	 * @param bool $get_url To get url of tunnel or not.
+	 * @param bool $refresh Whether to disable for publish refresh or not.
+	 */
+	private function ngrok_curl( $get_url = true, $refresh = false ) {
 
+		EE::log( 'Checking ngrok api for tunnel details.' );
 		$tries = 0;
 		$loop  = true;
 		while ( $loop ) {
@@ -991,7 +1013,12 @@ abstract class EE_Site_Command {
 		} elseif ( $get_url ) {
 			EE::error( 'Could not publish site. Please check logs.' );
 		}
-		EE::log( 'Disabling publish.' );
+
+		if ( $refresh ) {
+			EE::log( 'Refreshing site publish.' );
+		} else {
+			EE::log( 'Disabling publish.' );
+		}
 		if ( ! empty( $ngrok_tunnel ) ) {
 			$ch = curl_init();
 			curl_setopt( $ch, CURLOPT_URL, 'http://127.0.0.1:4040/api/tunnels/' . $ngrok_tunnel );
@@ -1003,7 +1030,9 @@ abstract class EE_Site_Command {
 		}
 		Option::set( 'publish_site', '' );
 		Option::set( 'publish_url', '' );
-		EE::success( 'Site publish disabled.' );
+		if ( ! $refresh ) {
+			EE::success( 'Site publish disabled.' );
+		}
 	}
 
 	/**
