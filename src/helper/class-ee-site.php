@@ -8,6 +8,7 @@ use EE\Model\Option;
 use Symfony\Component\Filesystem\Filesystem;
 use function EE\Utils\download;
 use function EE\Utils\extract_zip;
+use function EE\Utils\get_flag_value;
 use function EE\Site\Utils\auto_site_name;
 use function EE\Site\Utils\get_site_info;
 use function EE\Site\Utils\reload_global_nginx_proxy;
@@ -884,14 +885,26 @@ abstract class EE_Site_Command {
 	 *
 	 * [--token=<token>]
 	 * : ngrok token.
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     # Publish site online
+	 *     $ ee site publish example.com
+	 *
+	 *     # Refresh published link if expired
+	 *     $ ee site publish example.com --refresh
+	 *
+	 *     # Disable online link
+	 *     $ ee site publish example.com --disable
+	 *
 	 */
 	public function publish( $args, $assoc_args ) {
 
 		$args            = auto_site_name( $args, 'site', __FUNCTION__ );
 		$this->site_data = get_site_info( $args, true, true, false );
-		$disable         = \EE\Utils\get_flag_value( $assoc_args, 'disable', false );
-		$refresh         = \EE\Utils\get_flag_value( $assoc_args, 'refresh', false );
-		$token           = \EE\Utils\get_flag_value( $assoc_args, 'token', false );
+		$disable         = get_flag_value( $assoc_args, 'disable', false );
+		$refresh         = get_flag_value( $assoc_args, 'refresh', false );
+		$token           = get_flag_value( $assoc_args, 'token', false );
 		$active_publish  = Option::get( 'publish_site' );
 		$publish_url     = Option::get( 'publish_url' );
 
