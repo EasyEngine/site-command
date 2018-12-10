@@ -701,6 +701,9 @@ abstract class EE_Site_Command {
 			}
 			\EE::debug( 'Inheriting certs' );
 			$this->inherit_certs( $site_url );
+		} elseif ( 'self' === $ssl_type ) {
+			$client = new Site_Self_signed();
+			$client->create_certificate( $site_url );
 		} else {
 			throw new \Exception( "Unrecognized value in --ssl flag: $ssl_type" );
 		}
