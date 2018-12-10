@@ -76,6 +76,9 @@ class HTML extends EE_Site_Command {
 	 *     # Create html site with wildcard ssl
 	 *     $ ee site create example.com --ssl=le --wildcard
 	 *
+	 *     # Create html site with self signed certificate
+	 *     $ ee site create example.com --ssl=self
+	 *
 	 */
 	public function create( $args, $assoc_args ) {
 
@@ -347,6 +350,7 @@ class HTML extends EE_Site_Command {
 		if ( $this->level > 0 ) {
 			$this->delete_site( $this->level, $this->site_data['site_url'], $this->site_data['site_fs_path'] );
 		}
+
 		\EE::success( 'Rollback complete. Exiting now.' );
 		exit;
 	}
