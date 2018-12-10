@@ -893,7 +893,6 @@ abstract class EE_Site_Command {
 
 		$this->fs = new Filesystem();
 		$ngrok    = EE_SERVICE_DIR . '/ngrok/ngrok';
-		$this->maybe_setup_ngrok( $ngrok );
 
 		if ( $disable ) {
 			if ( $this->site_data->site_url === $active_publish ) {
@@ -905,6 +904,11 @@ abstract class EE_Site_Command {
 			return;
 		}
 
+		if ( $this->site_data->site_ssl ) {
+			EE::error( 'site publish is not yet supported for ssl sites.' );
+		}
+
+		$this->maybe_setup_ngrok( $ngrok );
 		if ( ! empty( $active_publish ) ) {
 			if ( $this->site_data->site_url === $active_publish ) {
 				$error = $this->site_data->site_url . ' is already published online. Visit link: ' . $publish_url . ' to view it online.';
@@ -917,9 +921,10 @@ abstract class EE_Site_Command {
 		if ( ! empty( $token ) ) {
 			EE::exec( "$ngrok authtoken $token" );
 		}
+		$config_80_port = \EE\Utils\get_config_value( 'proxy_80_port', 80 );
 		EE::log( "Publishing site: {$this->site_data->site_url} online." );
-		EE::debug( "$ngrok http -host-header={$this->site_data->site_url} 80 > /dev/null &" );
-		EE::debug( shell_exec( "$ngrok http -host-header={$this->site_data->site_url} 80 > /dev/null &" ) );
+		EE::debug( "$ngrok http -host-header={$this->site_data->site_url} $config_80_port > /dev/null &" );
+		EE::debug( shell_exec( "$ngrok http -host-header={$this->site_data->site_url} $config_80_port > /dev/null &" ) );
 		$published_url = $this->ngrok_curl();
 		if ( empty( $published_url ) ) {
 			EE::error( 'Could not publish site.' );
@@ -947,10 +952,10 @@ abstract class EE_Site_Command {
 
 	private function ngrok_curl( $get_url = true ) {
 
-		$tries      = 0;
-		$loop       = true;
+		$tries = 0;
+		$loop  = true;
 		while ( $loop ) {
-			$ch = curl_init( 'http://localhost:4040/api/tunnels/' );
+			$ch = curl_init( 'http://127.0.0.1:4040/api/tunnels/' );
 			curl_setopt( $ch, CURLOPT_RETURNTRANSFER, true );
 			curl_setopt( $ch, CURLOPT_FOLLOWLOCATION, true );
 			curl_setopt( $ch, CURLOPT_AUTOREFERER, true );
@@ -981,17 +986,20 @@ abstract class EE_Site_Command {
 			if ( $get_url ) {
 				return str_replace( 'https', 'http', $ngrok_data['tunnels'][0]['public_url'] );
 			} else {
-				$ngrok_tunnel = urlencode( $ngrok_data['tunnels'][0]['name'] );
+				$ngrok_tunnel = str_replace( '+', '%20', urlencode( $ngrok_data['tunnels'][0]['name'] ) );
 			}
+		} elseif ( $get_url ) {
+			EE::error( 'Could not publish site. Please check logs.' );
 		}
 		EE::log( 'Disabling publish.' );
 		if ( ! empty( $ngrok_tunnel ) ) {
 			$ch = curl_init();
-			curl_setopt( $ch, CURLOPT_URL, 'http://localhost:4040/api/tunnels/' . $ngrok_tunnel );
+			curl_setopt( $ch, CURLOPT_URL, 'http://127.0.0.1:4040/api/tunnels/' . $ngrok_tunnel );
 			curl_setopt( $ch, CURLOPT_CUSTOMREQUEST, "DELETE" );
 			$disable = curl_exec( $ch );
 			EE::debug( $disable );
 			curl_close( $ch );
+			EE::exec( 'killall ngrok' );
 		}
 		Option::set( 'publish_site', '' );
 		Option::set( 'publish_url', '' );
