@@ -76,6 +76,9 @@ class HTML extends EE_Site_Command {
 	 *     # Create html site with wildcard ssl
 	 *     $ ee site create example.com --ssl=le --wildcard
 	 *
+	 *     # Create html site with self signed certificate
+	 *     $ ee site create example.com --ssl=self
+	 *
 	 */
 	public function create( $args, $assoc_args ) {
 
@@ -92,7 +95,7 @@ class HTML extends EE_Site_Command {
 			\EE::error( sprintf( "Site %1\$s already exists. If you want to re-create it please delete the older one using:\n`ee site delete %1\$s`", $this->site_data['site_url'] ) );
 		}
 
-		$this->site_data['site_ssl']          = \EE\Utils\get_flag_value( $assoc_args, 'ssl' );
+		$this->site_data['site_ssl']          = \EE\Utils\get_flag_value( $assoc_args, 'ssl', '' );
 		$this->site_data['site_ssl_wildcard'] = \EE\Utils\get_flag_value( $assoc_args, 'wildcard' );
 		$this->skip_status_check              = \EE\Utils\get_flag_value( $assoc_args, 'skip-status-check' );
 
@@ -285,14 +288,13 @@ class HTML extends EE_Site_Command {
 	 */
 	private function create_site_db_entry() {
 
-		$ssl          = $this->site_data['site_ssl'] ? 1 : 0;
 		$ssl_wildcard = $this->site_data['site_ssl_wildcard'] ? 1 : 0;
 
 		$site = Site::create( [
 			'site_url'          => $this->site_data['site_url'],
 			'site_type'         => $this->site_data['site_type'],
 			'site_fs_path'      => $this->site_data['site_fs_path'],
-			'site_ssl'          => $ssl,
+			'site_ssl'          => $this->site_data['site_ssl'],
 			'site_ssl_wildcard' => $ssl_wildcard,
 			'created_on'        => date( 'Y-m-d H:i:s', time() ),
 		] );
@@ -348,6 +350,7 @@ class HTML extends EE_Site_Command {
 		if ( $this->level > 0 ) {
 			$this->delete_site( $this->level, $this->site_data['site_url'], $this->site_data['site_fs_path'] );
 		}
+
 		\EE::success( 'Rollback complete. Exiting now.' );
 		exit;
 	}
