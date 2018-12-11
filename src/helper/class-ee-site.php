@@ -318,6 +318,7 @@ abstract class EE_Site_Command {
 		if ( $this->site_data->site_ssl ) {
 			EE::error( 'Site ' . $this->site_data->site_url . ' already contains SSL.' );
 		}
+		EE::log( 'Starting ssl update for: ' . $this->site_data->site_url );
 		try {
 			$this->site_data->site_ssl          = $ssl;
 			$this->site_data->site_ssl_wildcard = $wildcard ? 1 : 0;
@@ -332,7 +333,7 @@ abstract class EE_Site_Command {
 			EE::error( $e->getMessage() );
 		}
 		$site->save();
-		EE::success( 'Updated site ' . $this->site_data['site_url'] );
+		EE::success( 'Enabled ssl for ' . $this->site_data['site_url'] );
 		delem_log( 'site ssl update end' );
 	}
 
