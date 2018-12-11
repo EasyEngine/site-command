@@ -9,6 +9,7 @@ use Symfony\Component\Filesystem\Filesystem;
 use function EE\Utils\download;
 use function EE\Utils\extract_zip;
 use function EE\Utils\get_flag_value;
+use function EE\Utils\delem_log;
 use function EE\Site\Utils\auto_site_name;
 use function EE\Site\Utils\get_site_info;
 use function EE\Site\Utils\reload_global_nginx_proxy;
@@ -269,6 +270,70 @@ abstract class EE_Site_Command {
 			}
 		}
 		\EE::log( "Site $site_url deleted." );
+	}
+
+	/**
+	 * Supports updating and upgrading site.
+	 *
+	 * [<site-name>]
+	 * : Name of the site.
+	 *
+	 * [--ssl=<ssl>]
+	 * : Enable ssl on site
+	 *
+	 * [--wildcard]
+	 * : Enable wildcard SSL on site.
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     # Add SSL to non-ssl site
+	 *     $ ee site update example.com --ssl=le
+	 *
+	 *     # Add SSL to non-ssl site
+	 *     $ ee site update example.com --ssl=le --wildcard
+	 *
+	 *     # Add self-signed SSL to non-ssl site
+	 *     $ ee site update example.com --ssl=self
+	 *
+	 */
+	public function update( $args, $assoc_args ) {
+
+		delem_log( 'site update start' );
+		$args            = auto_site_name( $args, 'site', __FUNCTION__ );
+		$this->site_data = get_site_info( $args, true, true, false );
+		$ssl             = get_flag_value( $assoc_args, 'ssl', false );
+		if ( $ssl ) {
+			$this->update_ssl( $assoc_args );
+		}
+	}
+
+	/**
+	 * Funciton to update ssl of a site.
+	 */
+	protected function update_ssl( $assoc_args ) {
+
+		$ssl      = get_flag_value( $assoc_args, 'ssl', false );
+		$wildcard = get_flag_value( $assoc_args, 'wildcard', false );
+
+		if ( $this->site_data->site_ssl ) {
+			EE::error( 'Site ' . $this->site_data->site_url . ' already contains SSL.' );
+		}
+		try {
+			$this->site_data->site_ssl          = $ssl;
+			$this->site_data->site_ssl_wildcard = $wildcard ? 1 : 0;
+
+			$site                        = $this->site_data;
+			$array_data                  = ( array ) $this->site_data;
+			$this->site_data             = reset( $array_data );
+			$this->site_data['site_ssl'] = $ssl;
+			$this->www_ssl_wrapper( [ 'nginx' ] );
+			$site->site_ssl = $ssl;
+		} catch ( \Exception $e ) {
+			EE::error( $e->getMessage() );
+		}
+		$site->save();
+		EE::success( 'Updated site ' . $this->site_data['site_url'] );
+		delem_log( 'site ssl update end' );
 	}
 
 	/**
