@@ -312,12 +312,17 @@ abstract class EE_Site_Command {
 	 */
 	protected function update_ssl( $assoc_args ) {
 
-		$ssl      = get_flag_value( $assoc_args, 'ssl', false );
-		$wildcard = get_flag_value( $assoc_args, 'wildcard', false );
+		$ssl            = get_flag_value( $assoc_args, 'ssl', false );
+		$wildcard       = get_flag_value( $assoc_args, 'wildcard', false );
+		$show_error     = $this->site_data->site_ssl ? true : false;
+		$wildcard_error = ( ! $this->site_data->site_ssl_wildcard && $wildcard ) ? true : false;
 
-		if ( $this->site_data->site_ssl ) {
-			EE::error( 'Site ' . $this->site_data->site_url . ' already contains SSL.' );
+		$error = $wildcard_error ? 'Update from normal ssl to wildcard is not supported yet.' : 'Site ' . $this->site_data->site_url . ' already contains SSL.';
+
+		if ( $show_error ) {
+			EE::error( $error );
 		}
+
 		EE::log( 'Starting ssl update for: ' . $this->site_data->site_url );
 		try {
 			$this->site_data->site_ssl          = $ssl;
