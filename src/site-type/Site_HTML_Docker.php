@@ -35,13 +35,14 @@ class Site_HTML_Docker {
 				[ 'name' => 'HSTS=off' ],
 			],
 		];
+
+		$ssl_policy = get_ssl_policy();
 		if ( ! empty( $filters['nohttps'] ) && $filters['nohttps'] ) {
-			$ssl_policy                    = get_ssl_policy();
 			$nginx['environment']['env'][] = [ 'name' => 'HTTPS_METHOD=nohttps' ];
-			if ( 'Mozilla-Modern' !== $ssl_policy ) {
-				$nginx['environment']['env'][] = [ 'name' => "SSL_POLICY=$ssl_policy" ];
-			}
+		} elseif ( 'Mozilla-Modern' !== $ssl_policy ) {
+			$nginx['environment']['env'][] = [ 'name' => "SSL_POLICY=$ssl_policy" ];
 		}
+
 		$nginx['volumes']  = [
 			'vol' => \EE_DOCKER::get_mounting_volume_array( $volumes ),
 		];
