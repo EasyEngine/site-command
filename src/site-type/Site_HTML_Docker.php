@@ -3,6 +3,7 @@
 namespace EE\Site\Type;
 
 use function EE\Utils\mustache_render;
+use function EE\Site\Utils\get_ssl_policy;
 
 class Site_HTML_Docker {
 
@@ -35,7 +36,11 @@ class Site_HTML_Docker {
 			],
 		];
 		if ( ! empty( $filters['nohttps'] ) && $filters['nohttps'] ) {
+			$ssl_policy                    = get_ssl_policy();
 			$nginx['environment']['env'][] = [ 'name' => 'HTTPS_METHOD=nohttps' ];
+			if ( 'Mozilla-Modern' !== $ssl_policy ) {
+				$nginx['environment']['env'][] = [ 'name' => "SSL_POLICY=$ssl_policy" ];
+			}
 		}
 		$nginx['volumes']  = [
 			'vol' => \EE_DOCKER::get_mounting_volume_array( $volumes ),
