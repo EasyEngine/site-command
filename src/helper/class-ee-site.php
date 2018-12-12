@@ -704,6 +704,8 @@ abstract class EE_Site_Command {
 		} elseif ( 'self' === $ssl_type ) {
 			$client = new Site_Self_signed();
 			$client->create_certificate( $site_url );
+			// Update wildcard to 1 as self-signed certs are wildcard by default.
+			$this->site_data['site_ssl_wildcard'] = 1;
 		} else {
 			throw new \Exception( "Unrecognized value in --ssl flag: $ssl_type" );
 		}
