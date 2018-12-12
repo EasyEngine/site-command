@@ -86,13 +86,20 @@ class Site_Command {
 		$type = 'html';
 
 		if ( in_array( reset( $args ), [ 'create', 'update' ], true ) || empty( $args ) ) {
+			$unset = true;
 			if ( ! empty( $args[0] ) && 'create' === $args[0] ) {
 				$args = $this->name_checks_and_updates( $args );
+				\EE\Auth\Utils\init_global_admin_tools_auth( false );
 			}
-			\EE\Auth\Utils\init_global_admin_tools_auth( false );
+			if ( ! empty( $args[0] ) && 'update' === $args[0] ) {
+				$unset = false;
+				$type  = $this->determine_type( $type, $args );
+			}
 			if ( isset( $assoc_args['type'] ) ) {
 				$type = $assoc_args['type'];
-				unset( $assoc_args['type'] );
+				if ( $unset ) {
+					unset( $assoc_args['type'] );
+				}
 			}
 		} else {
 			$type = $this->determine_type( $type, $args );
