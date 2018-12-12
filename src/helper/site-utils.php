@@ -5,6 +5,7 @@ namespace EE\Site\Utils;
 use EE;
 use EE\Model\Site;
 use Symfony\Component\Filesystem\Filesystem;
+use function EE\Utils\get_config_value;
 
 /**
  * Get the site-name from the path from where ee is running if it is a valid site path.
@@ -238,6 +239,9 @@ function add_site_redirects( string $site_url, bool $ssl, bool $inherit ) {
 	$config_file_path = $confd_path . $site_url . '-redirect.conf';
 	$has_www          = strpos( $site_url, 'www.' ) === 0;
 	$cert_site_name   = $site_url;
+	$ssl_policy       = get_ssl_policy();
+
+	$conf_ssl_policy = 'ssl_policy_' . str_replace( '-', '_', $ssl_policy );
 
 	if ( $inherit ) {
 		$cert_site_name = implode( '.', array_slice( explode( '.', $site_url ), 1 ) );
@@ -254,10 +258,35 @@ function add_site_redirects( string $site_url, bool $ssl, bool $inherit ) {
 		'cert_site_name' => $cert_site_name,
 		'server_name'    => $server_name,
 		'ssl'            => $ssl,
+		$conf_ssl_policy => true,
 	];
 
 	$content = EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/redirect.conf.mustache', $conf_data );
 	$fs->dumpFile( $config_file_path, ltrim( $content, PHP_EOL ) );
+}
+
+/**
+ * Function to check config and return a valid ssl-policy.
+ *
+ * @return string Valid ssl-policy.
+ */
+function get_ssl_policy() {
+
+	$ssl_policy = get_config_value( 'ssl-policy', 'Mozilla-Modern' );
+
+	$valid_configurations = [
+		'Mozilla-Old',
+		'Mozilla-Intermediate',
+		'Mozilla-Modern',
+		'AWS-TLS-1-2-2017-01',
+		'AWS-TLS-1-1-2017-01',
+		'AWS-2016-08',
+		'AWS-2015-05',
+		'AWS-2015-03',
+		'AWS-2015-02',
+	];
+
+	return in_array( $ssl_policy, $valid_configurations, true ) ? $ssl_policy : 'Mozilla-Modern';
 }
 
 /**
