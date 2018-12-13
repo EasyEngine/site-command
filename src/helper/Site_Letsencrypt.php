@@ -253,7 +253,7 @@ class Site_Letsencrypt {
 					\EE::warning( 'Challenge Authorization failed. Check logs and check if your domain is pointed correctly to this server.' );
 
 					$site_name = isset( $domains[1] ) ? $domains[1] : $domains[0];
-					$site_name = str_replace( '*.', '', $site_name, 1 );
+					$site_name = str_replace( '*.', '', $site_name );
 					
 					\EE::log( "Re-run `ee site ssl $site_name` after fixing the issue." );
 					throw $e;
