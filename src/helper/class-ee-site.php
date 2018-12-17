@@ -727,7 +727,7 @@ abstract class EE_Site_Command {
 	 *
 	 * @throws \Exception
 	 */
-	protected function inherit_certs( $site_url ) {
+	protected function check_parent_site_certs( $site_url ) {
 
 		$parent_site_name = implode( '.', array_slice( explode( '.', $site_url ), 1 ) );
 		$parent_site      = Site::find( $parent_site_name, [ 'site_ssl', 'site_ssl_wildcard' ] );
@@ -743,9 +743,6 @@ abstract class EE_Site_Command {
 		if ( ! $parent_site->site_ssl_wildcard ) {
 			throw new \Exception( "Cannot inherit from $parent_site_name as site does not have wildcard SSL cert" );
 		}
-
-		// We don't have to do anything now as nginx-proxy handles everything for us.
-		\EE::success( 'Inherited certs from parent' );
 	}
 
 	/**
@@ -770,8 +767,8 @@ abstract class EE_Site_Command {
 			if ( $wildcard ) {
 				throw new \Exception( 'Cannot use --wildcard with --ssl=inherit', false );
 			}
-			\EE::debug( 'Inheriting certs' );
-			$this->inherit_certs( $site_url );
+			// We don't have to do anything now as nginx-proxy handles everything for us.
+			\EE::success( 'Inherited certs from parent' );
 		} elseif ( 'self' === $ssl_type ) {
 			$client = new Site_Self_signed();
 			$client->create_certificate( $site_url );
