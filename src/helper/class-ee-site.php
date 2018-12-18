@@ -816,6 +816,10 @@ abstract class EE_Site_Command {
 		if ( $is_solver_dns && $api_key_absent ) {
 			echo \cli\Colors::colorize( '%YIMPORTANT:%n Run `ee site ssl ' . $site_url . '` once the DNS changes have propagated to complete the certification generation and installation.', null );
 		} else {
+			if ( ! $api_key_absent && $is_solver_dns ) {
+				EE::log( 'Waiting for DNS entry propagation.' );
+				sleep( 10 );
+			}
 			$this->ssl( [], [], $www_or_non_www );
 		}
 	}
