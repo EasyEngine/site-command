@@ -8,10 +8,6 @@ if ( ! defined( 'GLOBAL_DB' ) ) {
 	define( 'GLOBAL_DB', 'global-db' );
 }
 
-if ( ! defined( 'GLOBAL_DB_CONTAINER' ) ) {
-	define( 'GLOBAL_DB_CONTAINER', 'ee-global-db' );
-}
-
 if ( ! defined( 'GLOBAL_FRONTEND_NETWORK' ) ) {
 	define( 'GLOBAL_FRONTEND_NETWORK', 'ee-global-frontend-network' );
 }
