@@ -42,6 +42,7 @@
         "guzzlehttp/guzzle": "^6.0",
         "league/flysystem": "^1.0.19",
         "symfony/serializer": "^3.0",
-        "webmozart/assert": "^1.0"
+        "webmozart/assert": "^1.0",
+        "cloudflare/sdk": "1.1.1"
     }
 }
