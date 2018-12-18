@@ -24,12 +24,28 @@ class SimpleDnsCloudflareSolver implements SolverInterface {
 	protected $output;
 
 	/**
+	 * @var \Cloudflare\API\Endpoints\DNS
+	 */
+	protected $dns;
+
+	/**
+	 * @var \Cloudflare\API\Endpoints\Zones
+	 */
+	protected $zones;
+
+	/**
 	 * @param DnsDataExtractor $extractor
 	 * @param OutputInterface $output
 	 */
 	public function __construct( DnsDataExtractor $extractor = null, OutputInterface $output = null ) {
 		$this->extractor = null === $extractor ? new DnsDataExtractor() : $extractor;
 		$this->output    = null === $output ? new NullOutput() : $output;
+		$key             = new \Cloudflare\API\Auth\APIKey( get_config_value( 'le-mail' ), get_config_value( 'cloudflare-api-key' ) );
+		$adapter         = new \Cloudflare\API\Adapter\Guzzle( $key );
+		$this->dns       = new \Cloudflare\API\Endpoints\DNS( $adapter );
+		$this->zones     = new \Cloudflare\API\Endpoints\Zones( $adapter );
+
+
 	}
 
 	/**
@@ -46,42 +62,14 @@ class SimpleDnsCloudflareSolver implements SolverInterface {
 		$recordName  = $this->extractor->getRecordName( $authorizationChallenge );
 		$recordValue = $this->extractor->getRecordValue( $authorizationChallenge );
 
-		$key     = new \Cloudflare\API\Auth\APIKey( get_config_value( 'le-mail' ), get_config_value( 'cloudflare-api-key' ) );
-		$adapter = new \Cloudflare\API\Adapter\Guzzle( $key );
-		$zones   = new \Cloudflare\API\Endpoints\Zones( $adapter );
-
-		$zone_guess     = '';
-		$possible_zones = [];
-		$zone_list      = [];
-
-		foreach ( $zones->listZones()->result as $zone ) {
-			$zone_list[] = $zone->name;
-		}
-
-		// Guessing zone name using the method in: https://github.com/certbot/certbot/blob/f90561012241171ed8e0dd9996c703c384357eba/certbot/plugins/dns_common.py#L319
-		// https://github.com/certbot/certbot/blob/f90561012241171ed8e0dd9996c703c384357eba/certbot-dns-cloudflare/certbot_dns_cloudflare/dns_cloudflare.py#L131
-
-		$guesses = explode( '.', $authorizationChallenge->getDomain() );
-		do {
-			$possible_zones[] = implode( '.', $guesses );
-			array_shift( $guesses );
-		} while ( ! empty( $guesses ) );
-
-		foreach ( $possible_zones as $possible_zone ) {
-			if ( in_array( $possible_zone, $zone_list, true ) ) {
-				$zone_guess = $possible_zone;
-				break;
-			}
-		}
-
-		$manual = empty( $zone_guess ) ? true : false;
+		$zone_guess = $this->get_zone_name( $authorizationChallenge->getDomain() );
+		$manual     = empty( $zone_guess ) ? true : false;
 
 		if ( ! $manual ) {
-			$zoneID = $zones->getZoneID( $zone_guess );
-			$dns    = new \Cloudflare\API\Endpoints\DNS( $adapter );
-			if ( $dns->addRecord( $zoneID, "TXT", $recordName, $recordValue, 0, false ) === true ) {
+			$zoneID = $this->zones->getZoneID( $zone_guess );
+
+			if ( $this->dns->addRecord( $zoneID, "TXT", $recordName, $recordValue, 0, false ) === true ) {
 				EE::log( "Created DNS record: $recordName with value $recordValue." . PHP_EOL );
-				EE::log( 'Waiting for the changes to propogate.' );
 			} else {
 				$manual = true;
 			}
@@ -128,5 +116,68 @@ EOF
 				$recordName
 			)
 		);
+	}
+
+	/**
+	 * Function to get zone name of clouflare account from the given domain name.
+	 * Guessing zone name using the method in:
+	 * https://github.com/certbot/certbot/blob/f90561012241171ed8e0dd9996c703c384357eba/certbot/plugins/dns_common.py#L31
+	 * https://github.com/certbot/certbot/blob/f90561012241171ed8e0dd9996c703c384357eba/certbot-dns-cloudflare/certbot_dns_cloudflare/dns_cloudflare.py#L131
+	 *
+	 * @param string $domain domain name.
+	 *
+	 * @return string found zone name.
+	 */
+	private function get_zone_name( $domain ) {
+
+		$zone_guess     = '';
+		$possible_zones = [];
+		$zone_list      = [];
+
+		foreach ( $this->zones->listZones()->result as $zone ) {
+			$zone_list[] = $zone->name;
+		}
+
+		$guesses = explode( '.', $domain );
+		do {
+			$possible_zones[] = implode( '.', $guesses );
+			array_shift( $guesses );
+		} while ( ! empty( $guesses ) );
+
+		foreach ( $possible_zones as $possible_zone ) {
+			if ( in_array( $possible_zone, $zone_list, true ) ) {
+				$zone_guess = $possible_zone;
+
+				return $zone_guess;
+			}
+		}
+
+		return $zone_guess;
+	}
+
+	/**
+	 * Function to get record id of cloudflare for a give record name and type.
+	 *
+	 * @param string $domain
+	 * @param $record_name
+	 * @param $record_type
+	 *
+	 * @return array of found record ids.
+	 * @throws \Cloudflare\API\Endpoints\EndpointException
+	 */
+	private function get_record_id( $domain, $record_name, $record_type ) {
+
+		$zone        = $this->get_zone_name( $domain );
+		$zoneID      = $this->zones->getZoneID( $zone );
+		$record_id   = [];
+		$record_name = rtrim( $record_name, '.' );
+
+		foreach ( $this->dns->listRecords( $zoneID )->result as $record ) {
+			if ( ( $record->name === $record_name ) && ( $record->type === $record_type ) ) {
+				$record_id[] = $record->id;
+			}
+		}
+
+		return $record_id;
 	}
 }
