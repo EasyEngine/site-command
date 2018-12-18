@@ -104,18 +104,27 @@ EOF
 	 * {@inheritdoc}
 	 */
 	public function cleanup( AuthorizationChallenge $authorizationChallenge ) {
+
 		$recordName = $this->extractor->getRecordName( $authorizationChallenge );
+		$zone       = $this->get_zone_name( $authorizationChallenge->getDomain() );
+		$zoneID     = $this->zones->getZoneID( $zone );
+		$record_ids = $this->get_record_id( $authorizationChallenge->getDomain(), $recordName, 'TXT' );
 
-
-		$this->output->writeln(
-			sprintf(
-				<<<'EOF'
-You can now cleanup your DNS by removing the domain <comment>_acme-challenge.%s.</comment>
+		foreach ( $record_ids as $record_id ) {
+			if ( $this->dns->deleteRecord( $zoneID, $record_id ) ) {
+				EE::log( "Cleaned up DNS record: _acme-challenge.$recordName" );
+			} else {
+				$this->output->writeln(
+					sprintf(
+						<<<'EOF'
+		You can now cleanup your DNS by removing the domain <comment>_acme-challenge.%s.</comment>
 EOF
-				,
-				$recordName
-			)
-		);
+						,
+						$recordName
+					)
+				);
+			}
+		}
 	}
 
 	/**
