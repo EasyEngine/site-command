@@ -955,7 +955,7 @@ abstract class EE_Site_Command {
 	}
 
 	/**
-	 * Publishes site online using ngrok.
+	 * Share a site online using ngrok.
 	 *
 	 * ## OPTIONS
 	 *
@@ -966,24 +966,24 @@ abstract class EE_Site_Command {
 	 * : Take online link down.
 	 *
 	 * [--refresh]
-	 * : Refresh site publish if link has expired.
+	 * : Refresh site share if link has expired.
 	 *
 	 * [--token=<token>]
 	 * : ngrok token.
 	 *
 	 * ## EXAMPLES
 	 *
-	 *     # Publish site online
-	 *     $ ee site publish example.com
+	 *     # Share a site online
+	 *     $ ee site share example.com
 	 *
-	 *     # Refresh published link if expired
-	 *     $ ee site publish example.com --refresh
+	 *     # Refresh shareed link if expired
+	 *     $ ee site share example.com --refresh
 	 *
 	 *     # Disable online link
-	 *     $ ee site publish example.com --disable
+	 *     $ ee site share example.com --disable
 	 *
 	 */
-	public function publish( $args, $assoc_args ) {
+	public function share( $args, $assoc_args ) {
 
 		$args            = auto_site_name( $args, 'site', __FUNCTION__ );
 		$this->site_data = get_site_info( $args, true, true, false );
