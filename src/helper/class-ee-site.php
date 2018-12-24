@@ -769,7 +769,7 @@ abstract class EE_Site_Command {
 				throw new \Exception( 'Cannot use --wildcard with --ssl=inherit', false );
 			}
 			// We don't have to do anything now as nginx-proxy handles everything for us.
-			\EE::success( 'Inherited certs from parent' );
+			EE::success( 'Inherited certs from parent' );
 		} elseif ( 'self' === $ssl_type ) {
 			$client = new Site_Self_signed();
 			$client->create_certificate( $site_url );
