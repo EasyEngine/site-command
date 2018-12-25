@@ -1000,7 +1000,7 @@ abstract class EE_Site_Command {
 			if ( $this->site_data->site_url === $active_publish ) {
 				$this->ngrok_curl( false, $refresh );
 			} else {
-				EE::error( $this->site_data->site_url . ' does not have active publish running.' );
+				EE::error( $this->site_data->site_url . ' does not have active share running.' );
 			}
 
 			if ( ! $refresh ) {
@@ -1009,15 +1009,15 @@ abstract class EE_Site_Command {
 		}
 
 		if ( $this->site_data->site_ssl ) {
-			EE::error( 'site publish is not yet supported for ssl sites.' );
+			EE::error( 'site share is not yet supported for ssl sites.' );
 		}
 
 		$this->maybe_setup_ngrok( $ngrok );
 		if ( ! empty( $active_publish ) ) {
 			if ( ( $this->site_data->site_url === $active_publish ) ) {
-				$error = $refresh ? '' : "{$this->site_data->site_url} has already been published. Visit link: $publish_url to view it online.\nNote: This link is only valid for few hours. In case it has expired run: `ee site publish {$this->site_data->site_url} --refresh`";
+				$error = $refresh ? '' : "{$this->site_data->site_url} has already been shared. Visit link: $publish_url to view it online.\nNote: This link is only valid for few hours. In case it has expired run: `ee site share {$this->site_data->site_url} --refresh`";
 			} else {
-				$error = "$active_publish site is published currently. Publishing of only one site at a time is supported.\nTo publish {$this->site_data->site_url} , first run: `ee site publish $active_publish --disable`";
+				$error = "$active_publish site is shared currently. Sharing of only one site at a time is supported.\nTo publish {$this->site_data->site_url} , first run: `ee site share $active_publish --disable`";
 			}
 			if ( ! empty( $error ) ) {
 				EE::error( $error );
@@ -1029,7 +1029,7 @@ abstract class EE_Site_Command {
 		}
 		$config_80_port = get_config_value( 'proxy_80_port', 80 );
 		if ( ! $refresh ) {
-			EE::log( "Publishing site: {$this->site_data->site_url} online." );
+			EE::log( "Sharing site: {$this->site_data->site_url} online." );
 		}
 		EE::debug( "$ngrok http -host-header={$this->site_data->site_url} $config_80_port > /dev/null &" );
 		EE::debug( shell_exec( "$ngrok http -host-header={$this->site_data->site_url} $config_80_port > /dev/null &" ) );
@@ -1037,7 +1037,7 @@ abstract class EE_Site_Command {
 		if ( empty( $published_url ) ) {
 			EE::error( 'Could not publish site.' );
 		}
-		EE::success( "Successfully published {$this->site_data->site_url} to url: $published_url" );
+		EE::success( "Successfully shared {$this->site_data->site_url} to url: $published_url" );
 		Option::set( 'publish_site', $this->site_data->site_url );
 		Option::set( 'publish_url', $published_url );
 	}
@@ -1113,7 +1113,7 @@ abstract class EE_Site_Command {
 		}
 
 		if ( $refresh ) {
-			EE::log( 'Refreshing site publish.' );
+			EE::log( 'Refreshing site share.' );
 		} else {
 			EE::log( 'Disabling publish.' );
 		}
@@ -1129,7 +1129,7 @@ abstract class EE_Site_Command {
 		Option::set( 'publish_site', '' );
 		Option::set( 'publish_url', '' );
 		if ( ! $refresh ) {
-			EE::success( 'Site publish disabled.' );
+			EE::success( 'Site share disabled.' );
 		}
 	}
 
