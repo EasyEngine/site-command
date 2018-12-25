@@ -1017,7 +1017,7 @@ abstract class EE_Site_Command {
 			if ( ( $this->site_data->site_url === $active_publish ) ) {
 				$error = $refresh ? '' : "{$this->site_data->site_url} has already been shared. Visit link: $publish_url to view it online.\nNote: This link is only valid for few hours. In case it has expired run: `ee site share {$this->site_data->site_url} --refresh`";
 			} else {
-				$error = "$active_publish site is shared currently. Sharing of only one site at a time is supported.\nTo publish {$this->site_data->site_url} , first run: `ee site share $active_publish --disable`";
+				$error = "$active_publish site is shared currently. Sharing of only one site at a time is supported.\nTo share {$this->site_data->site_url} , first run: `ee site share $active_publish --disable`";
 			}
 			if ( ! empty( $error ) ) {
 				EE::error( $error );
@@ -1067,7 +1067,7 @@ abstract class EE_Site_Command {
 	 * Function to curl and get data from ngrok api.
 	 *
 	 * @param bool $get_url To get url of tunnel or not.
-	 * @param bool $refresh Whether to disable for publish refresh or not.
+	 * @param bool $refresh Whether to disable share refresh or not.
 	 */
 	private function ngrok_curl( $get_url = true, $refresh = false ) {
 
