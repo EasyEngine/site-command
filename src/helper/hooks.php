@@ -63,11 +63,11 @@ function cleanup_redis_entries( $site_url ) {
 }
 
 /**
- * Hook to cleanup publishing if any on site delete.
+ * Hook to cleanup sharing if any on site delete.
  *
  * @param string $site_url The site to be cleaned up.
  */
-function cleanup_publishing( $site_url ) {
+function cleanup_sharing( $site_url ) {
 
 	$active_publish = Option::get( 'publish_site' );
 	$publish_url    = Option::get( 'publish_url' );
@@ -80,5 +80,5 @@ function cleanup_publishing( $site_url ) {
 }
 
 EE::add_hook( 'site_cleanup', 'cleanup_redis_entries' );
-EE::add_hook( 'site_cleanup', 'cleanup_publishing' );
+EE::add_hook( 'site_cleanup', 'cleanup_sharing' );
 EE::add_hook( 'before_invoke:help', 'ee_site_help_cmd_routing' );

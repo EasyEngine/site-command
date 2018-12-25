@@ -9,6 +9,7 @@ use AcmePhp\Core\AcmeClient;
 use AcmePhp\Core\Challenge\ChainValidator;
 use AcmePhp\Core\Challenge\Dns\DnsValidator;
 use AcmePhp\Core\Challenge\Dns\SimpleDnsSolver;
+use AcmePhp\Core\Challenge\Dns\SimpleDnsCloudflareSolver;
 use AcmePhp\Core\Challenge\Http\HttpValidator;
 use AcmePhp\Core\Challenge\Http\SimpleHttpSolver;
 use AcmePhp\Core\Challenge\WaitingValidator;
@@ -33,6 +34,7 @@ use Symfony\Component\Serializer\Encoder\JsonEncoder;
 use Symfony\Component\Serializer\Normalizer\GetSetMethodNormalizer;
 use Symfony\Component\Serializer\Serializer;
 use function EE\Site\Utils\reload_global_nginx_proxy;
+use function EE\Utils\get_config_value;
 
 
 class Site_Letsencrypt {
@@ -139,8 +141,12 @@ class Site_Letsencrypt {
 	 */
 	public function authorize( Array $domains, $wildcard = false, $preferred_challenge = '' ) {
 		$is_solver_dns = ( $wildcard || 'dns' === $preferred_challenge ) ? true : false;
-		$solver        = $is_solver_dns ? new SimpleDnsSolver( null, new ConsoleOutput() ) : new SimpleHttpSolver();
-		$solverName    = $is_solver_dns ? 'dns-01' : 'http-01';
+		if ( $is_solver_dns ) {
+			$solver = empty ( get_config_value( 'cloudflare-api-key' ) ) ? new SimpleDnsSolver( null, new ConsoleOutput() ) : new SimpleDnsCloudflareSolver( null, new ConsoleOutput() );
+		} else {
+			$solver = new SimpleHttpSolver();
+		}
+		$solverName = $is_solver_dns ? 'dns-01' : 'http-01';
 		try {
 			$order = $this->client->requestOrder( $domains );
 		} catch ( \Exception $e ) {
@@ -199,7 +205,11 @@ class Site_Letsencrypt {
 	public function check( Array $domains, $wildcard = false, $preferred_challenge = '' ) {
 		$is_solver_dns = ( $wildcard || 'dns' === $preferred_challenge ) ? true : false;
 		\EE::debug( ( 'Starting check with solver ' ) . ( $is_solver_dns ? 'dns' : 'http' ) );
-		$solver    = $is_solver_dns ? new SimpleDnsSolver( null, new ConsoleOutput() ) : new SimpleHttpSolver();
+		if ( $is_solver_dns ) {
+			$solver = empty ( get_config_value( 'cloudflare-api-key' ) ) ? new SimpleDnsSolver( null, new ConsoleOutput() ) : new SimpleDnsCloudflareSolver( null, new ConsoleOutput() );
+		} else {
+			$solver = new SimpleHttpSolver();
+		}
 		$validator = new ChainValidator(
 			[
 				new WaitingValidator( new HttpValidator() ),
@@ -254,7 +264,7 @@ class Site_Letsencrypt {
 
 					$site_name = isset( $domains[1] ) ? $domains[1] : $domains[0];
 					$site_name = str_replace( '*.', '', $site_name );
-					
+
 					\EE::log( "Re-run `ee site ssl $site_name` after fixing the issue." );
 					throw $e;
 				}
