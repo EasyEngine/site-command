@@ -1035,7 +1035,7 @@ abstract class EE_Site_Command {
 		EE::debug( shell_exec( "$ngrok http -host-header={$this->site_data->site_url} $config_80_port > /dev/null &" ) );
 		$published_url = $this->ngrok_curl();
 		if ( empty( $published_url ) ) {
-			EE::error( 'Could not publish site.' );
+			EE::error( 'Could not share site.' );
 		}
 		EE::success( "Successfully shared {$this->site_data->site_url} to url: $published_url" );
 		Option::set( 'publish_site', $this->site_data->site_url );
@@ -1109,13 +1109,13 @@ abstract class EE_Site_Command {
 				$ngrok_tunnel = str_replace( '+', '%20', urlencode( $ngrok_data['tunnels'][0]['name'] ) );
 			}
 		} elseif ( $get_url ) {
-			EE::error( 'Could not publish site. Please check logs.' );
+			EE::error( 'Could not share site. Please check logs.' );
 		}
 
 		if ( $refresh ) {
 			EE::log( 'Refreshing site share.' );
 		} else {
-			EE::log( 'Disabling publish.' );
+			EE::log( 'Disabling share.' );
 		}
 		if ( ! empty( $ngrok_tunnel ) ) {
 			$ch = curl_init();
