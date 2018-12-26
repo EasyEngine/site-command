@@ -9,6 +9,7 @@ use Symfony\Component\Filesystem\Filesystem;
 use function EE\Utils\download;
 use function EE\Utils\extract_zip;
 use function EE\Utils\get_flag_value;
+use function EE\Utils\get_config_value;
 use function EE\Utils\delem_log;
 use function EE\Site\Utils\auto_site_name;
 use function EE\Site\Utils\get_site_info;
@@ -727,7 +728,7 @@ abstract class EE_Site_Command {
 	 *
 	 * @throws \Exception
 	 */
-	protected function inherit_certs( $site_url ) {
+	protected function check_parent_site_certs( $site_url ) {
 
 		$parent_site_name = implode( '.', array_slice( explode( '.', $site_url ), 1 ) );
 		$parent_site      = Site::find( $parent_site_name, [ 'site_ssl', 'site_ssl_wildcard' ] );
@@ -743,9 +744,6 @@ abstract class EE_Site_Command {
 		if ( ! $parent_site->site_ssl_wildcard ) {
 			throw new \Exception( "Cannot inherit from $parent_site_name as site does not have wildcard SSL cert" );
 		}
-
-		// We don't have to do anything now as nginx-proxy handles everything for us.
-		\EE::success( 'Inherited certs from parent' );
 	}
 
 	/**
@@ -770,8 +768,8 @@ abstract class EE_Site_Command {
 			if ( $wildcard ) {
 				throw new \Exception( 'Cannot use --wildcard with --ssl=inherit', false );
 			}
-			\EE::debug( 'Inheriting certs' );
-			$this->inherit_certs( $site_url );
+			// We don't have to do anything now as nginx-proxy handles everything for us.
+			EE::success( 'Inherited certs from parent' );
 		} elseif ( 'self' === $ssl_type ) {
 			$client = new Site_Self_signed();
 			$client->create_certificate( $site_url );
@@ -791,7 +789,7 @@ abstract class EE_Site_Command {
 	 * @param bool $www_or_non_www Allow LetsEncrypt on www or non-www subdomain.
 	 */
 	protected function init_le( $site_url, $site_fs_path, $wildcard = false, $www_or_non_www ) {
-		$preferred_challenge = \EE\Utils\get_config_value( 'preferred_ssl_challenge', '' );
+		$preferred_challenge = get_config_value( 'preferred_ssl_challenge', '' );
 		$is_solver_dns       = ( $wildcard || 'dns' === $preferred_challenge ) ? true : false;
 		\EE::debug( 'Wildcard in init_le: ' . ( bool ) $wildcard );
 
@@ -811,9 +809,14 @@ abstract class EE_Site_Command {
 		if ( ! $client->authorize( $domains, $wildcard, $preferred_challenge ) ) {
 			return;
 		}
-		if ( $is_solver_dns ) {
+		$api_key_absent = empty( get_config_value( 'cloudflare-api-key' ) );
+		if ( $is_solver_dns && $api_key_absent ) {
 			echo \cli\Colors::colorize( '%YIMPORTANT:%n Run `ee site ssl ' . $site_url . '` once the DNS changes have propagated to complete the certification generation and installation.', null );
 		} else {
+			if ( ! $api_key_absent && $is_solver_dns ) {
+				EE::log( 'Waiting for DNS entry propagation.' );
+				sleep( 10 );
+			}
 			$this->ssl( [], [], $www_or_non_www );
 		}
 	}
@@ -828,7 +831,7 @@ abstract class EE_Site_Command {
 	 * @return array
 	 */
 	private function get_cert_domains( string $site_url, $wildcard, $www_or_non_www = false ): array {
-		$preferred_challenge = \EE\Utils\get_config_value( 'preferred_ssl_challenge', '' );
+		$preferred_challenge = get_config_value( 'preferred_ssl_challenge', '' );
 		$is_solver_dns       = ( $wildcard || 'dns' === $preferred_challenge ) ? true : false;
 
 		$domains = [ $site_url ];
@@ -906,7 +909,8 @@ abstract class EE_Site_Command {
 		EE::log( 'Starting SSL verification.' );
 
 		// This checks if this method was called internally by ee or by user
-		$called_by_ee = isset( $this->site_data['site_url'] );
+		$called_by_ee   = ! empty( $this->site_data['site_url'] );
+		$api_key_absent = empty( get_config_value( 'cloudflare-api-key' ) );
 
 		if ( ! $called_by_ee ) {
 			$this->site_data = get_site_info( $args );
@@ -920,15 +924,20 @@ abstract class EE_Site_Command {
 		$domains = $this->get_cert_domains( $this->site_data['site_url'], $this->site_data['site_ssl_wildcard'], $www_or_non_www );
 		$client  = new Site_Letsencrypt();
 
-		$preferred_challenge = \EE\Utils\get_config_value( 'preferred_ssl_challenge', '' );
+		$preferred_challenge = get_config_value( 'preferred_ssl_challenge', '' );
 
 		try {
 			$client->check( $domains, $this->site_data['site_ssl_wildcard'], $preferred_challenge );
 		} catch ( \Exception $e ) {
-			if ( $called_by_ee ) {
+			if ( $called_by_ee && $api_key_absent ) {
 				throw $e;
 			}
-			EE::error( 'Failed to verify SSL: ' . $e->getMessage() );
+			$is_solver_dns   = ( $this->site_data['site_ssl_wildcard'] || 'dns' === $preferred_challenge ) ? true : false;
+			$api_key_present = ! empty( get_config_value( 'cloudflare-api-key' ) );
+
+			$warning = ( $is_solver_dns && $api_key_present ) ? "The dns entries have not yet propogated. Manually check: \nhost -t TXT _acme-challenge." . $this->site_data['site_url'] . "\nBefore retrying `ee site ssl " . $this->site_data['site_url'] . "`" : 'Failed to verify SSL: ' . $e->getMessage();
+			EE::warning( $warning );
+			EE::warning( sprintf( 'Check logs and retry `ee site ssl %s` once the issue is resolved.', $this->site_data['site_url'] ) );
 
 			return;
 		}
@@ -942,11 +951,11 @@ abstract class EE_Site_Command {
 
 		reload_global_nginx_proxy();
 
-		EE::log( 'SSL verification completed.' );
+		EE::success( 'SSL verification completed.' );
 	}
 
 	/**
-	 * Publishes site online using ngrok.
+	 * Share a site online using ngrok.
 	 *
 	 * ## OPTIONS
 	 *
@@ -957,24 +966,24 @@ abstract class EE_Site_Command {
 	 * : Take online link down.
 	 *
 	 * [--refresh]
-	 * : Refresh site publish if link has expired.
+	 * : Refresh site share if link has expired.
 	 *
 	 * [--token=<token>]
 	 * : ngrok token.
 	 *
 	 * ## EXAMPLES
 	 *
-	 *     # Publish site online
-	 *     $ ee site publish example.com
+	 *     # Share a site online
+	 *     $ ee site share example.com
 	 *
-	 *     # Refresh published link if expired
-	 *     $ ee site publish example.com --refresh
+	 *     # Refresh shareed link if expired
+	 *     $ ee site share example.com --refresh
 	 *
 	 *     # Disable online link
-	 *     $ ee site publish example.com --disable
+	 *     $ ee site share example.com --disable
 	 *
 	 */
-	public function publish( $args, $assoc_args ) {
+	public function share( $args, $assoc_args ) {
 
 		$args            = auto_site_name( $args, 'site', __FUNCTION__ );
 		$this->site_data = get_site_info( $args, true, true, false );
@@ -1018,7 +1027,7 @@ abstract class EE_Site_Command {
 		if ( ! empty( $token ) ) {
 			EE::exec( "$ngrok authtoken $token" );
 		}
-		$config_80_port = \EE\Utils\get_config_value( 'proxy_80_port', 80 );
+		$config_80_port = get_config_value( 'proxy_80_port', 80 );
 		if ( ! $refresh ) {
 			EE::log( "Publishing site: {$this->site_data->site_url} online." );
 		}
