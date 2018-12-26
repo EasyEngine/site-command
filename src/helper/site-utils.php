@@ -133,10 +133,10 @@ function create_user_in_db( $db_host, $db_name = '', $db_user = '', $db_pass = '
 		$db_script_path = \EE\Utils\get_temp_dir() . 'db_exec';
 		file_put_contents( $db_script_path, $health_script );
 		$mysql_unhealthy = true;
-		EE::exec( sprintf( 'docker cp %s ee-global-db:/db_exec', $db_script_path ) );
+		EE::exec( sprintf( 'docker cp %s %s:/db_exec', $db_script_path, GLOBAL_DB_CONTAINER ) );
 		$count = 0;
 		while ( $mysql_unhealthy ) {
-			$mysql_unhealthy = ! EE::exec( 'docker exec ee-global-db sh db_exec' );
+			$mysql_unhealthy = ! EE::exec( sprintf( 'docker exec %s sh db_exec', GLOBAL_DB_CONTAINER ) );
 			if ( $count ++ > 60 ) {
 				break;
 			}
@@ -146,8 +146,8 @@ function create_user_in_db( $db_host, $db_name = '', $db_user = '', $db_pass = '
 		$db_script_path = \EE\Utils\get_temp_dir() . 'db_exec';
 		file_put_contents( $db_script_path, sprintf( 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e"%s"', $create_string ) );
 
-		EE::exec( sprintf( 'docker cp %s ee-global-db:/db_exec', $db_script_path ) );
-		if ( ! EE::exec( 'docker exec ee-global-db sh db_exec' ) ) {
+		EE::exec( sprintf( 'docker cp %s %s:/db_exec', $db_script_path, GLOBAL_DB_CONTAINER ) );
+		if ( ! EE::exec( sprintf( 'docker exec %s sh db_exec', GLOBAL_DB_CONTAINER ) ) ) {
 			return false;
 		}
 	} else {
@@ -177,8 +177,8 @@ function cleanup_db( $db_host, $db_name, $db_user = '', $db_pass = '' ) {
 		$db_script_path = \EE\Utils\get_temp_dir() . 'db_exec';
 		file_put_contents( $db_script_path, sprintf( 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e"%s"', $cleanup_string ) );
 
-		EE::exec( sprintf( 'docker cp %s ee-global-db:/db_exec', $db_script_path ) );
-		EE::exec( 'docker exec ee-global-db sh db_exec' );
+		EE::exec( sprintf( 'docker cp %s %s:/db_exec', $db_script_path, GLOBAL_DB_CONTAINER ) );
+		EE::exec( sprintf( 'docker exec %s sh db_exec', GLOBAL_DB_CONTAINER ) );
 	}
 
 }
@@ -199,8 +199,8 @@ function cleanup_db_user( $db_host, $db_user_to_be_cleaned, $db_privileged_pass 
 		$db_script_path = \EE\Utils\get_temp_dir() . 'db_exec';
 		file_put_contents( $db_script_path, sprintf( 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e"%s"', $cleanup_string ) );
 
-		EE::exec( sprintf( 'docker cp %s ee-global-db:/db_exec', $db_script_path ) );
-		EE::exec( 'docker exec ee-global-db sh db_exec' );
+		EE::exec( sprintf( 'docker cp %s %s:/db_exec', $db_script_path, GLOBAL_DB_CONTAINER ) );
+		EE::exec( sprintf( 'docker exec %s sh db_exec', GLOBAL_DB_CONTAINER ) );
 	}
 }
 
