@@ -4,6 +4,7 @@ namespace EE\Site\Type;
 
 use function EE\Utils\mustache_render;
 use function EE\Site\Utils\get_ssl_policy;
+use function EE\Site\Utils\get_subnet_ip;
 
 class Site_HTML_Docker {
 
@@ -68,6 +69,8 @@ class Site_HTML_Docker {
 
 		$base[] = $nginx;
 
+		$ip = get_subnet_ip();
+
 		$binding = [
 			'services' => $base,
 			'network'  => [
@@ -77,7 +80,8 @@ class Site_HTML_Docker {
 						[ 'name' => 'io.easyengine.site=${VIRTUAL_HOST}' ],
 					],
 				],
-			],
+				'subnet_ip' => $ip,
+			]
 		];
 
 		if ( ! IS_DARWIN ) {

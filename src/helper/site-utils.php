@@ -6,6 +6,7 @@ use EE;
 use EE\Model\Site;
 use Symfony\Component\Filesystem\Filesystem;
 use function EE\Utils\get_config_value;
+use EE\Model\Option;
 
 /**
  * Get the site-name from the path from where ee is running if it is a valid site path.
@@ -546,4 +547,22 @@ function get_global_auth() {
  */
 function clean_site_cache( $key ) {
 	EE::exec( sprintf( 'docker exec -it %s redis-cli --eval purge_all_cache.lua 0 , "%s*"', GLOBAL_REDIS_CONTAINER, $key ) );
+}
+
+/**
+ * Function to get ip to add as subnet
+ */
+function get_subnet_ip() {
+
+	$site_ip_count = ! empty( Option::get( 'ip_val_count' ) ) ? Option::get( 'ip_val_count' ) : 0;
+
+	$site_ip_count++;
+
+	Option::set( 'ip_val_count', $site_ip_count );
+
+	return sprintf(
+		'172.18.%s.0/24',
+		$site_ip_count
+	);
+
 }
