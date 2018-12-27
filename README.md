@@ -47,6 +47,9 @@ ee site create --type=html <site-name> [--ssl=<value>] [--wildcard] [--type=<typ
     # Create html site with wildcard ssl
     $ ee site create example.com --ssl=le --wildcard
 
+    # Create html site with self signed certificate
+    $ ee site create example.com --ssl=self
+
 
 
 ### ee site delete
@@ -69,6 +72,36 @@ ee site delete <site-name> [--yes]
 
     # Delete site
     $ ee site delete example.com
+
+
+
+### ee site update
+
+Supports updating and upgrading site.
+
+~~~
+ee site update [<site-name>] [--ssl=<ssl>] [--wildcard]
+~~~
+
+	[<site-name>]
+		Name of the site.
+
+	[--ssl=<ssl>]
+		Enable ssl on site
+
+	[--wildcard]
+		Enable wildcard SSL on site.
+
+**EXAMPLES**
+
+    # Add SSL to non-ssl site
+    $ ee site update example.com --ssl=le
+
+    # Add SSL to non-ssl site
+    $ ee site update example.com --ssl=le --wildcard
+
+    # Add self-signed SSL to non-ssl site
+    $ ee site update example.com --ssl=self
 
 
 
@@ -108,6 +141,9 @@ ee site info --type=html <site-name> [--ssl=<value>] [--wildcard] [--type=<type>
     # Create html site with wildcard ssl
     $ ee site create example.com --ssl=le --wildcard
 
+    # Create html site with self signed certificate
+    $ ee site create example.com --ssl=self
+
 
 
 ### ee site enable
@@ -115,7 +151,7 @@ ee site info --type=html <site-name> [--ssl=<value>] [--wildcard] [--type=<type>
 Enables a website. It will start the docker containers of the website if they are stopped.
 
 ~~~
-ee site enable [<site-name>] [--force]
+ee site enable [<site-name>] [--force] [--verify]
 ~~~
 
 **OPTIONS**
@@ -124,12 +160,22 @@ ee site enable [<site-name>] [--force]
 		Name of website to be enabled.
 
 	[--force]
-		Force execution of site up.
+		Force execution of site enable.
+
+	[--verify]
+		Verify if required global services are working.
 
 **EXAMPLES**
 
     # Enable site
     $ ee site enable example.com
+
+    # Enable site with verification of dependent global services. (Note: This takes longer time to enable the
+    site.)
+    $ ee site enable example.com --verify
+
+    # Force enable a site.
+    $ ee site enable example.com --force
 
 
 
@@ -153,24 +199,6 @@ ee site disable [<site-name>]
 
 
 
-### ee site info
-
-Display all the relevant site information, credentials and useful links.
-
-~~~
-ee site info [<site-name>]
-~~~
-
-	[<site-name>]
-		Name of the website whose info is required.
-
-**EXAMPLES**
-
-    # Display site info
-    $ ee site info example.com
-
-
-
 ### ee site ssl
 
 Verifies ssl challenge and also renews certificates(if expired).
@@ -186,6 +214,24 @@ ee site ssl <site-name> [--force]
 
 	[--force]
 		Force renewal.
+
+
+
+### ee site info
+
+Display all the relevant site information, credentials and useful links.
+
+~~~
+ee site info [<site-name>]
+~~~
+
+	[<site-name>]
+		Name of the website whose info is required.
+
+**EXAMPLES**
+
+    # Display site info
+    $ ee site info example.com
 
 
 
@@ -273,6 +319,9 @@ ee site reload --type=html <site-name> [--ssl=<value>] [--wildcard] [--type=<typ
     # Create html site with wildcard ssl
     $ ee site create example.com --ssl=le --wildcard
 
+    # Create html site with self signed certificate
+    $ ee site create example.com --ssl=self
+
 
 
 ### ee site restart --type=html
@@ -311,12 +360,81 @@ ee site restart --type=html <site-name> [--ssl=<value>] [--wildcard] [--type=<ty
     # Create html site with wildcard ssl
     $ ee site create example.com --ssl=le --wildcard
 
+    # Create html site with self signed certificate
+    $ ee site create example.com --ssl=self
+
+
+
+### ee site share
+
+Share a site online using ngrok.
+
+~~~
+ee site share <site-name> [--disable] [--refresh] [--token=<token>]
+~~~
+
+**OPTIONS**
+
+	<site-name>
+		Name of website.
+
+	[--disable]
+		Take online link down.
+
+	[--refresh]
+		Refresh site share if link has expired.
+
+	[--token=<token>]
+		ngrok token.
+
+**EXAMPLES**
+
+    # Share a site online
+    $ ee site share example.com
+
+    # Refresh shareed link if expired
+    $ ee site share example.com --refresh
+
+    # Disable online link
+    $ ee site share example.com --disable
+
+
+
+### ee site clean
+
+Clears Object and Page cache for site.
+
+~~~
+ee site clean [<site-name>] [--page] [--object]
+~~~
+
+**OPTIONS**
+
+	[<site-name>]
+		Name of website to be enabled.
+
+	[--page]
+		Clear page cache.
+
+	[--object]
+		Clear object cache.
+
+**EXAMPLES**
+
+    # Clear Both cache type for site.
+    $ ee site clean example.com
+
+    # Clear Object cache for site.
+    $ ee site clean example.com --object
+
+    # Clear Page cache for site.
+    $ ee site clean example.com --page
+
 ## Contributing
 
 We appreciate you taking the initiative to contribute to this project.
 
 Contributing isn’t limited to just code. We encourage you to contribute in the way that best fits your abilities, by writing tutorials, giving a demo at your local meetup, helping other users with their support questions, or revising our documentation.
-
 
 ### Reporting a bug
 
