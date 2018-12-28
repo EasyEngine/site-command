@@ -26,6 +26,7 @@
         "commands": [
             "site create --type=html",
             "site delete",
+            "site update",
             "site info --type=html",
             "site enable",
             "site disable",
@@ -33,7 +34,9 @@
             "site ssl",
             "site list",
             "site reload --type=html",
-            "site restart --type=html"
+            "site restart --type=html",
+            "site share",
+            "site clean"
         ]
     },
     "require": {
