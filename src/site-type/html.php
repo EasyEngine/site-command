@@ -202,7 +202,7 @@ class HTML extends EE_Site_Command {
 			}
 
 			// Get site src path from container fs path.
-			$public_dir_path = ltrim( trailingslashit( $this->site_data['site_container_fs_path'] ), '/var/www/htdocs/' );
+			$public_dir_path = str_replace( '/var/www/htdocs/', '', trailingslashit( $this->site_data['site_container_fs_path'] ) );
 			$site_src_dir    = empty( $public_dir_path ) ? $site_src_dir : $site_src_dir . '/' . rtrim( $public_dir_path, '/' );
 
 			$index_data = [
