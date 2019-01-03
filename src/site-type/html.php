@@ -5,10 +5,12 @@ declare( ticks=1 );
 namespace EE\Site\Type;
 
 use EE\Model\Site;
+use EE;
 use function EE\Utils\mustache_render;
 use Symfony\Component\Filesystem\Filesystem;
 use function EE\Site\Utils\auto_site_name;
 use function EE\Site\Utils\get_site_info;
+use function EE\Utils\trailingslashit;
 
 /**
  * Adds html site type to `site` command.
@@ -65,6 +67,9 @@ class HTML extends EE_Site_Command {
 	 * [--skip-status-check]
 	 * : Skips site status check.
 	 *
+	 * [--public-dir]
+	 * : Set custom source directory for site.
+	 *
 	 * ## EXAMPLES
 	 *
 	 *     # Create html site
@@ -78,6 +83,9 @@ class HTML extends EE_Site_Command {
 	 *
 	 *     # Create html site with self signed certificate
 	 *     $ ee site create example.com --ssl=self
+	 *
+	 *     # Create html site with custom source directory
+	 *     $ ee site create example.com --public-dir=src
 	 *
 	 */
 	public function create( $args, $assoc_args ) {
@@ -99,6 +107,10 @@ class HTML extends EE_Site_Command {
 		$this->site_data['site_ssl']          = \EE\Utils\get_flag_value( $assoc_args, 'ssl', '' );
 		$this->site_data['site_ssl_wildcard'] = \EE\Utils\get_flag_value( $assoc_args, 'wildcard' );
 		$this->skip_status_check              = \EE\Utils\get_flag_value( $assoc_args, 'skip-status-check' );
+
+		// Create container fs path for site.
+		$public_root                               = \EE\Utils\get_flag_value( $assoc_args, 'public-dir' );
+		$this->site_data['site_container_fs_path'] = empty( $public_root ) ? '/var/www/htdocs' : sprintf( '/var/www/htdocs/%s', ltrim( $public_root, '/' ) );
 
 		\EE\Service\Utils\nginx_proxy_check();
 
@@ -161,7 +173,11 @@ class HTML extends EE_Site_Command {
 		\EE::log( sprintf( 'Creating site %s.', $this->site_data['site_url'] ) );
 		\EE::log( 'Copying configuration files.' );
 
-		$default_conf_content = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx/main.conf.mustache', [ 'server_name' => $this->site_data['site_url'] ] );
+		$data = [
+			'server_name'   => $this->site_data['site_url'],
+			'document_root' => $this->site_data['site_container_fs_path'],
+		];
+		$default_conf_content = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx/main.conf.mustache', $data );
 
 		$env_data    = [
 			'virtual_host' => $this->site_data['site_url'],
@@ -184,12 +200,22 @@ class HTML extends EE_Site_Command {
 			} else {
 				\EE\Site\Utils\restart_site_containers( $this->site_data['site_fs_path'], [ 'nginx' ] );
 			}
+
+			// Get site src path from container fs path.
+			$public_dir_path = ltrim( trailingslashit( $this->site_data['site_container_fs_path'] ), '/var/www/htdocs/' );
+			$site_src_dir    = empty( $public_dir_path ) ? $site_src_dir : $site_src_dir . '/' . rtrim( $public_dir_path, '/' );
+
 			$index_data = [
 				'version'       => 'v' . EE_VERSION,
-				'site_src_root' => $this->site_data['site_fs_path'] . '/app/htdocs',
+				'site_src_root' => $site_src_dir,
 			];
+
 			$index_html = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/index.html.mustache', $index_data );
 			$this->fs->dumpFile( $site_src_dir . '/index.html', $index_html );
+
+			// Assign www-data user ownership.
+			chdir( $this->site_data['site_fs_path'] );
+			EE::exec( sprintf( 'docker-compose exec --user=root nginx chown -R www-data: %s', $this->site_data['site_container_fs_path'] ) );
 
 			\EE::success( 'Configuration files copied.' );
 		} catch ( \Exception $e ) {
@@ -295,12 +321,13 @@ class HTML extends EE_Site_Command {
 		$ssl_wildcard = $this->site_data['site_ssl_wildcard'] ? 1 : 0;
 
 		$site = Site::create( [
-			'site_url'          => $this->site_data['site_url'],
-			'site_type'         => $this->site_data['site_type'],
-			'site_fs_path'      => $this->site_data['site_fs_path'],
-			'site_ssl'          => $this->site_data['site_ssl'],
-			'site_ssl_wildcard' => $ssl_wildcard,
-			'created_on'        => date( 'Y-m-d H:i:s', time() ),
+			'site_url'               => $this->site_data['site_url'],
+			'site_type'              => $this->site_data['site_type'],
+			'site_fs_path'           => $this->site_data['site_fs_path'],
+			'site_ssl'               => $this->site_data['site_ssl'],
+			'site_ssl_wildcard'      => $ssl_wildcard,
+			'created_on'             => date( 'Y-m-d H:i:s', time() ),
+			'site_container_fs_path' => rtrim( $this->site_data['site_container_fs_path'], '/' ),
 		] );
 
 		try {
