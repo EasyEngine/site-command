@@ -10,6 +10,7 @@ class AddColumnSiteContainerFsPathMigration extends Base {
 
 	public function __construct() {
 
+		parent::__construct();
 		if ( $this->is_first_execution ) {
 			$this->skip_this_migration = true;
 		}
