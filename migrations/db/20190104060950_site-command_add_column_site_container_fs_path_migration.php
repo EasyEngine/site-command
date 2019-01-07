@@ -31,6 +31,10 @@ class AddColumnSiteContainerFsPathMigration extends Base {
 	 */
 	public function up() {
 
+		if ( $this->skip_this_migration ) {
+			return;
+		}
+
 		$query = 'ALTER TABLE sites ADD COLUMN site_container_fs_path VARCHAR NOT NULL DEFAULT \'/var/www/htdocs\';';
 
 		try {
