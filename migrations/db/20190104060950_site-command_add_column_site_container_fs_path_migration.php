@@ -10,6 +10,10 @@ class AddColumnSiteContainerFsPathMigration extends Base {
 
 	public function __construct() {
 
+		if ( $this->is_first_execution ) {
+			$this->skip_this_migration = true;
+		}
+
 		try {
 			self::$pdo = new \PDO( 'sqlite:' . DB );
 			self::$pdo->setAttribute( \PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION );
