@@ -55,6 +55,9 @@ class HTML extends EE_Site_Command {
 	 *
 	 * [--ssl=<value>]
 	 * : Enables ssl via letsencrypt certificate.
+	 * ---
+	 * default: le
+	 * ---
 	 *
 	 * [--wildcard]
 	 * : Gets wildcard SSL .
