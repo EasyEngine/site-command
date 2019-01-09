@@ -547,3 +547,17 @@ function get_global_auth() {
 function clean_site_cache( $key ) {
 	EE::exec( sprintf( 'docker exec -it %s redis-cli --eval purge_all_cache.lua 0 , "%s*"', GLOBAL_REDIS_CONTAINER, $key ) );
 }
+
+/**
+ * @param mixed $value            value to be checked.
+ * @param array $supported_values supported values to be checked in.
+ *
+ * @return bool
+ */
+function is_supported_value( $value, $supported_values = [] ) {
+	if ( empty( $value ) || empty( $supported_values ) || ! is_array( $supported_values ) ) {
+		return false;
+	}
+
+	return in_array( $value, $supported_values, true );
+}
