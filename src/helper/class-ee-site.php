@@ -1177,6 +1177,27 @@ abstract class EE_Site_Command {
 		$this->site_data = EE\Site\Utils\get_site_info( [ $site_name ], false, false, $in_array );
 	}
 
+	/**
+	 * @param $ssl string ssl type passed by user with --ssl flag.
+	 *
+	 * @throws EE\ExitException
+	 */
+	public function validate_site_ssl( $ssl ) {
+		$supported_ssl_type          = [ 'le', 'self', 'inherit' ];
+		$this->site_data['site_ssl'] = '';
+
+		/**
+		 * Set default ssl type `le` if empty ssl flag passed.
+		 */
+		if ( isset( $ssl ) ) {
+			$this->site_data['site_ssl'] = ( empty( $ssl ) || true === $ssl ) ? 'le' : $ssl;
+
+			if ( ! in_array( $this->site_data['site_ssl'], $supported_ssl_type, true ) ) {
+				\EE::error( sprintf( 'Invalid SSL type %s', $ssl ) );
+			}
+		}
+	}
+
 	abstract public function create( $args, $assoc_args );
 
 	abstract protected function rollback();

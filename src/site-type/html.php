@@ -5,6 +5,7 @@ declare( ticks=1 );
 namespace EE\Site\Type;
 
 use EE\Model\Site;
+use function EE\Utils\get_flag_value;
 use function EE\Utils\mustache_render;
 use Symfony\Component\Filesystem\Filesystem;
 use function EE\Site\Utils\auto_site_name;
@@ -53,11 +54,8 @@ class HTML extends EE_Site_Command {
 	 * <site-name>
 	 * : Name of website.
 	 *
-	 * [--ssl=<value>]
+	 * [--ssl]
 	 * : Enables ssl via letsencrypt certificate.
-	 * ---
-	 * default: le
-	 * ---
 	 *
 	 * [--wildcard]
 	 * : Gets wildcard SSL .
@@ -99,9 +97,10 @@ class HTML extends EE_Site_Command {
 		}
 
 		$this->site_data['site_fs_path']      = WEBROOT . $this->site_data['site_url'];
-		$this->site_data['site_ssl']          = \EE\Utils\get_flag_value( $assoc_args, 'ssl', 'le' );
 		$this->site_data['site_ssl_wildcard'] = \EE\Utils\get_flag_value( $assoc_args, 'wildcard' );
 		$this->skip_status_check              = \EE\Utils\get_flag_value( $assoc_args, 'skip-status-check' );
+
+		$this->validate_site_ssl( get_flag_value( $assoc_args, 'ssl' ) );
 
 		\EE\Service\Utils\nginx_proxy_check();
 
