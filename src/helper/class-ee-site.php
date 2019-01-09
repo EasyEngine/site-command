@@ -1193,7 +1193,7 @@ abstract class EE_Site_Command {
 			$this->site_data['site_ssl'] = ( empty( $ssl ) || true === $ssl ) ? 'le' : $ssl;
 
 			if ( ! in_array( $this->site_data['site_ssl'], $supported_ssl_type, true ) ) {
-				\EE::error( sprintf( 'Invalid SSL type %s', $ssl ) );
+				EE::error( sprintf( 'Invalid SSL type %s', $ssl ) );
 			}
 		}
 	}
