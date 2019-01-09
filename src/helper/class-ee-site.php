@@ -14,7 +14,6 @@ use function EE\Utils\delem_log;
 use function EE\Site\Utils\auto_site_name;
 use function EE\Site\Utils\get_site_info;
 use function EE\Site\Utils\reload_global_nginx_proxy;
-use function EE\Site\Utils\is_supported_value;
 
 /**
  * Base class for Site command
@@ -1176,26 +1175,6 @@ abstract class EE_Site_Command {
 	 */
 	public function populate_site_info( $site_name, $in_array = true ) {
 		$this->site_data = EE\Site\Utils\get_site_info( [ $site_name ], false, false, $in_array );
-	}
-
-	/**
-	 * @param $ssl string ssl type passed by user with --ssl flag.
-	 *
-	 * @throws EE\ExitException
-	 */
-	public function validate_site_ssl( $ssl ) {
-		$this->site_data['site_ssl'] = '';
-
-		/**
-		 * Set default ssl type `le` if empty ssl flag passed.
-		 */
-		if ( isset( $ssl ) ) {
-			$this->site_data['site_ssl'] = ( empty( $ssl ) || true === $ssl ) ? 'le' : $ssl;
-
-			if ( ! is_supported_value( $this->site_data['site_ssl'], [ 'le', 'self', 'inherit' ] ) ) {
-				EE::error( sprintf( 'Invalid SSL type %s', $ssl ) );
-			}
-		}
 	}
 
 	abstract public function create( $args, $assoc_args );

@@ -549,15 +549,27 @@ function clean_site_cache( $key ) {
 }
 
 /**
- * @param mixed $value            value to be checked.
- * @param array $supported_values supported values to be checked in.
+ * @param        $flag_value            mixed flag value.
+ * @param array  $supported_flag_values array of supported flag values.
+ * @param string $default_value         default flag value if flag is passed without value.
  *
- * @return bool
+ * @return string
+ * @throws EE\ExitException
  */
-function is_supported_value( $value, $supported_values = [] ) {
-	if ( empty( $value ) || empty( $supported_values ) || ! is_array( $supported_values ) ) {
-		return false;
-	}
+function get_validate_flag( $flag_value, $supported_flag_values = [], $default_value = '' ) {
 
-	return in_array( $value, $supported_values, true );
+	$value = '';
+	if ( isset( $flag_value ) ) {
+		/**
+		 * Set default flag value if flag is passed without value.
+		 */
+		$value = ( empty( $flag_value ) || true === $flag_value ) ? $default_value : $flag_value;
+
+		if ( empty( $value ) ) {
+			return $value;
+		} elseif ( ! in_array( $value, $supported_flag_values, true ) ) {
+			EE::error( sprintf( 'Invalid flag value passed %s', $value ) );
+		}
+	}
+	return $value;
 }
