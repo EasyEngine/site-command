@@ -57,12 +57,12 @@ class HTML extends EE_Site_Command {
 	 *
 	 * [--ssl]
 	 * : Enables ssl via letsencrypt certificate.
-         * ---
-         * options:
-         *      - le
-         *      - self
-         *      - inherit
-         * ---
+	 * ---
+	 * options:
+	 *      - le
+	 *      - self
+	 *      - inherit
+	 * ---
 	 *
 	 * [--wildcard]
 	 * : Gets wildcard SSL .
