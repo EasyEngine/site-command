@@ -5,12 +5,12 @@ declare( ticks=1 );
 namespace EE\Site\Type;
 
 use EE\Model\Site;
-use function EE\Site\Utils\get_validate_flag;
 use function EE\Utils\get_flag_value;
 use function EE\Utils\mustache_render;
 use Symfony\Component\Filesystem\Filesystem;
 use function EE\Site\Utils\auto_site_name;
 use function EE\Site\Utils\get_site_info;
+use function EE\Utils\get_value_if_flag_isset;
 
 /**
  * Adds html site type to `site` command.
@@ -101,7 +101,7 @@ class HTML extends EE_Site_Command {
 		$this->site_data['site_ssl_wildcard'] = \EE\Utils\get_flag_value( $assoc_args, 'wildcard' );
 		$this->skip_status_check              = \EE\Utils\get_flag_value( $assoc_args, 'skip-status-check' );
 
-		$this->site_data['site_ssl'] = get_validate_flag( get_flag_value( $assoc_args, 'ssl' ), [ 'le', 'self', 'inherit' ] );
+		$this->site_data['site_ssl'] = get_value_if_flag_isset( get_flag_value( $assoc_args, 'ssl' ), [ 'le', 'self', 'inherit' ] );
 
 		\EE\Service\Utils\nginx_proxy_check();
 
