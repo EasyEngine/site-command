@@ -101,7 +101,7 @@ class HTML extends EE_Site_Command {
 		$this->site_data['site_ssl_wildcard'] = \EE\Utils\get_flag_value( $assoc_args, 'wildcard' );
 		$this->skip_status_check              = \EE\Utils\get_flag_value( $assoc_args, 'skip-status-check' );
 
-		$this->site_data['site_ssl'] = get_value_if_flag_isset( get_flag_value( $assoc_args, 'ssl' ), [ 'le', 'self', 'inherit' ] );
+		$this->site_data['site_ssl'] = get_value_if_flag_isset( $assoc_args, 'ssl', [ 'le', 'self', 'inherit' ], 'le' );
 
 		\EE\Service\Utils\nginx_proxy_check();
 
