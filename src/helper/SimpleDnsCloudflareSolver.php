@@ -143,7 +143,7 @@ EOF
 		$possible_zones = [];
 		$zone_list      = [];
 
-		foreach ( $this->zones->listZones()->result as $zone ) {
+		foreach ( $this->zones->listZones( '', '', 1, 1000 )->result as $zone ) {
 			$zone_list[] = $zone->name;
 		}
 

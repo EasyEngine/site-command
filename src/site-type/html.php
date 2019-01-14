@@ -4,13 +4,15 @@ declare( ticks=1 );
 
 namespace EE\Site\Type;
 
-use EE\Model\Site;
 use EE;
-use function EE\Utils\mustache_render;
+use EE\Model\Site;
 use Symfony\Component\Filesystem\Filesystem;
+use function EE\Utils\get_flag_value;
+use function EE\Utils\mustache_render;
+use function EE\Utils\get_value_if_flag_isset;
+use function EE\Utils\trailingslashit;
 use function EE\Site\Utils\auto_site_name;
 use function EE\Site\Utils\get_site_info;
-use function EE\Utils\trailingslashit;
 
 /**
  * Adds html site type to `site` command.
@@ -55,8 +57,14 @@ class HTML extends EE_Site_Command {
 	 * <site-name>
 	 * : Name of website.
 	 *
-	 * [--ssl=<value>]
+	 * [--ssl]
 	 * : Enables ssl via letsencrypt certificate.
+	 * ---
+	 * options:
+	 *      - le
+	 *      - self
+	 *      - inherit
+	 * ---
 	 *
 	 * [--wildcard]
 	 * : Gets wildcard SSL .
@@ -104,10 +112,10 @@ class HTML extends EE_Site_Command {
 		}
 
 		$this->site_data['site_fs_path']      = WEBROOT . $this->site_data['site_url'];
-		$this->site_data['site_ssl']          = \EE\Utils\get_flag_value( $assoc_args, 'ssl', '' );
 		$this->site_data['site_ssl_wildcard'] = \EE\Utils\get_flag_value( $assoc_args, 'wildcard' );
 		$this->skip_status_check              = \EE\Utils\get_flag_value( $assoc_args, 'skip-status-check' );
 
+		$this->site_data['site_ssl'] = get_value_if_flag_isset( $assoc_args, 'ssl', [ 'le', 'self', 'inherit' ], 'le' );
 		// Create container fs path for site.
 		$public_root                               = \EE\Utils\get_flag_value( $assoc_args, 'public-dir' );
 		$this->site_data['site_container_fs_path'] = empty( $public_root ) ? '/var/www/htdocs' : sprintf( '/var/www/htdocs/%s', trim( $public_root, '/' ) );
