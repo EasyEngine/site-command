@@ -7,13 +7,12 @@ namespace EE\Site\Type;
 use EE;
 use EE\Model\Site;
 use Symfony\Component\Filesystem\Filesystem;
-use function EE\Utils\get_flag_value;
 use function EE\Utils\mustache_render;
 use function EE\Utils\get_value_if_flag_isset;
-use function EE\Utils\trailingslashit;
-use function EE\Utils\sanitize_file_folder_name;
 use function EE\Site\Utils\auto_site_name;
 use function EE\Site\Utils\get_site_info;
+use function EE\Site\Utils\get_public_dir;
+use function EE\Site\Utils\get_webroot;
 
 /**
  * Adds html site type to `site` command.
@@ -112,17 +111,12 @@ class HTML extends EE_Site_Command {
 			\EE::error( sprintf( "Site %1\$s already exists. If you want to re-create it please delete the older one using:\n`ee site delete %1\$s`", $this->site_data['site_url'] ) );
 		}
 
-		$this->site_data['site_fs_path']      = WEBROOT . $this->site_data['site_url'];
-		$this->site_data['site_ssl_wildcard'] = \EE\Utils\get_flag_value( $assoc_args, 'wildcard' );
-		$this->skip_status_check              = \EE\Utils\get_flag_value( $assoc_args, 'skip-status-check' );
+		$this->site_data['site_fs_path']           = WEBROOT . $this->site_data['site_url'];
+		$this->site_data['site_ssl_wildcard']      = \EE\Utils\get_flag_value( $assoc_args, 'wildcard' );
+		$this->skip_status_check                   = \EE\Utils\get_flag_value( $assoc_args, 'skip-status-check' );
+		$this->site_data['site_container_fs_path'] = get_public_dir( $assoc_args );
 
 		$this->site_data['site_ssl'] = get_value_if_flag_isset( $assoc_args, 'ssl', [ 'le', 'self', 'inherit' ], 'le' );
-
-		// Create container fs path for site.
-		$public_root                               = get_flag_value( $assoc_args, 'public-dir' );
-		$public_root                               = str_replace( '/var/www/htdocs/', '', trailingslashit( $public_root ) );
-		$this->site_data['site_container_fs_path'] = empty( $public_root ) ? '/var/www/htdocs' : sprintf( '/var/www/htdocs/%s', trim( sanitize_file_folder_name( $public_root ), '/' ) );
-
 
 		\EE\Service\Utils\nginx_proxy_check();
 
@@ -213,9 +207,7 @@ class HTML extends EE_Site_Command {
 				\EE\Site\Utils\restart_site_containers( $this->site_data['site_fs_path'], [ 'nginx' ] );
 			}
 
-			// Get site src path from container fs path.
-			$public_dir_path = str_replace( '/var/www/htdocs/', '', trailingslashit( $this->site_data['site_container_fs_path'] ) );
-			$site_src_dir    = empty( $public_dir_path ) ? $site_src_dir : $site_src_dir . '/' . rtrim( $public_dir_path, '/' );
+			$site_src_dir = get_webroot( $site_src_dir, $this->site_data['site_container_fs_path'] );
 
 			$index_data = [
 				'version'       => 'v' . EE_VERSION,
@@ -298,7 +290,7 @@ class HTML extends EE_Site_Command {
 	 */
 	private function create_site() {
 
-		$this->level                     = 1;
+		$this->level = 1;
 		try {
 			if ( 'inherit' === $this->site_data['site_ssl'] ) {
 				$this->check_parent_site_certs( $this->site_data['site_url'] );
