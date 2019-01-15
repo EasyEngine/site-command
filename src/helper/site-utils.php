@@ -8,6 +8,7 @@ use Symfony\Component\Filesystem\Filesystem;
 use function EE\Utils\get_flag_value;
 use function EE\Utils\get_config_value;
 use function EE\Utils\sanitize_file_folder_name;
+use function EE\Utils\remove_trailing_slash;
 use function EE\Utils\trailingslashit;
 
 /**
@@ -561,10 +562,13 @@ function clean_site_cache( $key ) {
 function get_public_dir( $assoc_args ) {
 
 	// Create container fs path for site.
-	$public_root = get_flag_value( $assoc_args, 'public-dir' );
-	$public_root = str_replace( '/var/www/htdocs/', '', trailingslashit( $public_root ) );
+	$public_root           = get_flag_value( $assoc_args, 'public-dir' );
+	$public_root           = str_replace( '/var/www/htdocs/', '', trailingslashit( $public_root ) );
+	$public_root           = remove_trailing_slash( $public_root );
+	$sanitized_public_dir  = sanitize_file_folder_name( $public_root );
+	$user_input_public_dir = sprintf( '/var/www/htdocs/%s', trim( $sanitized_public_dir, '/' ) );
 
-	return empty( $public_root ) ? '/var/www/htdocs' : sprintf( '/var/www/htdocs/%s', trim( sanitize_file_folder_name( $public_root ), '/' ) );
+	return empty( $public_root ) ? '/var/www/htdocs' : $user_input_public_dir;
 }
 
 /**
