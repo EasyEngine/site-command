@@ -2,10 +2,6 @@
 
 # called by Travis CI
 
-# install dependencies
-wget -qO ee https://rt.cx/ee4beta && sudo bash ee
-rm ee
-
 # Setup EE develop repo
 cd ..
 git clone https://github.com/EasyEngine/easyengine.git easyengine --depth=1
