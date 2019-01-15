@@ -17,7 +17,6 @@ before_script:
     fi
   - sudo ./ci/test-env-install.sh
   - ./ci/prepare.sh
-  - ./ci/add-test-certs.sh
 
 script:
   - cd "$TRAVIS_BUILD_DIR/../easyengine"
