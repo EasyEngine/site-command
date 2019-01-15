@@ -11,6 +11,7 @@ use function EE\Utils\get_flag_value;
 use function EE\Utils\mustache_render;
 use function EE\Utils\get_value_if_flag_isset;
 use function EE\Utils\trailingslashit;
+use function EE\Utils\sanitize_file_folder_name;
 use function EE\Site\Utils\auto_site_name;
 use function EE\Site\Utils\get_site_info;
 
@@ -76,7 +77,7 @@ class HTML extends EE_Site_Command {
 	 * : Skips site status check.
 	 *
 	 * [--public-dir]
-	 * : Set custom source directory for site.
+	 * : Set custom source directory for site inside htdocs.
 	 *
 	 * ## EXAMPLES
 	 *
@@ -92,7 +93,7 @@ class HTML extends EE_Site_Command {
 	 *     # Create html site with self signed certificate
 	 *     $ ee site create example.com --ssl=self
 	 *
-	 *     # Create html site with custom source directory
+	 *     # Create html site with custom source directory inside htdocs ( SITE_ROOT/app/htdocs/src )
 	 *     $ ee site create example.com --public-dir=src
 	 *
 	 */
@@ -116,9 +117,12 @@ class HTML extends EE_Site_Command {
 		$this->skip_status_check              = \EE\Utils\get_flag_value( $assoc_args, 'skip-status-check' );
 
 		$this->site_data['site_ssl'] = get_value_if_flag_isset( $assoc_args, 'ssl', [ 'le', 'self', 'inherit' ], 'le' );
+
 		// Create container fs path for site.
-		$public_root                               = \EE\Utils\get_flag_value( $assoc_args, 'public-dir' );
-		$this->site_data['site_container_fs_path'] = empty( $public_root ) ? '/var/www/htdocs' : sprintf( '/var/www/htdocs/%s', trim( $public_root, '/' ) );
+		$public_root                               = get_flag_value( $assoc_args, 'public-dir' );
+		$public_root                               = str_replace( '/var/www/htdocs/', '', trailingslashit( $public_root ) );
+		$this->site_data['site_container_fs_path'] = empty( $public_root ) ? '/var/www/htdocs' : sprintf( '/var/www/htdocs/%s', trim( sanitize_file_folder_name( $public_root ), '/' ) );
+
 
 		\EE\Service\Utils\nginx_proxy_check();
 
