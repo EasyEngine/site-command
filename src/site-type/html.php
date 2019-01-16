@@ -125,15 +125,12 @@ class HTML extends EE_Site_Command {
 		$this->site_data['site_container_fs_path'] = get_public_dir( $assoc_args );
 
 		$this->site_data['site_ssl'] = get_value_if_flag_isset( $assoc_args, 'ssl', [ 'le', 'self', 'inherit', 'custom' ], 'le' );
-		if ( 'custom' === $this->site_data['site_ssl'] ) {
-			$this->custom_site_ssl( get_flag_value( $assoc_args, 'ssl-key' ), get_flag_value( $assoc_args, 'ssl-crt' ) );
-		}
 
 		\EE\Service\Utils\nginx_proxy_check();
 
 		\EE::log( 'Configuring project.' );
 
-		$this->create_site();
+		$this->create_site( $assoc_args );
 		\EE\Utils\delem_log( 'site create end' );
 	}
 
@@ -298,8 +295,10 @@ class HTML extends EE_Site_Command {
 
 	/**
 	 * Function to create the site.
+	 *
+	 * @param $assoc_args array of associative arguments.
 	 */
-	private function create_site() {
+	private function create_site( $assoc_args ) {
 
 		$this->level = 1;
 		try {
@@ -317,6 +316,10 @@ class HTML extends EE_Site_Command {
 			if ( ! $this->skip_status_check ) {
 				$this->level = 4;
 				\EE\Site\Utils\site_status_check( $this->site_data['site_url'] );
+			}
+
+			if ( 'custom' === $this->site_data['site_ssl'] ) {
+				$this->custom_site_ssl( get_flag_value( $assoc_args, 'ssl-key' ), get_flag_value( $assoc_args, 'ssl-crt' ) );
 			}
 
 			$this->www_ssl_wrapper();
