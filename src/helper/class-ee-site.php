@@ -14,6 +14,7 @@ use function EE\Utils\delem_log;
 use function EE\Site\Utils\auto_site_name;
 use function EE\Site\Utils\get_site_info;
 use function EE\Site\Utils\reload_global_nginx_proxy;
+use function EE\Utils\remove_trailing_slash;
 
 /**
  * Base class for Site command
@@ -707,7 +708,9 @@ abstract class EE_Site_Command {
 
 		if ( $this->site_data['site_ssl'] ) {
 			if ( ! $site_enable ) {
-				$this->init_ssl( $this->site_data['site_url'], $this->site_data['site_fs_path'], $this->site_data['site_ssl'], $this->site_data['site_ssl_wildcard'], $is_www_or_non_www_pointed );
+				if ( 'custom' !== $this->site_data['site_ssl'] ) {
+					$this->init_ssl( $this->site_data['site_url'], $this->site_data['site_fs_path'], $this->site_data['site_ssl'], $this->site_data['site_ssl_wildcard'], $is_www_or_non_www_pointed );
+				}
 
 				$this->dump_docker_compose_yml( [ 'nohttps' => false ] );
 				\EE\Site\Utils\start_site_containers( $this->site_data['site_fs_path'], $containers_to_start );
@@ -1175,6 +1178,32 @@ abstract class EE_Site_Command {
 	 */
 	public function populate_site_info( $site_name, $in_array = true ) {
 		$this->site_data = EE\Site\Utils\get_site_info( [ $site_name ], false, false, $in_array );
+	}
+
+	/**
+	 * Allow custom SSL for site.
+	 *
+	 * @param $ssl_key string path of the custom ssl key.
+	 * @param $ssl_crt string path of the custom ssl cert.
+	 *
+	 * @throws EE\ExitException
+	 */
+	public function custom_site_ssl( $ssl_key, $ssl_crt ) {
+
+		if ( empty( $ssl_key ) || empty( $ssl_crt ) ) {
+			EE::error( 'Pass --ssl-key and --ssl-crt for custom SSL' );
+		}
+
+		$fs = new Filesystem();
+		if ( ! $fs->exists( $ssl_key ) || ! $fs->exists( $ssl_crt ) ) {
+			EE::error( 'ssl-key or ssl-crt file does not exist.' );
+		}
+
+		$ssl_key_dest = sprintf( '%1$s/nginx-proxy/certs/%2$s.key', remove_trailing_slash( EE_SERVICE_DIR ), $this->site_data['site_url'] );
+		$ssl_crt_dest = sprintf( '%1$s/nginx-proxy/certs/%2$s.crt', remove_trailing_slash( EE_SERVICE_DIR ), $this->site_data['site_url'] );
+
+		$fs->copy( $ssl_key, $ssl_key_dest, true );
+		$fs->copy( $ssl_crt, $ssl_crt_dest, true );
 	}
 
 	abstract public function create( $args, $assoc_args );

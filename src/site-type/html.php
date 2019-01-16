@@ -13,6 +13,7 @@ use function EE\Site\Utils\auto_site_name;
 use function EE\Site\Utils\get_site_info;
 use function EE\Site\Utils\get_public_dir;
 use function EE\Site\Utils\get_webroot;
+use function EE\Utils\get_flag_value;
 
 /**
  * Adds html site type to `site` command.
@@ -58,13 +59,20 @@ class HTML extends EE_Site_Command {
 	 * : Name of website.
 	 *
 	 * [--ssl]
-	 * : Enables ssl via letsencrypt certificate.
+	 * : Enables ssl on site.
 	 * ---
 	 * options:
 	 *      - le
 	 *      - self
 	 *      - inherit
+	 *      - custom
 	 * ---
+	 *
+	 * [--ssl-key=<ssl-key-path>]
+	 * : Path to the SSL key file.
+	 *
+	 * [--ssl-crt=<ssl-crt-path>]
+	 * : Path ro the SSL crt file.
 	 *
 	 * [--wildcard]
 	 * : Gets wildcard SSL .
@@ -116,7 +124,10 @@ class HTML extends EE_Site_Command {
 		$this->skip_status_check                   = \EE\Utils\get_flag_value( $assoc_args, 'skip-status-check' );
 		$this->site_data['site_container_fs_path'] = get_public_dir( $assoc_args );
 
-		$this->site_data['site_ssl'] = get_value_if_flag_isset( $assoc_args, 'ssl', [ 'le', 'self', 'inherit' ], 'le' );
+		$this->site_data['site_ssl'] = get_value_if_flag_isset( $assoc_args, 'ssl', [ 'le', 'self', 'inherit', 'custom' ], 'le' );
+		if ( 'custom' === $this->site_data['site_ssl'] ) {
+			$this->custom_site_ssl( get_flag_value( $assoc_args, 'ssl-key' ), get_flag_value( $assoc_args, 'ssl-crt' ) );
+		}
 
 		\EE\Service\Utils\nginx_proxy_check();
 
