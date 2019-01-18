@@ -29,6 +29,7 @@ class CreateTableSiteMigration extends Base {
 		$query = 'CREATE TABLE sites (
 			id                   INTEGER  NOT NULL,
 			site_url             VARCHAR  NOT NULL,
+			site_aliases         VARCHAR,
 			site_type            VARCHAR  NOT NULL,
 			site_fs_path         VARCHAR  NOT NULL,
 			site_container_fs_path VARCHAR NOT NULL,
