@@ -37,17 +37,11 @@ class HTML extends EE_Site_Command {
 	 */
 	private $skip_status_check;
 
-	/**
-	 * @var Filesystem $fs Symfony Filesystem object.
-	 */
-	private $fs;
-
 	public function __construct() {
 
 		parent::__construct();
 		$this->level  = 0;
 		$this->logger = \EE::get_file_logger()->withName( 'html_type' );
-		$this->fs     = new Filesystem();
 	}
 
 	/**

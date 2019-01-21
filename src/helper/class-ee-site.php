@@ -25,7 +25,7 @@ abstract class EE_Site_Command {
 	/**
 	 * @var Filesystem $fs Symfony Filesystem object.
 	 */
-	private $fs;
+	protected $fs;
 
 	/**
 	 * @var bool $wildcard Whether the site is letsencrypt type is wildcard or not.
@@ -54,6 +54,7 @@ abstract class EE_Site_Command {
 
 	public function __construct() {
 
+		$this->fs = new Filesystem();
 		pcntl_signal( SIGTERM, [ $this, 'rollback' ] );
 		pcntl_signal( SIGHUP, [ $this, 'rollback' ] );
 		pcntl_signal( SIGUSR1, [ $this, 'rollback' ] );
@@ -1193,8 +1194,7 @@ abstract class EE_Site_Command {
 			throw new \Exception( 'Pass --ssl-key and --ssl-crt for custom SSL' );
 		}
 
-		$fs = new Filesystem();
-		if ( $fs->exists( $ssl_key ) && $fs->exists( $ssl_crt ) ) {
+		if ( $this->fs->exists( $ssl_key ) && $this->fs->exists( $ssl_crt ) ) {
 			$this->site_data['ssl_key'] = realpath( $ssl_key );
 			$this->site_data['ssl_crt'] = realpath( $ssl_crt );
 		} else {
@@ -1210,9 +1210,8 @@ abstract class EE_Site_Command {
 		$ssl_key_dest = sprintf( '%1$s/nginx-proxy/certs/%2$s.key', remove_trailing_slash( EE_SERVICE_DIR ), $this->site_data['site_url'] );
 		$ssl_crt_dest = sprintf( '%1$s/nginx-proxy/certs/%2$s.crt', remove_trailing_slash( EE_SERVICE_DIR ), $this->site_data['site_url'] );
 
-		$fs = new Filesystem();
-		$fs->copy( $this->site_data['ssl_key'], $ssl_key_dest, true );
-		$fs->copy( $this->site_data['ssl_crt'], $ssl_crt_dest, true );
+		$this->fs->copy( $this->site_data['ssl_key'], $ssl_key_dest, true );
+		$this->fs->copy( $this->site_data['ssl_crt'], $ssl_crt_dest, true );
 	}
 
 	abstract public function create( $args, $assoc_args );
