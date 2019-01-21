@@ -125,6 +125,9 @@ class HTML extends EE_Site_Command {
 		$this->site_data['site_container_fs_path'] = get_public_dir( $assoc_args );
 
 		$this->site_data['site_ssl'] = get_value_if_flag_isset( $assoc_args, 'ssl', [ 'le', 'self', 'inherit', 'custom' ], 'le' );
+		if ( 'custom' === $this->site_data['site_ssl'] ) {
+			$this->validate_site_custom_ssl( get_flag_value( $assoc_args, 'ssl-key' ), get_flag_value( $assoc_args, 'ssl-crt' ) );
+		}
 
 		\EE\Service\Utils\nginx_proxy_check();
 
@@ -319,7 +322,7 @@ class HTML extends EE_Site_Command {
 			}
 
 			if ( 'custom' === $this->site_data['site_ssl'] ) {
-				$this->custom_site_ssl( get_flag_value( $assoc_args, 'ssl-key' ), get_flag_value( $assoc_args, 'ssl-crt' ) );
+				$this->custom_site_ssl();
 			}
 
 			$this->www_ssl_wrapper();
