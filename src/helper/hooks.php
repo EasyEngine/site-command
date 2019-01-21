@@ -2,6 +2,7 @@
 
 use EE\Model\Site;
 use EE\Model\Option;
+use EE\Model\ConfigHash;
 
 if ( ! class_exists( 'EE' ) ) {
 	return;
@@ -79,6 +80,24 @@ function cleanup_sharing( $site_url ) {
 	Option::set( 'publish_url', '' );
 }
 
+/**
+ * Clean up config hash entries from database.
+ *
+ * @param string $site_url The site whose hash entries need be cleaned up.
+ *
+ * @throws Exception
+ */
+function clean_config_hash( $site_url ) {
+
+	if ( ConfigHash::delete_hash( $site_url ) ) {
+		EE::debug( "Removed database hash entries for $site_url." );
+	} else {
+		EE::debug( "Could not remove the hash entry for $site_url." );
+	}
+
+}
+
 EE::add_hook( 'site_cleanup', 'cleanup_redis_entries' );
 EE::add_hook( 'site_cleanup', 'cleanup_sharing' );
+EE::add_hook( 'site_cleanup', 'clean_config_hash' );
 EE::add_hook( 'before_invoke:help', 'ee_site_help_cmd_routing' );
