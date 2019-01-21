@@ -126,7 +126,11 @@ class HTML extends EE_Site_Command {
 
 		$this->site_data['site_ssl'] = get_value_if_flag_isset( $assoc_args, 'ssl', [ 'le', 'self', 'inherit', 'custom' ], 'le' );
 		if ( 'custom' === $this->site_data['site_ssl'] ) {
-			$this->validate_site_custom_ssl( get_flag_value( $assoc_args, 'ssl-key' ), get_flag_value( $assoc_args, 'ssl-crt' ) );
+			try {
+				$this->validate_site_custom_ssl( get_flag_value( $assoc_args, 'ssl-key' ), get_flag_value( $assoc_args, 'ssl-crt' ) );
+			} catch ( \Exception $e ) {
+				$this->catch_clean( $e );
+			}
 		}
 
 		\EE\Service\Utils\nginx_proxy_check();
