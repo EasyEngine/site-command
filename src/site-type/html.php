@@ -339,11 +339,8 @@ class HTML extends EE_Site_Command {
 			if ( $site ) {
 				\EE::log( 'Site entry created.' );
 
-				// Get site config files.
-				$files = ConfigHash::get_files_in_path( $this->site_data['site_fs_path'] );
-
 				// Create entries for sites' configuration files.
-				ConfigHash::insert_hash_data( $files, $this->site_data['site_url'] );
+				ConfigHash::create_site_config_hash( $this->site_data['site_fs_path'], $this->site_data['site_url'] );
 
 			} else {
 				throw new \Exception( 'Error creating site entry in database.' );
