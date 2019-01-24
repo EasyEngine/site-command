@@ -955,6 +955,47 @@ abstract class EE_Site_Command {
 	}
 
 	/**
+	 * Renews letsencrypt ssl certificates.
+	 *
+	 * ## OPTIONS
+	 *
+	 * <site-name>
+	 * : Name of website.
+	 *
+	 * [--force]
+	 * : Force renewal.
+	 *
+	 * @subcommand ssl-renew
+	 */
+	public function ssl_renew( $args, $assoc_args ) {
+
+		EE::log( 'Starting SSL cert renewal' );
+
+		if ( ! isset( $this->le_mail ) ) {
+			$this->le_mail = \EE::get_config( 'le-mail' ) ?? \EE::input( 'Enter your mail id: ' );
+		}
+
+		$force = \EE\Utils\get_flag_value( $assoc_args, 'force' );
+
+		$this->site_data = get_site_info( $args );
+
+		if ( 'inherit' === $this->site_data['site_ssl'] ) {
+			EE::error( 'No need to renew certs for site who have inherited ssl. Please renew certificate of the parent site.' );
+		}
+
+		if ( 'le' !== $this->site_data['site_ssl'] ) {
+			EE::error( 'Only Letsencrypt certificate renewal is supported.' );
+		}
+		$postfix_exists      = \EE_DOCKER::service_exists( 'postfix', $this->site_data['site_fs_path'] );
+		$containers_to_start = $postfix_exists ? [ 'nginx', 'postfix' ] : [ 'nginx' ];
+		$this->www_ssl_wrapper( $containers_to_start, false );
+
+		reload_global_nginx_proxy();
+
+		EE::success( 'SSL renewal completed.' );
+	}
+
+	/**
 	 * Share a site online using ngrok.
 	 *
 	 * ## OPTIONS
