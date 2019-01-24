@@ -131,7 +131,7 @@ class HTML extends EE_Site_Command {
 
 		\EE::log( 'Configuring project.' );
 
-		$this->create_site( $assoc_args );
+		$this->create_site();
 		\EE\Utils\delem_log( 'site create end' );
 	}
 
@@ -299,7 +299,7 @@ class HTML extends EE_Site_Command {
 	 *
 	 * @param $assoc_args array of associative arguments.
 	 */
-	private function create_site( $assoc_args ) {
+	private function create_site() {
 
 		$this->level = 1;
 		try {
