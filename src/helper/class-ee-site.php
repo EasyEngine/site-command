@@ -676,11 +676,12 @@ abstract class EE_Site_Command {
 	 * Function to add site redirects and initialise ssl process.
 	 *
 	 * @param array $containers_to_start Containers to start for that site. Default, empty will start all.
+	 * @param bool $force                Force ssl renewal.
 	 *
 	 * @throws EE\ExitException
 	 * @throws \Exception
 	 */
-	protected function www_ssl_wrapper( $containers_to_start = [], $site_enable = false ) {
+	protected function www_ssl_wrapper( $containers_to_start = [], $site_enable = false, $force = false ) {
 		/**
 		 * This adds http www redirection which is needed for issuing cert for a site.
 		 * i.e. when you create example.com site, certs are issued for example.com and www.example.com
@@ -707,7 +708,7 @@ abstract class EE_Site_Command {
 
 		if ( $this->site_data['site_ssl'] ) {
 			if ( ! $site_enable ) {
-				$this->init_ssl( $this->site_data['site_url'], $this->site_data['site_fs_path'], $this->site_data['site_ssl'], $this->site_data['site_ssl_wildcard'], $is_www_or_non_www_pointed );
+				$this->init_ssl( $this->site_data['site_url'], $this->site_data['site_fs_path'], $this->site_data['site_ssl'], $this->site_data['site_ssl_wildcard'], $is_www_or_non_www_pointed, $force );
 
 				$this->dump_docker_compose_yml( [ 'nohttps' => false ] );
 				\EE\Site\Utils\start_site_containers( $this->site_data['site_fs_path'], $containers_to_start );
@@ -754,16 +755,17 @@ abstract class EE_Site_Command {
 	 * @param string $ssl_type     Type of ssl cert to issue.
 	 * @param bool $wildcard       SSL with wildcard or not.
 	 * @param bool $www_or_non_www Allow LetsEncrypt on www or non-www subdomain.
+	 * @param bool $force          Force ssl renewal.
 	 *
 	 * @throws \EE\ExitException If --ssl flag has unrecognized value.
 	 * @throws \Exception
 	 */
-	protected function init_ssl( $site_url, $site_fs_path, $ssl_type, $wildcard = false, $www_or_non_www = false ) {
+	protected function init_ssl( $site_url, $site_fs_path, $ssl_type, $wildcard = false, $www_or_non_www = false, $force = false ) {
 
 		\EE::debug( 'Starting SSL procedure' );
 		if ( 'le' === $ssl_type ) {
 			\EE::debug( 'Initializing LE' );
-			$this->init_le( $site_url, $site_fs_path, $wildcard, $www_or_non_www );
+			$this->init_le( $site_url, $site_fs_path, $wildcard, $www_or_non_www, $force );
 		} elseif ( 'inherit' === $ssl_type ) {
 			if ( $wildcard ) {
 				throw new \Exception( 'Cannot use --wildcard with --ssl=inherit', false );
@@ -787,8 +789,9 @@ abstract class EE_Site_Command {
 	 * @param string $site_fs_path Webroot of the site.
 	 * @param bool $wildcard       SSL with wildcard or not.
 	 * @param bool $www_or_non_www Allow LetsEncrypt on www or non-www subdomain.
+	 * @param bool $force          Force ssl renewal.
 	 */
-	protected function init_le( $site_url, $site_fs_path, $wildcard = false, $www_or_non_www ) {
+	protected function init_le( $site_url, $site_fs_path, $wildcard = false, $www_or_non_www, $force = false ) {
 		$preferred_challenge = get_config_value( 'preferred_ssl_challenge', '' );
 		$is_solver_dns       = ( $wildcard || 'dns' === $preferred_challenge ) ? true : false;
 		\EE::debug( 'Wildcard in init_le: ' . ( bool ) $wildcard );
@@ -817,7 +820,7 @@ abstract class EE_Site_Command {
 				EE::log( 'Waiting for DNS entry propagation.' );
 				sleep( 10 );
 			}
-			$this->ssl( [], [], $www_or_non_www );
+			$this->ssl( [], [ 'force' => $force ], $www_or_non_www );
 		}
 	}
 
@@ -988,7 +991,7 @@ abstract class EE_Site_Command {
 		}
 		$postfix_exists      = \EE_DOCKER::service_exists( 'postfix', $this->site_data['site_fs_path'] );
 		$containers_to_start = $postfix_exists ? [ 'nginx', 'postfix' ] : [ 'nginx' ];
-		$this->www_ssl_wrapper( $containers_to_start, false );
+		$this->www_ssl_wrapper( $containers_to_start, false, $force );
 
 		reload_global_nginx_proxy();
 
