@@ -185,7 +185,7 @@ EOF
 		$record_id   = [];
 		$record_name = rtrim( $record_name, '.' );
 
-		foreach ( $this->dns->listRecords( $zoneID )->result as $record ) {
+		foreach ( $this->dns->listRecords( $zoneID, '', '', '', 1, 1000 )->result as $record ) {
 			if ( ( $record->name === $record_name ) && ( $record->type === $record_type ) ) {
 				$record_id[] = $record->id;
 			}
