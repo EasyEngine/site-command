@@ -68,10 +68,14 @@ class SimpleDnsCloudflareSolver implements SolverInterface {
 		if ( ! $manual ) {
 			$zoneID = $this->zones->getZoneID( $zone_guess );
 
-			if ( $this->dns->addRecord( $zoneID, "TXT", $recordName, $recordValue, 0, false ) === true ) {
-				EE::log( "Created DNS record: $recordName with value $recordValue." . PHP_EOL );
-			} else {
-				$manual = true;
+			try {
+				if ( $this->dns->addRecord( $zoneID, "TXT", $recordName, $recordValue, 0, false ) === true ) {
+					EE::log( "Created DNS record: $recordName with value $recordValue." . PHP_EOL );
+				} else {
+					$manual = true;
+				}
+			} catch ( \Exception $e ) {
+				EE::warning( $e->getMessage() );
 			}
 		}
 
