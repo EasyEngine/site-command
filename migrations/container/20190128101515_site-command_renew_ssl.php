@@ -73,7 +73,7 @@ class RenewSslExtendor extends EE\Site\Type\EE_Site_Command {
 			$this->site_data['site_ssl'] = 'le';
 		}
 		$containers_to_start = $postfix_exists ? [ 'nginx', 'postfix' ] : [ 'nginx' ];
-		$this->www_ssl_wrapper( $containers_to_start, false, true );
+		$this->www_ssl_wrapper( $containers_to_start, false, true, true );
 	}
 	public function create( $args, $assoc_args ) {}
 	protected function rollback() {}
