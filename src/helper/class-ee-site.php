@@ -14,6 +14,7 @@ use function EE\Utils\delem_log;
 use function EE\Site\Utils\auto_site_name;
 use function EE\Site\Utils\get_site_info;
 use function EE\Site\Utils\reload_global_nginx_proxy;
+use function EE\Utils\remove_trailing_slash;
 
 /**
  * Base class for Site command
@@ -24,7 +25,7 @@ abstract class EE_Site_Command {
 	/**
 	 * @var Filesystem $fs Symfony Filesystem object.
 	 */
-	private $fs;
+	protected $fs;
 
 	/**
 	 * @var bool $wildcard Whether the site is letsencrypt type is wildcard or not.
@@ -53,6 +54,7 @@ abstract class EE_Site_Command {
 
 	public function __construct() {
 
+		$this->fs = new Filesystem();
 		pcntl_signal( SIGTERM, [ $this, 'rollback' ] );
 		pcntl_signal( SIGHUP, [ $this, 'rollback' ] );
 		pcntl_signal( SIGUSR1, [ $this, 'rollback' ] );
@@ -707,7 +709,9 @@ abstract class EE_Site_Command {
 
 		if ( $this->site_data['site_ssl'] ) {
 			if ( ! $site_enable ) {
-				$this->init_ssl( $this->site_data['site_url'], $this->site_data['site_fs_path'], $this->site_data['site_ssl'], $this->site_data['site_ssl_wildcard'], $is_www_or_non_www_pointed );
+				if ( 'custom' !== $this->site_data['site_ssl'] ) {
+					$this->init_ssl( $this->site_data['site_url'], $this->site_data['site_fs_path'], $this->site_data['site_ssl'], $this->site_data['site_ssl_wildcard'], $is_www_or_non_www_pointed );
+				}
 
 				$this->dump_docker_compose_yml( [ 'nohttps' => false ] );
 				\EE\Site\Utils\start_site_containers( $this->site_data['site_fs_path'], $containers_to_start );
@@ -1175,6 +1179,39 @@ abstract class EE_Site_Command {
 	 */
 	public function populate_site_info( $site_name, $in_array = true ) {
 		$this->site_data = EE\Site\Utils\get_site_info( [ $site_name ], false, false, $in_array );
+	}
+
+	/**
+	 * Validate ssl-key and ssl-crt paths.
+	 *
+	 * @param $ssl_key ssl-key file path.
+	 * @param $ssl_crt ssl-crt file path.
+	 *
+	 * @throws \Exception
+	 */
+	public function validate_site_custom_ssl( $ssl_key, $ssl_crt ) {
+		if ( empty( $ssl_key ) || empty( $ssl_crt ) ) {
+			throw new \Exception( 'Pass --ssl-key and --ssl-crt for custom SSL' );
+		}
+
+		if ( $this->fs->exists( $ssl_key ) && $this->fs->exists( $ssl_crt ) ) {
+			$this->site_data['ssl_key'] = realpath( $ssl_key );
+			$this->site_data['ssl_crt'] = realpath( $ssl_crt );
+		} else {
+			throw new \Exception( 'ssl-key OR ssl-crt path does not exist' );
+		}
+	}
+
+	/**
+	 * * Allow custom SSL for site.
+	 */
+	public function custom_site_ssl() {
+
+		$ssl_key_dest = sprintf( '%1$s/nginx-proxy/certs/%2$s.key', remove_trailing_slash( EE_SERVICE_DIR ), $this->site_data['site_url'] );
+		$ssl_crt_dest = sprintf( '%1$s/nginx-proxy/certs/%2$s.crt', remove_trailing_slash( EE_SERVICE_DIR ), $this->site_data['site_url'] );
+
+		$this->fs->copy( $this->site_data['ssl_key'], $ssl_key_dest, true );
+		$this->fs->copy( $this->site_data['ssl_crt'], $ssl_crt_dest, true );
 	}
 
 	abstract public function create( $args, $assoc_args );
