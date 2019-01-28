@@ -983,6 +983,9 @@ abstract class EE_Site_Command {
 	 *     # Renew ssl cert of a site
 	 *     $ ee site ssl-renew example.com
 	 *
+	 *     # Renew all ssl certs
+	 *     $ ee site ssl-renew --all
+	 *
 	 *     # Force renew ssl cert
 	 *     $ ee site ssl-renew example.com --force
 	 *
