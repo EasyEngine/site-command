@@ -5,7 +5,7 @@ server {
 	access_log   /var/log/nginx/access.log;
 	error_log    /var/log/nginx/error.log;
 
-	root /var/www/htdocs;
+	root {{document_root}};
 
 	server_name {{server_name}};
 

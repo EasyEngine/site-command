@@ -5,7 +5,11 @@ namespace EE\Site\Utils;
 use EE;
 use EE\Model\Site;
 use Symfony\Component\Filesystem\Filesystem;
+use function EE\Utils\get_flag_value;
 use function EE\Utils\get_config_value;
+use function EE\Utils\sanitize_file_folder_name;
+use function EE\Utils\remove_trailing_slash;
+use function EE\Utils\trailingslashit;
 
 /**
  * Get the site-name from the path from where ee is running if it is a valid site path.
@@ -546,4 +550,38 @@ function get_global_auth() {
  */
 function clean_site_cache( $key ) {
 	EE::exec( sprintf( 'docker exec -it %s redis-cli --eval purge_all_cache.lua 0 , "%s*"', GLOBAL_REDIS_CONTAINER, $key ) );
+}
+
+/**
+ * Function to get the public-dir from assoc args with checks and sanitizations.
+ *
+ * @param $assoc_args
+ *
+ * @return string processed value for public-dir.
+ */
+function get_public_dir( $assoc_args ) {
+
+	// Create container fs path for site.
+	$public_root           = get_flag_value( $assoc_args, 'public-dir' );
+	$public_root           = str_replace( '/var/www/htdocs/', '', trailingslashit( $public_root ) );
+	$public_root           = remove_trailing_slash( $public_root );
+	$sanitized_public_dir  = sanitize_file_folder_name( $public_root );
+	$user_input_public_dir = sprintf( '/var/www/htdocs/%s', trim( $sanitized_public_dir, '/' ) );
+
+	return empty( $public_root ) ? '/var/www/htdocs' : $user_input_public_dir;
+}
+
+/**
+ * Get final source directory for site webroot.
+ *
+ * @param $original_src_dir  Default source directory.
+ * @param $container_fs_path public directory set by user if any.
+ *
+ * @return string final webroot for site.
+ */
+function get_webroot( $original_src_dir, $container_fs_path ) {
+
+	$public_dir_path = str_replace( '/var/www/htdocs/', '', trailingslashit( $container_fs_path ) );
+
+	return empty( $public_dir_path ) ? $original_src_dir : $original_src_dir . '/' . rtrim( $public_dir_path, '/' );
 }

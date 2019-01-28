@@ -68,10 +68,14 @@ class SimpleDnsCloudflareSolver implements SolverInterface {
 		if ( ! $manual ) {
 			$zoneID = $this->zones->getZoneID( $zone_guess );
 
-			if ( $this->dns->addRecord( $zoneID, "TXT", $recordName, $recordValue, 0, false ) === true ) {
-				EE::log( "Created DNS record: $recordName with value $recordValue." . PHP_EOL );
-			} else {
-				$manual = true;
+			try {
+				if ( $this->dns->addRecord( $zoneID, "TXT", $recordName, $recordValue, 0, false ) === true ) {
+					EE::log( "Created DNS record: $recordName with value $recordValue." . PHP_EOL );
+				} else {
+					$manual = true;
+				}
+			} catch ( \Exception $e ) {
+				EE::warning( $e->getMessage() );
 			}
 		}
 
@@ -143,7 +147,7 @@ EOF
 		$possible_zones = [];
 		$zone_list      = [];
 
-		foreach ( $this->zones->listZones()->result as $zone ) {
+		foreach ( $this->zones->listZones( '', '', 1, 1000 )->result as $zone ) {
 			$zone_list[] = $zone->name;
 		}
 
@@ -181,7 +185,7 @@ EOF
 		$record_id   = [];
 		$record_name = rtrim( $record_name, '.' );
 
-		foreach ( $this->dns->listRecords( $zoneID )->result as $record ) {
+		foreach ( $this->dns->listRecords( $zoneID, '', '', '', 1, 1000 )->result as $record ) {
 			if ( ( $record->name === $record_name ) && ( $record->type === $record_type ) ) {
 				$record_id[] = $record->id;
 			}
