@@ -996,11 +996,11 @@ abstract class EE_Site_Command {
 		EE::log( 'Starting SSL cert renewal' );
 
 		if ( ! isset( $this->le_mail ) ) {
-			$this->le_mail = \EE::get_config( 'le-mail' ) ?? \EE::input( 'Enter your mail id: ' );
+			$this->le_mail = EE::get_config( 'le-mail' ) ?? EE::input( 'Enter your mail id: ' );
 		}
 
-		$force = \EE\Utils\get_flag_value( $assoc_args, 'force', false );
-		$all   = \EE\Utils\get_flag_value( $assoc_args, 'all', false );
+		$force = get_flag_value( $assoc_args, 'force', false );
+		$all   = get_flag_value( $assoc_args, 'all', false );
 
 		if ( $all ) {
 			$sites                 = Site::all();
