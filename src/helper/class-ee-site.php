@@ -679,11 +679,12 @@ abstract class EE_Site_Command {
 	 *
 	 * @param array $containers_to_start Containers to start for that site. Default, empty will start all.
 	 * @param bool $force                Force ssl renewal.
+	 * @param bool $renew                True if function is being used for cert renewal.
 	 *
 	 * @throws EE\ExitException
 	 * @throws \Exception
 	 */
-	protected function www_ssl_wrapper( $containers_to_start = [], $site_enable = false, $force = false ) {
+	protected function www_ssl_wrapper( $containers_to_start = [], $site_enable = false, $force = false, $renew = false ) {
 		/**
 		 * This adds http www redirection which is needed for issuing cert for a site.
 		 * i.e. when you create example.com site, certs are issued for example.com and www.example.com
@@ -714,7 +715,9 @@ abstract class EE_Site_Command {
 					$this->init_ssl( $this->site_data['site_url'], $this->site_data['site_fs_path'], $this->site_data['site_ssl'], $this->site_data['site_ssl_wildcard'], $is_www_or_non_www_pointed, $force );
 				}
 
-				$this->dump_docker_compose_yml( [ 'nohttps' => false ] );
+				if ( ! $renew ) {
+					$this->dump_docker_compose_yml( [ 'nohttps' => false ] );
+				}
 				\EE\Site\Utils\start_site_containers( $this->site_data['site_fs_path'], $containers_to_start );
 			}
 
@@ -966,11 +969,14 @@ abstract class EE_Site_Command {
 	 *
 	 * ## OPTIONS
 	 *
-	 * <site-name>
+	 * [<site-name>]
 	 * : Name of website.
 	 *
 	 * [--force]
 	 * : Force renewal.
+	 *
+	 * [--all]
+	 * : Run renewal for all ssl sites. (Skips renewal for dns/wildcards sites if cloudflare api is not set).
 	 *
 	 * ## EXAMPLES
 	 *
@@ -990,7 +996,44 @@ abstract class EE_Site_Command {
 			$this->le_mail = \EE::get_config( 'le-mail' ) ?? \EE::input( 'Enter your mail id: ' );
 		}
 
-		$force = \EE\Utils\get_flag_value( $assoc_args, 'force' );
+		$force = \EE\Utils\get_flag_value( $assoc_args, 'force', false );
+		$all   = \EE\Utils\get_flag_value( $assoc_args, 'all', false );
+
+		if ( $all ) {
+			$sites                 = Site::all();
+			$api_key_absent        = empty( get_config_value( 'cloudflare-api-key' ) );
+			$skip_wildcard_warning = false;
+			foreach ( $sites as $site ) {
+				if ( 'le' !== $site->site_ssl ) {
+					continue;
+				}
+				if ( $site->site_ssl_wildcard && $api_key_absent ) {
+					EE::warning( "Wildcard site found: $site->site_url, skipping it." );
+					if ( ! $skip_wildcard_warning ) {
+						EE::warning( "As this is a wildcard certificate, it cannot be automatically renewed.\nPlease run `ee site ssl-renew $site->site_url` to renew the certificate, or add cloudflare api key in EasyEngine config. Ref: https://rt.cx/eecf" );
+						$skip_wildcard_warning = true;
+					}
+					continue;
+				}
+				$this->renew_ssl_cert( [ $site->site_url ], $force );
+			}
+		} else {
+			$args = auto_site_name( $args, 'site', __FUNCTION__ );
+			$this->renew_ssl_cert( $args, $force );
+		}
+		EE::success( 'SSL renewal completed.' );
+	}
+
+	/**
+	 * Function to setup and execute ssl renewal.
+	 *
+	 * @param array $args User input args.
+	 * @param bool $force Whether to force renewal of cert or not.
+	 *
+	 * @throws EE\ExitException
+	 * @throws \Exception
+	 */
+	private function renew_ssl_cert( $args, $force ) {
 
 		$this->site_data = get_site_info( $args );
 
@@ -1003,11 +1046,9 @@ abstract class EE_Site_Command {
 		}
 		$postfix_exists      = \EE_DOCKER::service_exists( 'postfix', $this->site_data['site_fs_path'] );
 		$containers_to_start = $postfix_exists ? [ 'nginx', 'postfix' ] : [ 'nginx' ];
-		$this->www_ssl_wrapper( $containers_to_start, false, $force );
+		$this->www_ssl_wrapper( $containers_to_start, false, $force, true );
 
 		reload_global_nginx_proxy();
-
-		EE::success( 'SSL renewal completed.' );
 	}
 
 	/**
