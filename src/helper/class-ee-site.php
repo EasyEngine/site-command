@@ -972,6 +972,14 @@ abstract class EE_Site_Command {
 	 * [--force]
 	 * : Force renewal.
 	 *
+	 * ## EXAMPLES
+	 *
+	 *     # Renew ssl cert of a site
+	 *     $ ee site ssl-renew example.com
+	 *
+	 *     # Force renew ssl cert
+	 *     $ ee site ssl-renew example.com --force
+	 *
 	 * @subcommand ssl-renew
 	 */
 	public function ssl_renew( $args, $assoc_args ) {
