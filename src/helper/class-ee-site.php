@@ -14,6 +14,7 @@ use function EE\Utils\delem_log;
 use function EE\Site\Utils\auto_site_name;
 use function EE\Site\Utils\get_site_info;
 use function EE\Site\Utils\reload_global_nginx_proxy;
+use function EE\Utils\remove_trailing_slash;
 
 /**
  * Base class for Site command
@@ -24,7 +25,7 @@ abstract class EE_Site_Command {
 	/**
 	 * @var Filesystem $fs Symfony Filesystem object.
 	 */
-	private $fs;
+	protected $fs;
 
 	/**
 	 * @var bool $wildcard Whether the site is letsencrypt type is wildcard or not.
@@ -53,6 +54,7 @@ abstract class EE_Site_Command {
 
 	public function __construct() {
 
+		$this->fs = new Filesystem();
 		pcntl_signal( SIGTERM, [ $this, 'rollback' ] );
 		pcntl_signal( SIGHUP, [ $this, 'rollback' ] );
 		pcntl_signal( SIGUSR1, [ $this, 'rollback' ] );
@@ -676,11 +678,13 @@ abstract class EE_Site_Command {
 	 * Function to add site redirects and initialise ssl process.
 	 *
 	 * @param array $containers_to_start Containers to start for that site. Default, empty will start all.
+	 * @param bool $force                Force ssl renewal.
+	 * @param bool $renew                True if function is being used for cert renewal.
 	 *
 	 * @throws EE\ExitException
 	 * @throws \Exception
 	 */
-	protected function www_ssl_wrapper( $containers_to_start = [], $site_enable = false ) {
+	protected function www_ssl_wrapper( $containers_to_start = [], $site_enable = false, $force = false, $renew = false ) {
 		/**
 		 * This adds http www redirection which is needed for issuing cert for a site.
 		 * i.e. when you create example.com site, certs are issued for example.com and www.example.com
@@ -707,9 +711,13 @@ abstract class EE_Site_Command {
 
 		if ( $this->site_data['site_ssl'] ) {
 			if ( ! $site_enable ) {
-				$this->init_ssl( $this->site_data['site_url'], $this->site_data['site_fs_path'], $this->site_data['site_ssl'], $this->site_data['site_ssl_wildcard'], $is_www_or_non_www_pointed );
+				if ( 'custom' !== $this->site_data['site_ssl'] ) {
+					$this->init_ssl( $this->site_data['site_url'], $this->site_data['site_fs_path'], $this->site_data['site_ssl'], $this->site_data['site_ssl_wildcard'], $is_www_or_non_www_pointed, $force );
+				}
 
-				$this->dump_docker_compose_yml( [ 'nohttps' => false ] );
+				if ( ! $renew ) {
+					$this->dump_docker_compose_yml( [ 'nohttps' => false ] );
+				}
 				\EE\Site\Utils\start_site_containers( $this->site_data['site_fs_path'], $containers_to_start );
 			}
 
@@ -754,16 +762,17 @@ abstract class EE_Site_Command {
 	 * @param string $ssl_type     Type of ssl cert to issue.
 	 * @param bool $wildcard       SSL with wildcard or not.
 	 * @param bool $www_or_non_www Allow LetsEncrypt on www or non-www subdomain.
+	 * @param bool $force          Force ssl renewal.
 	 *
 	 * @throws \EE\ExitException If --ssl flag has unrecognized value.
 	 * @throws \Exception
 	 */
-	protected function init_ssl( $site_url, $site_fs_path, $ssl_type, $wildcard = false, $www_or_non_www = false ) {
+	protected function init_ssl( $site_url, $site_fs_path, $ssl_type, $wildcard = false, $www_or_non_www = false, $force = false ) {
 
 		\EE::debug( 'Starting SSL procedure' );
 		if ( 'le' === $ssl_type ) {
 			\EE::debug( 'Initializing LE' );
-			$this->init_le( $site_url, $site_fs_path, $wildcard, $www_or_non_www );
+			$this->init_le( $site_url, $site_fs_path, $wildcard, $www_or_non_www, $force );
 		} elseif ( 'inherit' === $ssl_type ) {
 			if ( $wildcard ) {
 				throw new \Exception( 'Cannot use --wildcard with --ssl=inherit', false );
@@ -787,8 +796,9 @@ abstract class EE_Site_Command {
 	 * @param string $site_fs_path Webroot of the site.
 	 * @param bool $wildcard       SSL with wildcard or not.
 	 * @param bool $www_or_non_www Allow LetsEncrypt on www or non-www subdomain.
+	 * @param bool $force          Force ssl renewal.
 	 */
-	protected function init_le( $site_url, $site_fs_path, $wildcard = false, $www_or_non_www ) {
+	protected function init_le( $site_url, $site_fs_path, $wildcard = false, $www_or_non_www, $force = false ) {
 		$preferred_challenge = get_config_value( 'preferred_ssl_challenge', '' );
 		$is_solver_dns       = ( $wildcard || 'dns' === $preferred_challenge ) ? true : false;
 		\EE::debug( 'Wildcard in init_le: ' . ( bool ) $wildcard );
@@ -817,7 +827,7 @@ abstract class EE_Site_Command {
 				EE::log( 'Waiting for DNS entry propagation.' );
 				sleep( 10 );
 			}
-			$this->ssl( [], [], $www_or_non_www );
+			$this->ssl( [], [ 'force' => $force ], $www_or_non_www );
 		}
 	}
 
@@ -952,6 +962,96 @@ abstract class EE_Site_Command {
 		reload_global_nginx_proxy();
 
 		EE::success( 'SSL verification completed.' );
+	}
+
+	/**
+	 * Renews letsencrypt ssl certificates.
+	 *
+	 * ## OPTIONS
+	 *
+	 * [<site-name>]
+	 * : Name of website.
+	 *
+	 * [--force]
+	 * : Force renewal.
+	 *
+	 * [--all]
+	 * : Run renewal for all ssl sites. (Skips renewal for dns/wildcards sites if cloudflare api is not set).
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     # Renew ssl cert of a site
+	 *     $ ee site ssl-renew example.com
+	 *
+	 *     # Renew all ssl certs
+	 *     $ ee site ssl-renew --all
+	 *
+	 *     # Force renew ssl cert
+	 *     $ ee site ssl-renew example.com --force
+	 *
+	 * @subcommand ssl-renew
+	 */
+	public function ssl_renew( $args, $assoc_args ) {
+
+		EE::log( 'Starting SSL cert renewal' );
+
+		if ( ! isset( $this->le_mail ) ) {
+			$this->le_mail = EE::get_config( 'le-mail' ) ?? EE::input( 'Enter your mail id: ' );
+		}
+
+		$force = get_flag_value( $assoc_args, 'force', false );
+		$all   = get_flag_value( $assoc_args, 'all', false );
+
+		if ( $all ) {
+			$sites                 = Site::all();
+			$api_key_absent        = empty( get_config_value( 'cloudflare-api-key' ) );
+			$skip_wildcard_warning = false;
+			foreach ( $sites as $site ) {
+				if ( 'le' !== $site->site_ssl ) {
+					continue;
+				}
+				if ( $site->site_ssl_wildcard && $api_key_absent ) {
+					EE::warning( "Wildcard site found: $site->site_url, skipping it." );
+					if ( ! $skip_wildcard_warning ) {
+						EE::warning( "As this is a wildcard certificate, it cannot be automatically renewed.\nPlease run `ee site ssl-renew $site->site_url` to renew the certificate, or add cloudflare api key in EasyEngine config. Ref: https://rt.cx/eecf" );
+						$skip_wildcard_warning = true;
+					}
+					continue;
+				}
+				$this->renew_ssl_cert( [ $site->site_url ], $force );
+			}
+		} else {
+			$args = auto_site_name( $args, 'site', __FUNCTION__ );
+			$this->renew_ssl_cert( $args, $force );
+		}
+		EE::success( 'SSL renewal completed.' );
+	}
+
+	/**
+	 * Function to setup and execute ssl renewal.
+	 *
+	 * @param array $args User input args.
+	 * @param bool $force Whether to force renewal of cert or not.
+	 *
+	 * @throws EE\ExitException
+	 * @throws \Exception
+	 */
+	private function renew_ssl_cert( $args, $force ) {
+
+		$this->site_data = get_site_info( $args );
+
+		if ( 'inherit' === $this->site_data['site_ssl'] ) {
+			EE::error( 'No need to renew certs for site who have inherited ssl. Please renew certificate of the parent site.' );
+		}
+
+		if ( 'le' !== $this->site_data['site_ssl'] ) {
+			EE::error( 'Only Letsencrypt certificate renewal is supported.' );
+		}
+		$postfix_exists      = \EE_DOCKER::service_exists( 'postfix', $this->site_data['site_fs_path'] );
+		$containers_to_start = $postfix_exists ? [ 'nginx', 'postfix' ] : [ 'nginx' ];
+		$this->www_ssl_wrapper( $containers_to_start, false, $force, true );
+
+		reload_global_nginx_proxy();
 	}
 
 	/**
@@ -1175,6 +1275,39 @@ abstract class EE_Site_Command {
 	 */
 	public function populate_site_info( $site_name, $in_array = true ) {
 		$this->site_data = EE\Site\Utils\get_site_info( [ $site_name ], false, false, $in_array );
+	}
+
+	/**
+	 * Validate ssl-key and ssl-crt paths.
+	 *
+	 * @param $ssl_key ssl-key file path.
+	 * @param $ssl_crt ssl-crt file path.
+	 *
+	 * @throws \Exception
+	 */
+	public function validate_site_custom_ssl( $ssl_key, $ssl_crt ) {
+		if ( empty( $ssl_key ) || empty( $ssl_crt ) ) {
+			throw new \Exception( 'Pass --ssl-key and --ssl-crt for custom SSL' );
+		}
+
+		if ( $this->fs->exists( $ssl_key ) && $this->fs->exists( $ssl_crt ) ) {
+			$this->site_data['ssl_key'] = realpath( $ssl_key );
+			$this->site_data['ssl_crt'] = realpath( $ssl_crt );
+		} else {
+			throw new \Exception( 'ssl-key OR ssl-crt path does not exist' );
+		}
+	}
+
+	/**
+	 * * Allow custom SSL for site.
+	 */
+	public function custom_site_ssl() {
+
+		$ssl_key_dest = sprintf( '%1$s/nginx-proxy/certs/%2$s.key', remove_trailing_slash( EE_SERVICE_DIR ), $this->site_data['site_url'] );
+		$ssl_crt_dest = sprintf( '%1$s/nginx-proxy/certs/%2$s.crt', remove_trailing_slash( EE_SERVICE_DIR ), $this->site_data['site_url'] );
+
+		$this->fs->copy( $this->site_data['ssl_key'], $ssl_key_dest, true );
+		$this->fs->copy( $this->site_data['ssl_crt'], $ssl_crt_dest, true );
 	}
 
 	abstract public function create( $args, $assoc_args );

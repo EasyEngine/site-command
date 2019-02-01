@@ -13,6 +13,7 @@ use function EE\Site\Utils\auto_site_name;
 use function EE\Site\Utils\get_site_info;
 use function EE\Site\Utils\get_public_dir;
 use function EE\Site\Utils\get_webroot;
+use function EE\Utils\get_flag_value;
 
 /**
  * Adds html site type to `site` command.
@@ -36,17 +37,11 @@ class HTML extends EE_Site_Command {
 	 */
 	private $skip_status_check;
 
-	/**
-	 * @var Filesystem $fs Symfony Filesystem object.
-	 */
-	private $fs;
-
 	public function __construct() {
 
 		parent::__construct();
 		$this->level  = 0;
 		$this->logger = \EE::get_file_logger()->withName( 'html_type' );
-		$this->fs     = new Filesystem();
 	}
 
 	/**
@@ -58,13 +53,20 @@ class HTML extends EE_Site_Command {
 	 * : Name of website.
 	 *
 	 * [--ssl]
-	 * : Enables ssl via letsencrypt certificate.
+	 * : Enables ssl on site.
 	 * ---
 	 * options:
 	 *      - le
 	 *      - self
 	 *      - inherit
+	 *      - custom
 	 * ---
+	 *
+	 * [--ssl-key=<ssl-key-path>]
+	 * : Path to the SSL key file.
+	 *
+	 * [--ssl-crt=<ssl-crt-path>]
+	 * : Path ro the SSL crt file.
 	 *
 	 * [--wildcard]
 	 * : Gets wildcard SSL .
@@ -116,7 +118,14 @@ class HTML extends EE_Site_Command {
 		$this->skip_status_check                   = \EE\Utils\get_flag_value( $assoc_args, 'skip-status-check' );
 		$this->site_data['site_container_fs_path'] = get_public_dir( $assoc_args );
 
-		$this->site_data['site_ssl'] = get_value_if_flag_isset( $assoc_args, 'ssl', [ 'le', 'self', 'inherit' ], 'le' );
+		$this->site_data['site_ssl'] = get_value_if_flag_isset( $assoc_args, 'ssl', [ 'le', 'self', 'inherit', 'custom' ], 'le' );
+		if ( 'custom' === $this->site_data['site_ssl'] ) {
+			try {
+				$this->validate_site_custom_ssl( get_flag_value( $assoc_args, 'ssl-key' ), get_flag_value( $assoc_args, 'ssl-crt' ) );
+			} catch ( \Exception $e ) {
+				$this->catch_clean( $e );
+			}
+		}
 
 		\EE\Service\Utils\nginx_proxy_check();
 
@@ -287,6 +296,8 @@ class HTML extends EE_Site_Command {
 
 	/**
 	 * Function to create the site.
+	 *
+	 * @param $assoc_args array of associative arguments.
 	 */
 	private function create_site() {
 
@@ -306,6 +317,10 @@ class HTML extends EE_Site_Command {
 			if ( ! $this->skip_status_check ) {
 				$this->level = 4;
 				\EE\Site\Utils\site_status_check( $this->site_data['site_url'] );
+			}
+
+			if ( 'custom' === $this->site_data['site_ssl'] ) {
+				$this->custom_site_ssl();
 			}
 
 			$this->www_ssl_wrapper();
