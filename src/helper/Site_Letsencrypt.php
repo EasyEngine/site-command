@@ -378,6 +378,7 @@ class Site_Letsencrypt {
 				$certificateParser = new CertificateParser();
 				$parsedCertificate = $certificateParser->parse( $certificate );
 
+				// 2160000 = 25 days.
 				if ( $parsedCertificate->getValidTo()->format( 'U' ) - time() >= 2160000 ) {
 
 					\EE::log(
