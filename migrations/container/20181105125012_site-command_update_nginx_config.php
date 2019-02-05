@@ -53,11 +53,17 @@ class UpdateNginxConfig extends Base {
 			$nginx_conf_content = '';
 			switch ( $site->site_type ) {
 				case 'html':
-					$nginx_conf_content = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx/main.conf.mustache', [ 'server_name' => $site->site_url ] );
+					$data               = [
+						'server_name'   => $site->site_url,
+						'document_root' => empty( $site->site_container_fs_path ) ? '/var/www/htdocs' : $site->site_container_fs_path,
+					];
+					$nginx_conf_content = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx/main.conf.mustache', $data );
 					break;
+
 				case 'php':
 					$default_conf_data['server_name']        = $site->site_url;
 					$default_conf_data['site_url']           = $site->site_url;
+					$default_conf_data['document_root']      = empty( $site->site_container_fs_path ) ? '/var/www/htdocs' : rtrim( $site->site_container_fs_path, '/' );
 					$default_conf_data['include_php_conf']   = ! $site->cache_nginx_fullpage;
 					$default_conf_data['include_redis_conf'] = (bool) $site->cache_nginx_fullpage;
 					$default_conf_data['cache_host']         = $site->cache_host;
@@ -69,6 +75,7 @@ class UpdateNginxConfig extends Base {
 
 					$default_conf_data['site_type']             = $site->site_type;
 					$default_conf_data['site_url']              = $site->site_url;
+					$default_conf_data['document_root']         = empty( $site->site_container_fs_path ) ? '/var/www/htdocs' : rtrim( $site->site_container_fs_path, '/' );
 					$default_conf_data['server_name']           = $server_name;
 					$default_conf_data['include_php_conf']      = ! $site->cache_nginx_fullpage;
 					$default_conf_data['include_wpsubdir_conf'] = 'subdir' === $site->site_type;
