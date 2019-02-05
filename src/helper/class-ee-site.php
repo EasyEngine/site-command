@@ -915,6 +915,7 @@ abstract class EE_Site_Command {
 	 * : Force renewal.
 	 * 
 	 * @subcommand ssl-verify
+	 * @alias ssl
 	 */
 	public function ssl_verify( $args = [], $assoc_args = [], $www_or_non_www = false ) {
 
