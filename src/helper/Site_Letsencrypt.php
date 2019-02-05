@@ -378,7 +378,7 @@ class Site_Letsencrypt {
 				$certificateParser = new CertificateParser();
 				$parsedCertificate = $certificateParser->parse( $certificate );
 
-				if ( $parsedCertificate->getValidTo()->format( 'U' ) - time() >= 604800 ) {
+				if ( $parsedCertificate->getValidTo()->format( 'U' ) - time() >= 2160000 ) {
 
 					\EE::log(
 						sprintf(
@@ -392,7 +392,7 @@ class Site_Letsencrypt {
 
 				\EE::log(
 					sprintf(
-						'Current certificate will expire in less than a week (%s), renewal is required.',
+						'Current certificate will expire in less than 25 days (%s), renewal is required.',
 						$parsedCertificate->getValidTo()->format( 'Y-m-d H:i:s' )
 					)
 				);
