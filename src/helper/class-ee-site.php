@@ -821,13 +821,13 @@ abstract class EE_Site_Command {
 		}
 		$api_key_absent = empty( get_config_value( 'cloudflare-api-key' ) );
 		if ( $is_solver_dns && $api_key_absent ) {
-			echo \cli\Colors::colorize( '%YIMPORTANT:%n Run `ee site ssl ' . $site_url . '` once the DNS changes have propagated to complete the certification generation and installation.', null );
+			echo \cli\Colors::colorize( '%YIMPORTANT:%n Run `ee site ssl-verify ' . $site_url . '` once the DNS changes have propagated to complete the certification generation and installation.', null );
 		} else {
 			if ( ! $api_key_absent && $is_solver_dns ) {
 				EE::log( 'Waiting for DNS entry propagation.' );
 				sleep( 10 );
 			}
-			$this->ssl( [], [ 'force' => $force ], $www_or_non_www );
+			$this->ssl_verify( [], [ 'force' => $force ], $www_or_non_www );
 		}
 	}
 
@@ -913,8 +913,10 @@ abstract class EE_Site_Command {
 	 *
 	 * [--force]
 	 * : Force renewal.
+	 * 
+	 * @subcommand ssl-verify
 	 */
-	public function ssl( $args = [], $assoc_args = [], $www_or_non_www = false ) {
+	public function ssl_verify( $args = [], $assoc_args = [], $www_or_non_www = false ) {
 
 		EE::log( 'Starting SSL verification.' );
 
@@ -945,11 +947,9 @@ abstract class EE_Site_Command {
 			$is_solver_dns   = ( $this->site_data['site_ssl_wildcard'] || 'dns' === $preferred_challenge ) ? true : false;
 			$api_key_present = ! empty( get_config_value( 'cloudflare-api-key' ) );
 
-			$warning = ( $is_solver_dns && $api_key_present ) ? "The dns entries have not yet propogated. Manually check: \nhost -t TXT _acme-challenge." . $this->site_data['site_url'] . "\nBefore retrying `ee site ssl " . $this->site_data['site_url'] . "`" : 'Failed to verify SSL: ' . $e->getMessage();
+			$warning = ( $is_solver_dns && $api_key_present ) ? "The dns entries have not yet propogated. Manually check: \nhost -t TXT _acme-challenge." . $this->site_data['site_url'] . "\nBefore retrying `ee site ssl-verify " . $this->site_data['site_url'] . "`" : 'Failed to verify SSL: ' . $e->getMessage();
 			EE::warning( $warning );
-			EE::warning( sprintf( 'Check logs and retry `ee site ssl %s` once the issue is resolved.', $this->site_data['site_url'] ) );
-
-			return;
+			EE::warning( sprintf( 'Check logs and retry `ee site ssl-verify %s` once the issue is resolved.', $this->site_data['site_url'] ) );			return;
 		}
 
 		$san = array_values( array_diff( $domains, [ $this->site_data['site_url'] ] ) );
