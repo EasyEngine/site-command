@@ -950,7 +950,9 @@ abstract class EE_Site_Command {
 
 			$warning = ( $is_solver_dns && $api_key_present ) ? "The dns entries have not yet propogated. Manually check: \nhost -t TXT _acme-challenge." . $this->site_data['site_url'] . "\nBefore retrying `ee site ssl-verify " . $this->site_data['site_url'] . "`" : 'Failed to verify SSL: ' . $e->getMessage();
 			EE::warning( $warning );
-			EE::warning( sprintf( 'Check logs and retry `ee site ssl-verify %s` once the issue is resolved.', $this->site_data['site_url'] ) );			return;
+			EE::warning( sprintf( 'Check logs and retry `ee site ssl-verify %s` once the issue is resolved.', $this->site_data['site_url'] ) );
+
+			return;
 		}
 
 		$san = array_values( array_diff( $domains, [ $this->site_data['site_url'] ] ) );
