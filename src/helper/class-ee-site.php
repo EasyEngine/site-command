@@ -666,11 +666,11 @@ abstract class EE_Site_Command {
 		}
 
 		if ( 'global-db' === $this->site_data->db_host ) {
-			EE\Service\Utils\init_global_container( 'global-db' );
+			EE\Service\Utils\init_global_container( GLOBAL_DB );
 		}
 
 		if ( 'global-redis' === $this->site_data->cache_host ) {
-			EE\Service\Utils\init_global_container( 'global-redis' );
+			EE\Service\Utils\init_global_container( GLOBAL_REDIS );
 		}
 	}
 
