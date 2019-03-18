@@ -666,11 +666,11 @@ abstract class EE_Site_Command {
 		}
 
 		if ( 'global-db' === $this->site_data->db_host ) {
-			EE\Service\Utils\init_global_container( 'global-db' );
+			EE\Service\Utils\init_global_container( GLOBAL_DB );
 		}
 
 		if ( 'global-redis' === $this->site_data->cache_host ) {
-			EE\Service\Utils\init_global_container( 'global-redis' );
+			EE\Service\Utils\init_global_container( GLOBAL_REDIS );
 		}
 	}
 
@@ -1285,7 +1285,7 @@ abstract class EE_Site_Command {
 	 *
 	 * @throws \Exception
 	 */
-	public function validate_site_custom_ssl( $ssl_key, $ssl_crt ) {
+	protected function validate_site_custom_ssl( $ssl_key, $ssl_crt ) {
 		if ( empty( $ssl_key ) || empty( $ssl_crt ) ) {
 			throw new \Exception( 'Pass --ssl-key and --ssl-crt for custom SSL' );
 		}
@@ -1299,9 +1299,9 @@ abstract class EE_Site_Command {
 	}
 
 	/**
-	 * * Allow custom SSL for site.
+	 * Allow custom SSL for site.
 	 */
-	public function custom_site_ssl() {
+	protected function custom_site_ssl() {
 
 		$ssl_key_dest = sprintf( '%1$s/nginx-proxy/certs/%2$s.key', remove_trailing_slash( EE_SERVICE_DIR ), $this->site_data['site_url'] );
 		$ssl_crt_dest = sprintf( '%1$s/nginx-proxy/certs/%2$s.crt', remove_trailing_slash( EE_SERVICE_DIR ), $this->site_data['site_url'] );
