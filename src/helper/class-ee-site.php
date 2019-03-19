@@ -1377,16 +1377,41 @@ abstract class EE_Site_Command {
 	 * Clone the repo into provided destination.
 	 *
 	 * @param string $clone_dir Desitination directory for cloning git repo.
+	 * @param string $type      Type of site to handle cloning accordingly.
 	 *
 	 * @throws EE\ExitException
 	 */
-	protected function complete_git_clone( $clone_dir ) {
+	protected function complete_git_clone( $clone_dir, $type = '' ) {
+
+		if ( 'wp' === $type ) {
+			\EE::log( "Setting up WP site using repo content. This may take time based on your repo size, please wait for a while..." );
+
+			$site_wp_root_dir = $clone_dir . '/app/htdocs';
+
+			chdir( $site_wp_root_dir );
+
+			if ( file_exists( './wp-content' ) ) {
+				$this->fs->rename( './wp-content', './wp-content-bkp' );
+			}
+
+			$clone_dir = 'wp-content';
+		}
 
 		$repo_clone_cmd    = 'git clone ' . $this->git_repo . " $clone_dir";
 		$repo_clone_status = \EE::exec( $repo_clone_cmd, true, true );
 
 		if ( ! $repo_clone_status ) {
 			\EE::error( 'Git clone failed. Please check your repo access.' );
+
+			if ( 'wp' === $type ) {
+				$this->fs->rename( './wp-content-bkp', './wp-content' );
+			}
+		}
+
+		if ( 'wp' === $type ) {
+			if ( file_exists( './wp-content-bkp' ) ) {
+				$this->fs->remove( './wp-content-bkp' );
+			}
 		}
 
 		\EE::success( "Cloning complete." );
