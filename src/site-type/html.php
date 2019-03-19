@@ -81,7 +81,7 @@ class HTML extends EE_Site_Command {
 	 * : Set custom source directory for site inside htdocs.
 	 *
 	 * [--git]
-	 * : Create your site using your git repo content. All content will be cloned into htdocs.
+	 * : Create your site using your git repo content. All content will be cloned into webroot.
 	 *
 	 * ## EXAMPLES
 	 *
@@ -99,6 +99,9 @@ class HTML extends EE_Site_Command {
 	 *
 	 *     # Create html site with custom source directory inside htdocs ( SITE_ROOT/app/htdocs/src )
 	 *     $ ee site create example.com --public-dir=src
+	 *
+	 *     # Create html site using repository content
+	 *     $ ee site create example.com --git=mdn/beginner-html-site-styled
 	 *
 	 */
 	public function create( $args, $assoc_args ) {
