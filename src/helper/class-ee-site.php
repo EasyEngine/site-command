@@ -52,6 +52,16 @@ abstract class EE_Site_Command {
 	 */
 	protected $site_meta;
 
+	/**
+	 * @var bool $is_git_repo Check if git repo detail was provided for site creation.
+	 */
+	protected $is_git_repo = false;
+
+	/**
+	 * @var string $git_repo SSH / HTTPS / USER:REPONAME of the repository.
+	 */
+	protected $git_repo = '';
+
 	public function __construct() {
 
 		$this->fs = new Filesystem();
@@ -1308,6 +1318,78 @@ abstract class EE_Site_Command {
 
 		$this->fs->copy( $this->site_data['ssl_key'], $ssl_key_dest, true );
 		$this->fs->copy( $this->site_data['ssl_crt'], $ssl_crt_dest, true );
+	}
+
+	/**
+	 * Validates access for provided git repo URL.
+	 *
+	 * @param string $repo_url Git Repo URL.
+	 *
+	 * @return bool
+	 * @throws EE\ExitException
+	 */
+	protected function check_git_repo_access( $repo_url ) {
+
+		// Check git command availability.
+		$git_check = \EE::exec( 'command -v git' );
+
+		if ( ! $git_check ) {
+			EE::error( 'git command not found! Please install git to clone github repo.' );
+		}
+
+		EE::log( PHP_EOL . 'Your repo will be cloned into the webroot.' . PHP_EOL );
+
+		$check_repo_access = false;
+		$is_valid_git_url  = false;
+
+		// Check if valid git URL was provided.
+		if ( 0 === strpos( $repo_url, 'git@github.com' ) ) {
+			$is_valid_git_url = true;
+		}
+		if ( 0 === strpos( $repo_url, 'https://github.com' ) ) {
+			$is_valid_git_url = true;
+		}
+
+		// If above checks fails, retry with USERNAME:REPONAME format.
+		if ( false === $is_valid_git_url ) {
+			$ssh_git_url      = 'git@github.com:' . $repo_url . '.git';
+			$is_valid_git_url = EE::exec( 'git ls-remote --exit-code -h ' . $ssh_git_url );
+
+			if ( $is_valid_git_url ) {
+				$this->git_repo    = $ssh_git_url;
+				$check_repo_access = true;
+			} else {
+				$https_git_url    = 'https://github.com/' . $repo_url . '.git';
+				$is_valid_git_url = EE::exec( 'git ls-remote --exit-code -h ' . $https_git_url );
+				if ( $is_valid_git_url ) {
+					$this->git_repo    = $https_git_url;
+					$check_repo_access = true;
+				}
+			}
+		} else {
+			$check_repo_access = true;
+		}
+
+		return $check_repo_access;
+	}
+
+	/**
+	 * Clone the repo into provided destination.
+	 *
+	 * @param string $clone_dir Desitination directory for cloning git repo.
+	 *
+	 * @throws EE\ExitException
+	 */
+	protected function complete_git_clone( $clone_dir ) {
+
+		$repo_clone_cmd    = 'git clone ' . $this->git_repo . " $clone_dir";
+		$repo_clone_status = \EE::exec( $repo_clone_cmd, true, true );
+
+		if ( ! $repo_clone_status ) {
+			\EE::error( 'Git clone failed. Please check your repo access.' );
+		}
+
+		\EE::success( "Cloning complete." );
 	}
 
 	abstract public function create( $args, $assoc_args );
