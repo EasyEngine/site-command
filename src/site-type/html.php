@@ -37,6 +37,16 @@ class HTML extends EE_Site_Command {
 	 */
 	private $skip_status_check;
 
+	/**
+	 * @var bool $is_git_repo Check if git repo detail was provided for site creation.
+	 */
+	private $is_git_repo = false;
+
+	/**
+	 * @var string $git_repo SSH / HTTPS / USER:REPONAME of the repository.
+	 */
+	private $git_repo;
+
 	public function __construct() {
 
 		parent::__construct();
@@ -79,6 +89,9 @@ class HTML extends EE_Site_Command {
 	 *
 	 * [--public-dir]
 	 * : Set custom source directory for site inside htdocs.
+	 *
+	 * [--git]
+	 * : Create your site using your git repo content. All content will be cloned into htdocs.
 	 *
 	 * ## EXAMPLES
 	 *
@@ -130,6 +143,14 @@ class HTML extends EE_Site_Command {
 		\EE\Service\Utils\nginx_proxy_check();
 
 		\EE::log( 'Configuring project.' );
+
+		// Check if git repo URL was provided.
+		$this->git_repo = \EE\Utils\get_flag_value( $assoc_args, 'git', '' );
+
+		// Update variable data for further processing.
+		if ( ! empty( $this->git_repo ) ) {
+			$this->is_git_repo = true;
+		}
 
 		$this->create_site();
 		\EE\Utils\delem_log( 'site create end' );
@@ -223,8 +244,20 @@ class HTML extends EE_Site_Command {
 				'site_src_root' => $site_src_dir,
 			];
 
-			$index_html = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/index.html.mustache', $index_data );
-			$this->fs->dumpFile( $site_src_dir . '/index.html', $index_html );
+			// Create sample file if no git repo data was provided else clone into site root.
+			if ( ! $this->is_git_repo ) {
+				$index_html = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/index.html.mustache', $index_data );
+				$this->fs->dumpFile( $site_src_dir . '/index.html', $index_html );
+			} else {
+				// Check if provided git repo is accessible.
+				if ( ! $this->check_git_repo_access( $this->git_repo ) ) {
+					EE::error( "Could not read from remote repository. Please make sure you have the correct access rights and the repository exists." );
+				} else {
+					EE::log( PHP_EOL . "Repo access check completed." . PHP_EOL );
+					// Clone the repo content, defaults to htdocs directory.
+					$this->complete_git_clone( $site_src_dir );
+				}
+			}
 
 			// Assign www-data user ownership.
 			chdir( $this->site_data['site_fs_path'] );
@@ -403,6 +436,78 @@ class HTML extends EE_Site_Command {
 
 		\EE::success( 'Rollback complete. Exiting now.' );
 		exit;
+	}
+
+	/**
+	 * Validates access for provided git repo URL.
+	 *
+	 * @param string $repo_url Git Repo URL.
+	 *
+	 * @return bool
+	 * @throws EE\ExitException
+	 */
+	protected function check_git_repo_access( $repo_url ) {
+
+		// Check git command availability.
+		$git_check = \EE::exec( 'command -v git' );
+
+		if ( ! $git_check ) {
+			EE::error( 'git command not found! Please install git to clone github repo.' );
+		}
+
+		EE::log( PHP_EOL . 'Your repo will be cloned into the webroot.' . PHP_EOL );
+
+		$check_repo_access = false;
+		$is_valid_git_url  = false;
+
+		// Check if valid git URL was provided.
+		if ( 0 === strpos( $repo_url, 'git@github.com' ) ) {
+			$is_valid_git_url = true;
+		}
+		if ( 0 === strpos( $repo_url, 'https://github.com' ) ) {
+			$is_valid_git_url = true;
+		}
+
+		// If above checks fails, retry with USERNAME:REPONAME format.
+		if ( false === $is_valid_git_url ) {
+			$ssh_git_url      = 'git@github.com:' . $repo_url . '.git';
+			$is_valid_git_url = EE::exec( 'git ls-remote --exit-code -h ' . $ssh_git_url );
+
+			if ( $is_valid_git_url ) {
+				$this->git_repo    = $ssh_git_url;
+				$check_repo_access = true;
+			} else {
+				$https_git_url    = 'https://github.com/' . $repo_url . '.git';
+				$is_valid_git_url = EE::exec( 'git ls-remote --exit-code -h ' . $https_git_url );
+				if ( $is_valid_git_url ) {
+					$this->git_repo    = $https_git_url;
+					$check_repo_access = true;
+				}
+			}
+		} else {
+			$check_repo_access = true;
+		}
+
+		return $check_repo_access;
+	}
+
+	/**
+	 * Clone the repo into provided destination.
+	 *
+	 * @param string $clone_dir Desitination directory for cloning git repo.
+	 *
+	 * @throws EE\ExitException
+	 */
+	protected function complete_git_clone( $clone_dir ) {
+
+		$repo_clone_cmd    = 'git clone ' . $this->git_repo . " $clone_dir";
+		$repo_clone_status = \EE::exec( $repo_clone_cmd, true, true );
+
+		if ( ! $repo_clone_status ) {
+			\EE::error( 'Git clone failed. Please check your repo access.' );
+		}
+
+		\EE::success( "Cloning complete." );
 	}
 
 }
