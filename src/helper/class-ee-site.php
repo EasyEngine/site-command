@@ -1007,7 +1007,7 @@ abstract class EE_Site_Command {
 			$api_key_absent        = empty( get_config_value( 'cloudflare-api-key' ) );
 			$skip_wildcard_warning = false;
 			foreach ( $sites as $site ) {
-				if ( 'le' !== $site->site_ssl ) {
+				if ( 'le' !== $site->site_ssl || ! $site->site_enabled ) {
 					continue;
 				}
 				if ( $site->site_ssl_wildcard && $api_key_absent ) {
