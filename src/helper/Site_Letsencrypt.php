@@ -361,6 +361,35 @@ class Site_Letsencrypt {
 	}
 
 	/**
+	 * Check expiry of a certificate.
+	 *
+	 * @param string $domain
+	 */
+	public function isRenewalNecessary( $domain ) {
+
+		// Check expiration date to avoid too much renewal
+		\EE::log( "Loading current certificate for $domain" );
+
+		$certificate       = $this->repository->loadDomainCertificate( $domain );
+		$certificateParser = new CertificateParser();
+		$parsedCertificate = $certificateParser->parse( $certificate );
+
+		// 2160000 = 25 days.
+		if ( $parsedCertificate->getValidTo()->format( 'U' ) - time() >= 2160000 ) {
+			\EE::log(
+				sprintf(
+					'Current certificate is valid until %s, renewal is not necessary.',
+					$parsedCertificate->getValidTo()->format( 'Y-m-d H:i:s' )
+				)
+			);
+
+			return false;
+		}
+
+		return true;
+	}
+
+	/**
 	 * Renew a given domain certificate.
 	 *
 	 * @param string $domain

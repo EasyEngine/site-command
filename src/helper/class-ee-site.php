@@ -1047,6 +1047,12 @@ abstract class EE_Site_Command {
 		if ( 'le' !== $this->site_data['site_ssl'] ) {
 			EE::error( 'Only Letsencrypt certificate renewal is supported.' );
 		}
+
+		$client = new Site_Letsencrypt();
+		if ( ! $client->isRenewalNecessary( $this->site_data['site_url'] ) ) {
+			return 0;
+		}
+
 		$postfix_exists      = \EE_DOCKER::service_exists( 'postfix', $this->site_data['site_fs_path'] );
 		$containers_to_start = $postfix_exists ? [ 'nginx', 'postfix' ] : [ 'nginx' ];
 		$this->www_ssl_wrapper( $containers_to_start, false, $force, true );
