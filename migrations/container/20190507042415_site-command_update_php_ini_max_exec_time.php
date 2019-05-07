@@ -143,6 +143,6 @@ class UpdatePhpIniMaxExecTime extends Base {
 	}
 	public static function reload_php( $site_fs_path ) {
 		chdir( $site_fs_path );
-		EE::exec( "docker-compose restart php" );
+		EE::exec( "docker-compose restart php nginx" );
 	}
 }
