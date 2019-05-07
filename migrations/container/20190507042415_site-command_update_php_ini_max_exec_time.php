@@ -39,6 +39,10 @@ class UpdatePhpIniMaxExecTime extends Base {
 
 		foreach ( $this->sites as $site ) {
 
+			if ( ! in_array( $site->site_type, [ 'php', 'wp' ], true ) ) {
+				continue;
+			}
+
 			EE::debug( "Found site: $site->site_url of type: $site->site_type" );
 			EE::debug( "Starting php-ini-max-exec-time updates for: $site->site_url" );
 
@@ -139,6 +143,6 @@ class UpdatePhpIniMaxExecTime extends Base {
 	}
 	public static function reload_php( $site_fs_path ) {
 		chdir( $site_fs_path );
-		EE::exec( "docker-compose restart php" );
+		EE::exec( "docker-compose restart php nginx" );
 	}
 }
