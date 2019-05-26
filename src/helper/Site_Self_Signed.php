@@ -59,14 +59,15 @@ class Site_Self_signed {
 		$crt_path  = $this->conf_dir . '/' . $url . '.crt';
 		$conf_path = $this->conf_dir . '/' . $url . '.conf';
 		$v3_path   = $this->conf_dir . '/' . $url . '.v3.ext';
+		$srl_path  = $this->conf_dir . '/' . $url . '.srl';
 
 		$this->build_certificate_conf( $conf_path, $url );
 		$this->build_v3_ext_conf( $v3_path, $url );
-		$this->generate_certificate( $key_path, $crt_path, $csr_path, $conf_path, $v3_path );
+		$this->generate_certificate( $key_path, $crt_path, $csr_path, $conf_path, $v3_path, $srl_path );
 		$this->move_certs_to_nginx_proxy( $url, $key_path, $crt_path );
 
 		// Cleanup files.
-		$this->fs->remove( [ $key_path, $csr_path, $crt_path, $conf_path, $v3_path ] );
+		$this->fs->remove( [ $key_path, $csr_path, $crt_path, $conf_path, $v3_path, $srl_path ] );
 	}
 
 	/**
@@ -125,11 +126,11 @@ class Site_Self_signed {
 	 *
 	 * @return void
 	 */
-	private function generate_certificate( $key_path, $crt_path, $csr_path, $conf_path, $v3_path ) {
+	private function generate_certificate( $key_path, $crt_path, $csr_path, $conf_path, $v3_path, $srl_path ) {
 
 		EE::exec( sprintf( 'openssl req -new -sha256 -nodes -passout pass:%s -out %s -newkey rsa:2048 -keyout %s -config %s', $this->password, $csr_path, $key_path, $conf_path ) );
 
-		EE::exec( sprintf( 'openssl x509 -req -in %s -CA %s -CAkey %s -CAcreateserial -passin pass:%s -out %s -days 1024 -sha256 -extfile %s', $csr_path, $this->root_pem, $this->root_key, $this->password, $crt_path, $v3_path ) );
+		EE::exec( sprintf( 'openssl x509 -req -in %s -CA %s -CAkey %s -CAcreateserial -CAserial %s -passin pass:%s -out %s -days 1024 -sha256 -extfile %s', $csr_path, $this->root_pem, $this->root_key, $srl_path, $this->password, $crt_path, $v3_path ) );
 	}
 
 	/**
