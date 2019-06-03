@@ -29,6 +29,11 @@ class Site_Self_signed {
 	private $root_pem;
 
 	/**
+	 * @var string $root_srl Serial file of the root Certificate.
+	 */
+	private $root_srl;
+
+	/**
 	 * @var string $password Password used in generating the certs.
 	 */
 	private $password;
@@ -39,6 +44,7 @@ class Site_Self_signed {
 		$this->conf_dir = EE_SERVICE_DIR . '/nginx-proxy/self-signed-certs';
 		$this->root_key = $this->conf_dir . '/rootCA.key';
 		$this->root_pem = $this->conf_dir . '/rootCA.pem';
+		$this->root_srl = $this->conf_dir . '/rootCA.srl';
 		$this->password = Option::get( 'self-signed-secret' );
 	}
 
@@ -129,7 +135,8 @@ class Site_Self_signed {
 
 		EE::exec( sprintf( 'openssl req -new -sha256 -nodes -passout pass:%s -out %s -newkey rsa:2048 -keyout %s -config %s', $this->password, $csr_path, $key_path, $conf_path ) );
 
-		EE::exec( sprintf( 'openssl x509 -req -in %s -CA %s -CAkey %s -CAcreateserial -passin pass:%s -out %s -days 1024 -sha256 -extfile %s', $csr_path, $this->root_pem, $this->root_key, $this->password, $crt_path, $v3_path ) );
+		$serial_string = $this->fs->exists( $this->root_srl ) ? sprintf( '-CAserial %s', $this->root_srl ) : sprintf( '-CAcreateserial -CAserial %s', $this->root_srl );
+		EE::exec( sprintf( 'openssl x509 -req -in %s -CA %s -CAkey %s %s -passin pass:%s -out %s -days 1024 -sha256 -extfile %s', $csr_path, $this->root_pem, $this->root_key, $serial_string, $this->password, $crt_path, $v3_path ) );
 	}
 
 	/**
