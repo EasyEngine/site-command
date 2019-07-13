@@ -506,16 +506,23 @@ abstract class EE_Site_Command {
 
 		$this->site_data = get_site_info( $args );
 
-		chdir( $this->site_data['site_fs_path'] );
-
 		if ( $all || $no_service_specified ) {
 			$containers = $whitelisted_containers;
 		} else {
 			$containers = array_keys( $assoc_args );
 		}
 
-		foreach ( $containers as $container ) {
-			\EE\Site\Utils\run_compose_command( 'restart', $container );
+		if ( in_array( 'nginx', $containers ) ) {
+			$nginx_test_command = "sh -c 'nginx -t'";
+			if ( ! \EE_DOCKER::docker_compose_exec( $this->site_data['site_fs_path'], 'nginx', $nginx_test_command ) ) {
+				throw new \Exception( 'There was some error in docker-compose exec.' );
+			}
+		}
+
+		$all_containers = is_array( $containers ) ? implode( ' ', $containers ) : $containers;
+
+		if ( ! \EE_DOCKER::docker_compose_restart( $this->site_data['site_fs_path'], $all_containers ) ) {
+			throw new \Exception( 'There was some error in docker-compose restart.' );
 		}
 		\EE\Utils\delem_log( 'site restart stop' );
 	}
@@ -625,34 +632,26 @@ abstract class EE_Site_Command {
 		\EE\Utils\delem_log( 'site reload start' );
 		$args = auto_site_name( $args, 'site', __FUNCTION__ );
 		$all  = \EE\Utils\get_flag_value( $assoc_args, 'all' );
-		if ( ! array_key_exists( 'nginx', $reload_commands ) ) {
-			$reload_commands['nginx'] = 'nginx sh -c \'nginx -t && service openresty reload\'';
-		}
+		$reload_commands['php'] = "bash -c 'kill -USR2 1'";
+		$reload_commands['nginx'] = "sh -c 'nginx -t && service openresty reload'";
 		$no_service_specified = count( $assoc_args ) === 0;
 
 		$this->site_data = get_site_info( $args );
 
-		chdir( $this->site_data['site_fs_path'] );
-
 		if ( $all || $no_service_specified ) {
-			$this->reload_services( $whitelisted_containers, $reload_commands );
+			foreach ( $whitelisted_containers as $container ) {
+				if ( ! \EE_DOCKER::docker_compose_exec( $this->site_data['site_fs_path'], $container, $reload_commands[ $container ] ) ) {
+					throw new \Exception( 'There was some error in docker-compose exec.' );
+				}
+			}
 		} else {
-			$this->reload_services( array_keys( $assoc_args ), $reload_commands );
+			foreach ( array_keys( $assoc_args ) as $container ) {
+				if ( ! \EE_DOCKER::docker_compose_exec( $this->site_data['site_fs_path'], $container, $reload_commands[ $container ] ) ) {
+					throw new \Exception( 'There was some error in docker-compose exec.' );
+				}
+			}
 		}
 		\EE\Utils\delem_log( 'site reload stop' );
-	}
-
-	/**
-	 * Executes reload commands. It needs separate handling as commands to reload each service is different.
-	 *
-	 * @param array $services        Services to reload.
-	 * @param array $reload_commands Commands to reload the services.
-	 */
-	private function reload_services( $services, $reload_commands ) {
-
-		foreach ( $services as $service ) {
-			\EE\Site\Utils\run_compose_command( 'exec', $reload_commands[ $service ], 'reload', $service );
-		}
 	}
 
 	/**

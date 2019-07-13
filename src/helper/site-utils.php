@@ -420,7 +420,6 @@ function site_status_check( $site_url ) {
  */
 function start_site_containers( $site_fs_path, $containers = [] ) {
 
-	chdir( $site_fs_path );
 	EE::log( 'Starting site\'s services.' );
 	if ( ! \EE_DOCKER::docker_compose_up( $site_fs_path, $containers ) ) {
 		throw new \Exception( 'There was some error in docker-compose up.' );
@@ -435,9 +434,11 @@ function start_site_containers( $site_fs_path, $containers = [] ) {
  */
 function restart_site_containers( $site_fs_path, $containers ) {
 
-	chdir( $site_fs_path );
+	EE::log( 'Restarting site\'s services.' );
 	$all_containers = is_array( $containers ) ? implode( ' ', $containers ) : $containers;
-	EE::exec( "docker-compose restart $all_containers" );
+	if ( ! \EE_DOCKER::docker_compose_restart( $site_fs_path, $all_containers ) ) {
+		throw new \Exception( 'There was some error in docker-compose restart.' );
+	}
 }
 
 /**
@@ -448,27 +449,13 @@ function restart_site_containers( $site_fs_path, $containers ) {
  */
 function stop_site_containers( $site_fs_path, $containers ) {
 
-	chdir( $site_fs_path );
+	EE::log( 'Stopping and removing site\'s services.' );
 	$all_containers = is_array( $containers ) ? implode( ' ', $containers ) : $containers;
-	EE::exec( "docker-compose stop $all_containers" );
-	EE::exec( "docker-compose rm -f $all_containers" );
-}
-
-/**
- * Generic function to run a docker compose command. Must be ran inside correct directory.
- *
- * @param string $action             docker-compose action to run.
- * @param string $container          The container on which action has to be run.
- * @param string $action_to_display  The action message to be displayed.
- * @param string $service_to_display The service message to be displayed.
- */
-function run_compose_command( $action, $container, $action_to_display = null, $service_to_display = null ) {
-
-	$display_action  = $action_to_display ? $action_to_display : $action;
-	$display_service = $service_to_display ? $service_to_display : $container;
-
-	EE::log( ucfirst( $display_action ) . 'ing ' . $display_service );
-	EE::exec( "docker-compose $action $container", true, true );
+	$stopped = \EE_DOCKER::docker_compose_stop( $site_fs_path, $all_containers );
+	$forcermd = \EE_DOCKER::docker_compose_forcerm( $site_fs_path, $all_containers );
+	if ( ! (stopped && forcermd) ) {
+		throw new \Exception( 'There was some error in stopping and removing containers.' );
+	}
 }
 
 /**
