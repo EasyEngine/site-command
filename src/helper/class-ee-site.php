@@ -765,9 +765,8 @@ abstract class EE_Site_Command {
 					$this->init_ssl( $this->site_data['site_url'], $this->site_data['site_fs_path'], $this->site_data['site_ssl'], $this->site_data['site_ssl_wildcard'], $is_www_or_non_www_pointed, $force );
 				}
 
-				if ( ! $renew ) {
-					$this->dump_docker_compose_yml( [ 'nohttps' => false ] );
-				}
+				$this->dump_docker_compose_yml( [ 'nohttps' => false ] );
+
 				\EE\Site\Utils\start_site_containers( $this->site_data['site_fs_path'], $containers_to_start );
 			}
 
@@ -1099,6 +1098,11 @@ abstract class EE_Site_Command {
 		}
 
 		$client = new Site_Letsencrypt();
+		if ( $client->isAlreadyExpired( $this->site_data['site_url'] ) ) {
+			$this->dump_docker_compose_yml( [ 'nohttps' => true ] );
+			$this->enable( $args, [ 'force' => true ] );
+		}
+
 		if ( ! $client->isRenewalNecessary( $this->site_data['site_url'] ) ) {
 			return 0;
 		}
@@ -1373,3 +1377,4 @@ abstract class EE_Site_Command {
 	abstract public function dump_docker_compose_yml( $additional_filters = [] );
 
 }
+
