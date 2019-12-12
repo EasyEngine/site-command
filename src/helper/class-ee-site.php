@@ -287,6 +287,19 @@ abstract class EE_Site_Command {
 	 * [--wildcard]
 	 * : Enable wildcard SSL on site.
 	 *
+	 * [--php=<php-version>]
+	 * : PHP version for site. Currently only supports PHP 5.6, 7.0, 7.2, 7.3, 7.4 and latest.
+	 * ---
+	 * default: latest
+	 * options:
+	 *  - 5.6
+	 *  - 7.0
+	 *  - 7.2
+	 *  - 7.3
+	 *  - 7.4
+	 *  - latest
+	 * ---
+	 *
 	 * ## EXAMPLES
 	 *
 	 *     # Add SSL to non-ssl site
@@ -305,13 +318,50 @@ abstract class EE_Site_Command {
 		$args            = auto_site_name( $args, 'site', __FUNCTION__ );
 		$this->site_data = get_site_info( $args, true, true, false );
 		$ssl             = get_flag_value( $assoc_args, 'ssl', false );
+		$php             = get_flag_value( $assoc_args, 'php', false );
 		if ( $ssl ) {
 			$this->update_ssl( $assoc_args );
+		} elseif ( $php ) {
+			$this->update_php( $args, $assoc_args );
 		}
 	}
 
+
 	/**
-	 * Funciton to update ssl of a site.
+	 * Function to update php version of a site.
+	 */
+	protected function update_php( $args, $assoc_args ) {
+
+		$php_version = get_flag_value( $assoc_args, 'php', false );
+
+		if ( $php_version === $this->site_data->php_version ) {
+			EE::error( 'Site ' . $this->site_data->site_url . ' is already at PHP version: ' . $php_version );
+		}
+
+		EE::log( 'Starting php version update for: ' . $this->site_data->site_url );
+
+		try {
+			$this->site_data->php_version    = $php_version;
+			$no_https                        = $this->site_data->site_ssl ? false : true;
+			$site                            = $this->site_data;
+			$array_data                      = ( array ) $this->site_data;
+			$this->site_data                 = reset( $array_data );
+			$this->site_data['$php_version'] = $php_version;
+
+			$this->dump_docker_compose_yml( [ 'nohttps' => $no_https ] );
+			EE::log( 'Starting site with new PHP version. This may take sometime.' );
+			$this->enable( $args, [ 'force' => true ] );
+
+		} catch ( \Exception $e ) {
+			EE::error( $e->getMessage() );
+		}
+		$site->save();
+		EE::success( 'Updated site ' . $this->site_data['site_url'] . ' to PHP version: ' . $php_version );
+		delem_log( 'site ssl update end' );
+	}
+
+	/**
+	 * Function to update ssl of a site.
 	 */
 	protected function update_ssl( $assoc_args ) {
 
