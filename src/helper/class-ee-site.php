@@ -341,6 +341,7 @@ abstract class EE_Site_Command {
 		EE::log( 'Starting php version update for: ' . $this->site_data->site_url );
 
 		try {
+			$old_php_version                 = $this->site_data->php_version;
 			$this->site_data->php_version    = $php_version;
 			$no_https                        = $this->site_data->site_ssl ? false : true;
 			$site                            = $this->site_data;
@@ -348,16 +349,46 @@ abstract class EE_Site_Command {
 			$this->site_data                 = reset( $array_data );
 			$this->site_data['$php_version'] = $php_version;
 
+			EE::log( 'Taking backup of old php config.' );
+			$site_backup_dir     = $this->site_data['site_fs_path'] . '/.backup';
+			$php_conf_backup_dir = $site_backup_dir . '/config/php-' . $old_php_version;
+			$php_conf_dir        = $this->site_data['site_fs_path'] . '/config/php';
+			$this->fs->mkdir( $php_conf_backup_dir );
+			$this->fs->mirror( $php_conf_dir, $php_conf_backup_dir );
+
 			$this->dump_docker_compose_yml( [ 'nohttps' => $no_https ] );
 			EE::log( 'Starting site with new PHP version. This may take sometime.' );
 			$this->enable( $args, [ 'force' => true ] );
+
+			EE::log( 'Updating php config.' );
+			$temp_dir     = EE\Utils\get_temp_dir();
+			$zip_path     = $temp_dir . "phpconf-$php_version.zip";
+			$unzip_folder = $temp_dir . "php-$php_version";
+
+			$scanned_files = scandir( $php_conf_dir );
+			$diff          = [ '.', '..' ];
+
+			$removal_files = array_diff( $scanned_files, $diff );
+
+			$this->fs->copy( SITE_TEMPLATE_ROOT . '/config/php-fpm/php' . str_replace( '.', '', $php_version ) . '.zip', $zip_path );
+			extract_zip( $zip_path, $unzip_folder );
+
+			chdir( $php_conf_dir );
+			$this->fs->remove( $removal_files );
+			$this->fs->mirror( $unzip_folder, $php_conf_dir );
+			$this->fs->remove( [ $zip_path, $unzip_folder ] );
+
+			// Recover previous custom configs.
+			EE::log( 'Re-applying previous custom.ini and easyengine.conf changes.' );
+			$this->fs->copy( $php_conf_backup_dir . '/php/conf.d/custom.ini', $php_conf_dir . '/php/conf.d/custom.ini', true );
+			$this->fs->copy( $php_conf_backup_dir . '/php-fpm.d/easyengine.conf', $php_conf_dir . '/php-fpm.d/easyengine.conf', true );
 
 		} catch ( \Exception $e ) {
 			EE::error( $e->getMessage() );
 		}
 		$site->save();
 		EE::success( 'Updated site ' . $this->site_data['site_url'] . ' to PHP version: ' . $php_version );
-		delem_log( 'site ssl update end' );
+		delem_log( 'site php version update end' );
 	}
 
 	/**
