@@ -347,7 +347,6 @@ abstract class EE_Site_Command {
 			$site                            = $this->site_data;
 			$array_data                      = ( array ) $this->site_data;
 			$this->site_data                 = reset( $array_data );
-			$this->site_data['$php_version'] = $php_version;
 
 			EE::log( 'Taking backup of old php config.' );
 			$site_backup_dir     = $this->site_data['site_fs_path'] . '/.backup';
@@ -357,7 +356,7 @@ abstract class EE_Site_Command {
 			$this->fs->mirror( $php_conf_dir, $php_conf_backup_dir );
 
 			$this->dump_docker_compose_yml( [ 'nohttps' => $no_https ] );
-			EE::log( 'Starting site with new PHP version. This may take sometime.' );
+			EE::log( 'Starting site with new PHP version: ' . $php_version . '. This may take sometime.' );
 			$this->enable( $args, [ 'force' => true ] );
 
 			EE::log( 'Updating php config.' );
@@ -383,6 +382,12 @@ abstract class EE_Site_Command {
 			$this->fs->copy( $php_conf_backup_dir . '/php/conf.d/custom.ini', $php_conf_dir . '/php/conf.d/custom.ini', true );
 			$this->fs->copy( $php_conf_backup_dir . '/php-fpm.d/easyengine.conf', $php_conf_dir . '/php-fpm.d/easyengine.conf', true );
 
+			if ( '5.6' == $old_php_version ) {
+				$this->sendmail_path_update( true );
+			} elseif ( '5.6' == $php_version ) {
+				$this->sendmail_path_update( false );
+			}
+
 		} catch ( \Exception $e ) {
 			EE::error( $e->getMessage() );
 		}
@@ -391,6 +396,23 @@ abstract class EE_Site_Command {
 		delem_log( 'site php version update end' );
 	}
 
+	protected function sendmail_path_update( $msmtp ) {
+
+		$custom_ini_path = $this->site_data['site_fs_path'] . '/config/php/php/conf.d/custom.ini';
+		$custom_ini_data = file( $custom_ini_path );
+		if ( $msmtp ) {
+			$custom_ini_data = array_map( function ( $custom_ini_data ) {
+				$sendmail_path = 'sendmail_path = /usr/bin/msmtp -t';
+				return stristr( $custom_ini_data, 'sendmail_path' ) ? "$sendmail_path\n" : $custom_ini_data;
+			}, $custom_ini_data );
+		} else {
+			$custom_ini_data = array_map( function ( $custom_ini_data ) {
+				$sendmail_path = 'sendmail_path = /usr/sbin/sendmail -t -i -f ee4@easyengine.io';
+				return stristr( $custom_ini_data, 'sendmail_path' ) ? "$sendmail_path\n" : $custom_ini_data;
+			}, $custom_ini_data );
+		}
+		file_put_contents( $custom_ini_path, implode( '', $custom_ini_data ) );
+	}
 	/**
 	 * Function to update ssl of a site.
 	 */
