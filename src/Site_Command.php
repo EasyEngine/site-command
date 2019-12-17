@@ -178,7 +178,7 @@ class Site_Command {
 	private function convert_old_args_to_new_args( $args, $assoc_args ) {
 
 		if (
-			( ! in_array( reset( $args ), [ 'create', 'update' ], true ) &&
+			( ! in_array( reset( $args ), [ 'create' ], true ) &&
 			  ! empty( $args ) ) ||
 			! empty( $assoc_args['type'] )
 		) {
