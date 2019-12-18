@@ -287,6 +287,19 @@ abstract class EE_Site_Command {
 	 * [--wildcard]
 	 * : Enable wildcard SSL on site.
 	 *
+	 * [--php=<php-version>]
+	 * : PHP version for site. Currently only supports PHP 5.6, 7.0, 7.2, 7.3, 7.4 and latest.
+	 * ---
+	 * default: latest
+	 * options:
+	 *  - 5.6
+	 *  - 7.0
+	 *  - 7.2
+	 *  - 7.3
+	 *  - 7.4
+	 *  - latest
+	 * ---
+	 *
 	 * ## EXAMPLES
 	 *
 	 *     # Add SSL to non-ssl site
@@ -305,13 +318,103 @@ abstract class EE_Site_Command {
 		$args            = auto_site_name( $args, 'site', __FUNCTION__ );
 		$this->site_data = get_site_info( $args, true, true, false );
 		$ssl             = get_flag_value( $assoc_args, 'ssl', false );
+		$php             = get_flag_value( $assoc_args, 'php', false );
 		if ( $ssl ) {
 			$this->update_ssl( $assoc_args );
+		} elseif ( $php ) {
+			$this->update_php( $args, $assoc_args );
 		}
 	}
 
+
 	/**
-	 * Funciton to update ssl of a site.
+	 * Function to update php version of a site.
+	 */
+	protected function update_php( $args, $assoc_args ) {
+
+		$php_version = get_flag_value( $assoc_args, 'php', false );
+
+		if ( $php_version === $this->site_data->php_version ) {
+			EE::error( 'Site ' . $this->site_data->site_url . ' is already at PHP version: ' . $php_version );
+		}
+
+		EE::log( 'Starting php version update for: ' . $this->site_data->site_url );
+
+		try {
+			$old_php_version                 = $this->site_data->php_version;
+			$this->site_data->php_version    = $php_version;
+			$no_https                        = $this->site_data->site_ssl ? false : true;
+			$site                            = $this->site_data;
+			$array_data                      = ( array ) $this->site_data;
+			$this->site_data                 = reset( $array_data );
+
+			EE::log( 'Taking backup of old php config.' );
+			$site_backup_dir     = $this->site_data['site_fs_path'] . '/.backup';
+			$php_conf_backup_dir = $site_backup_dir . '/config/php-' . $old_php_version;
+			$php_conf_dir        = $this->site_data['site_fs_path'] . '/config/php';
+			$this->fs->mkdir( $php_conf_backup_dir );
+			$this->fs->mirror( $php_conf_dir, $php_conf_backup_dir );
+
+			$this->dump_docker_compose_yml( [ 'nohttps' => $no_https ] );
+			EE::log( 'Starting site with new PHP version: ' . $php_version . '. This may take sometime.' );
+			$this->enable( $args, [ 'force' => true ] );
+
+			EE::log( 'Updating php config.' );
+			$temp_dir     = EE\Utils\get_temp_dir();
+			$zip_path     = $temp_dir . "phpconf-$php_version.zip";
+			$unzip_folder = $temp_dir . "php-$php_version";
+
+			$scanned_files = scandir( $php_conf_dir );
+			$diff          = [ '.', '..' ];
+
+			$removal_files = array_diff( $scanned_files, $diff );
+
+			$this->fs->copy( SITE_TEMPLATE_ROOT . '/config/php-fpm/php' . str_replace( '.', '', $php_version ) . '.zip', $zip_path );
+			extract_zip( $zip_path, $unzip_folder );
+
+			chdir( $php_conf_dir );
+			$this->fs->remove( $removal_files );
+			$this->fs->mirror( $unzip_folder, $php_conf_dir );
+			$this->fs->remove( [ $zip_path, $unzip_folder ] );
+
+			// Recover previous custom configs.
+			EE::log( 'Re-applying previous custom.ini and easyengine.conf changes.' );
+			$this->fs->copy( $php_conf_backup_dir . '/php/conf.d/custom.ini', $php_conf_dir . '/php/conf.d/custom.ini', true );
+			$this->fs->copy( $php_conf_backup_dir . '/php-fpm.d/easyengine.conf', $php_conf_dir . '/php-fpm.d/easyengine.conf', true );
+
+			if ( '5.6' == $old_php_version ) {
+				$this->sendmail_path_update( true );
+			} elseif ( '5.6' == $php_version ) {
+				$this->sendmail_path_update( false );
+			}
+
+		} catch ( \Exception $e ) {
+			EE::error( $e->getMessage() );
+		}
+		$site->save();
+		EE::success( 'Updated site ' . $this->site_data['site_url'] . ' to PHP version: ' . $php_version );
+		delem_log( 'site php version update end' );
+	}
+
+	protected function sendmail_path_update( $msmtp ) {
+
+		$custom_ini_path = $this->site_data['site_fs_path'] . '/config/php/php/conf.d/custom.ini';
+		$custom_ini_data = file( $custom_ini_path );
+		if ( $msmtp ) {
+			$custom_ini_data = array_map( function ( $custom_ini_data ) {
+				$sendmail_path = 'sendmail_path = /usr/bin/msmtp -t';
+				return stristr( $custom_ini_data, 'sendmail_path' ) ? "$sendmail_path\n" : $custom_ini_data;
+			}, $custom_ini_data );
+		} else {
+			$custom_ini_data = array_map( function ( $custom_ini_data ) {
+				$sendmail_path = 'sendmail_path = /usr/sbin/sendmail -t -i -f ee4@easyengine.io';
+				return stristr( $custom_ini_data, 'sendmail_path' ) ? "$sendmail_path\n" : $custom_ini_data;
+			}, $custom_ini_data );
+		}
+		file_put_contents( $custom_ini_path, implode( '', $custom_ini_data ) );
+	}
+	/**
+	 * Function to update ssl of a site.
 	 */
 	protected function update_ssl( $assoc_args ) {
 
@@ -715,9 +818,8 @@ abstract class EE_Site_Command {
 					$this->init_ssl( $this->site_data['site_url'], $this->site_data['site_fs_path'], $this->site_data['site_ssl'], $this->site_data['site_ssl_wildcard'], $is_www_or_non_www_pointed, $force );
 				}
 
-				if ( ! $renew ) {
-					$this->dump_docker_compose_yml( [ 'nohttps' => false ] );
-				}
+				$this->dump_docker_compose_yml( [ 'nohttps' => false ] );
+
 				\EE\Site\Utils\start_site_containers( $this->site_data['site_fs_path'], $containers_to_start );
 			}
 
@@ -1049,6 +1151,11 @@ abstract class EE_Site_Command {
 		}
 
 		$client = new Site_Letsencrypt();
+		if ( $client->isAlreadyExpired( $this->site_data['site_url'] ) ) {
+			$this->dump_docker_compose_yml( [ 'nohttps' => true ] );
+			$this->enable( $args, [ 'force' => true ] );
+		}
+
 		if ( ! $client->isRenewalNecessary( $this->site_data['site_url'] ) ) {
 			return 0;
 		}
@@ -1323,3 +1430,4 @@ abstract class EE_Site_Command {
 	abstract public function dump_docker_compose_yml( $additional_filters = [] );
 
 }
+

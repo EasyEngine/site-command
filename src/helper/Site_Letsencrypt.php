@@ -361,6 +361,35 @@ class Site_Letsencrypt {
 	}
 
 	/**
+	 * Check expiry if a certificate is already expired.
+	 *
+	 * @param string $domain
+	 */
+	public function isAlreadyExpired( $domain ) {
+
+		// Check expiration date to avoid too much renewal
+		\EE::log( "Loading current certificate for $domain" );
+
+		$certificate       = $this->repository->loadDomainCertificate( $domain );
+		$certificateParser = new CertificateParser();
+		$parsedCertificate = $certificateParser->parse( $certificate );
+
+		// 2160000 = 25 days.
+		if ( $parsedCertificate->getValidTo()->format( 'U' ) - time() < 0 ) {
+			\EE::log(
+				sprintf(
+					'Current certificate is alerady expired on %s, renewal is necessary.',
+					$parsedCertificate->getValidTo()->format( 'Y-m-d H:i:s' )
+				)
+			);
+
+			return true;
+		}
+
+		return false;
+	}
+
+	/**
 	 * Check expiry of a certificate.
 	 *
 	 * @param string $domain
@@ -598,3 +627,4 @@ class Site_Letsencrypt {
 		}
 	}
 }
+
