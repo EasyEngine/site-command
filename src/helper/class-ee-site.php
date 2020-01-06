@@ -388,6 +388,8 @@ abstract class EE_Site_Command {
 				$this->sendmail_path_update( false );
 			}
 
+			EE::exec( "chown -R www-data: $php_conf_dir" );
+
 		} catch ( \Exception $e ) {
 			EE::error( $e->getMessage() );
 		}
