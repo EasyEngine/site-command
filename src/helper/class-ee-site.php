@@ -464,6 +464,9 @@ abstract class EE_Site_Command {
 	 * [--verify]
 	 * : Verify if required global services are working.
 	 *
+	 * [--refresh]
+	 * : Force enable after regenerating docker-compose.yml of a site.
+	 *
 	 * ## EXAMPLES
 	 *
 	 *     # Enable site
@@ -475,21 +478,34 @@ abstract class EE_Site_Command {
 	 *
 	 *     # Force enable a site.
 	 *     $ ee site enable example.com --force
+	 *
+	 *     # Force enable after regenerating docker-compose.yml of a site.
+	 *     $ ee site enable example.com --refresh
 	 */
 	public function enable( $args, $assoc_args, $exit_on_error = true ) {
 
 		\EE\Utils\delem_log( 'site enable start' );
 		$force           = \EE\Utils\get_flag_value( $assoc_args, 'force' );
 		$verify          = \EE\Utils\get_flag_value( $assoc_args, 'verify' );
+		$refresh         = \EE\Utils\get_flag_value( $assoc_args, 'refresh' );
 		$args            = auto_site_name( $args, 'site', __FUNCTION__ );
 		$this->site_data = get_site_info( $args, false, true, false );
 
-		if ( $this->site_data->site_enabled && ! $force ) {
+		if ( $this->site_data->site_enabled && ! ( $force || $refresh ) ) {
 			\EE::error( sprintf( '%s is already enabled!', $this->site_data->site_url ) );
 		}
 
 		if ( $verify ) {
 			$this->verify_services();
+		}
+
+		if ( $refresh ) {
+			$no_https        = $this->site_data->site_ssl ? false : true;
+			$site            = $this->site_data;
+			$array_data      = ( array ) $this->site_data;
+			$this->site_data = reset( $array_data );
+			$this->dump_docker_compose_yml( [ 'nohttps' => $no_https ] );
+			$this->site_data = $site;
 		}
 
 		\EE::log( sprintf( 'Enabling site %s.', $this->site_data->site_url ) );
