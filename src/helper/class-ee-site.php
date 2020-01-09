@@ -1174,7 +1174,7 @@ abstract class EE_Site_Command {
 			$this->enable( $args, [ 'force' => true ] );
 		}
 
-		if ( ! $client->isRenewalNecessary( $this->site_data['site_url'] ) ) {
+		if ( ! $force && ! $client->isRenewalNecessary( $this->site_data['site_url'] ) ) {
 			return 0;
 		}
 
