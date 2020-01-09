@@ -109,6 +109,22 @@ class Site_Command {
 				$args     = [ 'site', 'ssl-renew', $site->site_url ];
 				$callback = $site_types[ $type ];
 
+				if ( 'le' !== $site->site_ssl || ! $site->site_enabled || 'inherit' === $site->site_ssl ) {
+					continue;
+				}
+
+				$api_key_absent        = empty( EE\Utils\get_config_value( 'cloudflare-api-key' ) );
+				$skip_wildcard_warning = false;
+
+				if ( $site->site_ssl_wildcard && $api_key_absent ) {
+					EE::warning( "Wildcard site found: $site->site_url, skipping it as api keys not found. Please renew this site manually using command `ee site ssl-renew $site->site_url`" );
+					if ( ! $skip_wildcard_warning ) {
+						EE::warning( "As this is a wildcard certificate, it cannot be automatically renewed.\nPlease run `ee site ssl-renew $site->site_url` to renew the certificate, or add cloudflare api key in EasyEngine config. Ref: https://rt.cx/eecf" );
+						$skip_wildcard_warning = true;
+					}
+					continue;
+				}
+
 				$command      = EE::get_root_command();
 				$leaf_command = CommandFactory::create( 'site', $callback, $command );
 				$command->add_subcommand( 'site', $leaf_command );
