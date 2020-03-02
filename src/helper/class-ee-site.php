@@ -241,6 +241,13 @@ abstract class EE_Site_Command {
 			}
 		}
 
+		$proxy_vhost_location = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/' . $this->site_data['site_url'] . '_location';
+
+		if ( $this->fs->exists( $proxy_vhost_location ) ) {
+			$this->fs->remove( $proxy_vhost_location );
+			\EE\Site\Utils\reload_global_nginx_proxy();
+		}
+
 		/**
 		 * Execute before site db data cleanup and after site services cleanup.
 		 * Note: This can be use to cleanup site data added by any package command.
