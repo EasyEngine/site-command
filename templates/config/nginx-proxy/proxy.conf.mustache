@@ -1,0 +1,2 @@
+# https://serverfault.com/questions/583570/understanding-the-nginx-proxy-cache-path-directive
+proxy_cache_path /var/cache/nginx/{{site_url}} levels=1:2 keys_zone={{sanitized_site_url}}:10m max_size=1g;

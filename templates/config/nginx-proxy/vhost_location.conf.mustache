@@ -1,0 +1,35 @@
+# TODO:
+## Update proxy_cache location.
+## Verify cache timing and response headers.
+
+# Proxy-Nginx stale configuration
+set $skip_cache 0;
+
+# POST requests and URL with a query string should always go to php
+if ($request_method = POST) {
+    set $skip_cache 1;
+}
+
+if ($query_string != "") {
+    set $skip_cache 1;
+}
+
+# Don't cache URL containing the following segments
+if ($request_uri ~* "(/ee-admin/|/wp-admin/|/uploads/|/xmlrpc.php|wp-.*.php|index.php|/feed/|sitemap(_index)?.xml|[a-z0-9_-]+-sitemap([0-9]+)?.xml)") {
+    set $skip_cache 1;
+}
+
+# Don't use the cache for logged in users or recent commenter or customer with items in cart
+if ($http_cookie ~* "comment_author|wordpress_[a-f0-9]+|wp-postpass|wordpress_no_cache|wordpress_logged_in|woocommerce_items_in_cart") {
+   set $skip_cache 1;
+}
+
+proxy_buffering on;
+proxy_cache {{sanitized_site_url}};
+proxy_cache_valid 200 302 1s;
+proxy_cache_use_stale error timeout updating http_500 http_502 http_503 http_504;
+proxy_cache_bypass $skip_cache;
+proxy_no_cache $skip_cache;
+proxy_cache_background_update on;
+
+add_header X-Proxy-Cache $upstream_cache_status;

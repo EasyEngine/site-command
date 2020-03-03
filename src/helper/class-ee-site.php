@@ -241,6 +241,25 @@ abstract class EE_Site_Command {
 			}
 		}
 
+		$proxy_vhost_location = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/' . $site_url . '_location';
+		$proxy_conf_location  = EE_ROOT_DIR . '/services/nginx-proxy/conf.d/' . $site_url . '.conf';
+		$reload               = false;
+
+		if ( $this->fs->exists( $proxy_conf_location ) ) {
+			$this->fs->remove( $proxy_conf_location );
+			$reload = true;
+		}
+
+		if ( $this->fs->exists( $proxy_vhost_location ) ) {
+			$this->fs->remove( $proxy_vhost_location );
+			$reload = true;
+		}
+
+		if ( $reload ) {
+			\EE\Site\Utils\reload_global_nginx_proxy();
+			EE::exec( 'docker exec ' . EE_PROXY_TYPE . " bash -c 'rm -rf /var/cache/nginx/$site_url'" );
+		}
+
 		/**
 		 * Execute before site db data cleanup and after site services cleanup.
 		 * Note: This can be use to cleanup site data added by any package command.
@@ -290,7 +309,6 @@ abstract class EE_Site_Command {
 	 * [--php=<php-version>]
 	 * : PHP version for site. Currently only supports PHP 5.6, 7.0, 7.2, 7.3, 7.4 and latest.
 	 * ---
-	 * default: latest
 	 * options:
 	 *  - 5.6
 	 *  - 7.0
@@ -298,6 +316,14 @@ abstract class EE_Site_Command {
 	 *  - 7.3
 	 *  - 7.4
 	 *  - latest
+	 * ---
+	 *
+	 * [--stale-cache=<on-or-off>]
+	 * : Enable or disable stale cache on site.
+	 * ---
+	 * options:
+	 *  - on
+	 *  - off
 	 * ---
 	 *
 	 * ## EXAMPLES
@@ -319,13 +345,83 @@ abstract class EE_Site_Command {
 		$this->site_data = get_site_info( $args, true, true, false );
 		$ssl             = get_flag_value( $assoc_args, 'ssl', false );
 		$php             = get_flag_value( $assoc_args, 'php', false );
+		$stale_cache     = get_flag_value( $assoc_args, 'stale-cache', false );
 		if ( $ssl ) {
 			$this->update_ssl( $assoc_args );
-		} elseif ( $php ) {
+		}
+
+		if ( $php ) {
 			$this->update_php( $args, $assoc_args );
+		}
+
+		if ( $stale_cache ) {
+			$this->update_stale_cache( $args, $assoc_args );
 		}
 	}
 
+
+	/**
+	 * Function to enable/disable stale cache of a site.
+	 */
+	protected function update_stale_cache( $args, $assoc_args ) {
+
+		$stale_cache = get_flag_value( $assoc_args, 'stale-cache', 'on' );
+
+		if ( $stale_cache === $this->site_data->stale_cache ) {
+			EE::error( 'Site ' . $this->site_data->site_url . ' already has stale cache: ' . $stale_cache );
+		}
+
+		$log_message = ( $stale_cache === 'on' ) ? 'Enabling' : 'Disabling';
+
+		EE::log( $log_message . ' stale cache for: ' . $this->site_data->site_url );
+
+		try {
+			$site                 = $this->site_data;
+			$array_data           = (array) $this->site_data;
+			$this->site_data      = reset( $array_data );
+			$proxy_conf_location  = EE_ROOT_DIR . '/services/nginx-proxy/conf.d/' . $this->site_data['site_url'] . '.conf';
+			$proxy_vhost_location = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/' . $this->site_data['site_url'] . '_location';
+
+			if ( 'on' === $stale_cache ) {
+
+				$sanitized_site_url = str_replace( '.', '-', $this->site_data['site_url'] );
+
+				$data               = [
+					'site_url'           => $this->site_data['site_url'],
+					'sanitized_site_url' => $sanitized_site_url,
+				];
+				$proxy_conf_content = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx-proxy/proxy.conf.mustache', $data );
+				$this->fs->dumpFile( $proxy_conf_location, $proxy_conf_content );
+
+				$proxy_vhost_content = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx-proxy/vhost_location.conf.mustache', $data );
+				$this->fs->dumpFile( $proxy_vhost_location, $proxy_vhost_content );
+			} else {
+				$reload = false;
+
+				if ( $this->fs->exists( $proxy_conf_location ) ) {
+					$this->fs->remove( $proxy_conf_location );
+					$reload = true;
+				}
+
+				if ( $this->fs->exists( $proxy_vhost_location ) ) {
+					$this->fs->remove( $proxy_vhost_location );
+					$reload = true;
+				}
+
+				if ( $reload ) {
+					\EE\Site\Utils\reload_global_nginx_proxy();
+					EE::exec( 'docker exec ' . EE_PROXY_TYPE . " bash -c 'rm -rf /var/cache/nginx/" . $this->site_data['site_url'] . "'" );
+				}
+			}
+			\EE\Site\Utils\reload_global_nginx_proxy();
+			$site->stale_cache = $stale_cache;
+		} catch ( \Exception $e ) {
+			EE::error( $e->getMessage() );
+		}
+		$site->save();
+		EE::success( $log_message . ' on site ' . $this->site_data['site_url'] . '.' );
+		delem_log( 'site stale cache update end' );
+	}
 
 	/**
 	 * Function to update php version of a site.
