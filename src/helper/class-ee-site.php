@@ -241,11 +241,23 @@ abstract class EE_Site_Command {
 			}
 		}
 
-		$proxy_vhost_location = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/' . $this->site_data['site_url'] . '_location';
+		$proxy_vhost_location = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/' . $site_url . '_location';
+		$proxy_conf_location  = EE_ROOT_DIR . '/services/nginx-proxy/conf.d/' . $site_url . '.conf';
+		$reload               = false;
+
+		if ( $this->fs->exists( $proxy_conf_location ) ) {
+			$this->fs->remove( $proxy_conf_location );
+			$reload = true;
+		}
 
 		if ( $this->fs->exists( $proxy_vhost_location ) ) {
 			$this->fs->remove( $proxy_vhost_location );
+			$reload = true;
+		}
+
+		if ( $reload ) {
 			\EE\Site\Utils\reload_global_nginx_proxy();
+			EE::exec( 'docker exec ' . EE_PROXY_TYPE . " bash -c 'rm -rf /var/cache/nginx/$site_url'" );
 		}
 
 		/**
@@ -367,19 +379,38 @@ abstract class EE_Site_Command {
 			$site                 = $this->site_data;
 			$array_data           = (array) $this->site_data;
 			$this->site_data      = reset( $array_data );
-			$fs                   = new Filesystem();
-			$proxy_conf_location  = EE_ROOT_DIR . '/services/nginx-proxy/conf.d/proxy.conf';
+			$proxy_conf_location  = EE_ROOT_DIR . '/services/nginx-proxy/conf.d/' . $this->site_data['site_url'] . '.conf';
 			$proxy_vhost_location = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/' . $this->site_data['site_url'] . '_location';
 
-			if ( ! $fs->exists( $proxy_conf_location ) ) {
-				$fs->copy( SITE_TEMPLATE_ROOT . '/config/nginx-proxy/proxy.conf.mustache', $proxy_conf_location );
-			}
-
 			if ( 'on' === $stale_cache ) {
-				$fs->copy( SITE_TEMPLATE_ROOT . '/config/nginx-proxy/vhost_location.conf.mustache', $proxy_vhost_location );
+
+				$sanitized_site_url = str_replace( '.', '-', $this->site_data['site_url'] );
+
+				$data               = [
+					'site_url'           => $this->site_data['site_url'],
+					'sanitized_site_url' => $sanitized_site_url,
+				];
+				$proxy_conf_content = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx-proxy/proxy.conf.mustache', $data );
+				$this->fs->dumpFile( $proxy_conf_location, $proxy_conf_content );
+
+				$proxy_vhost_content = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx-proxy/vhost_location.conf.mustache', $data );
+				$this->fs->dumpFile( $proxy_vhost_location, $proxy_vhost_content );
 			} else {
-				if ( $fs->exists( $proxy_vhost_location ) ) {
-					$fs->remove( $proxy_vhost_location );
+				$reload = false;
+
+				if ( $this->fs->exists( $proxy_conf_location ) ) {
+					$this->fs->remove( $proxy_conf_location );
+					$reload = true;
+				}
+
+				if ( $this->fs->exists( $proxy_vhost_location ) ) {
+					$this->fs->remove( $proxy_vhost_location );
+					$reload = true;
+				}
+
+				if ( $reload ) {
+					\EE\Site\Utils\reload_global_nginx_proxy();
+					EE::exec( 'docker exec ' . EE_PROXY_TYPE . " bash -c 'rm -rf /var/cache/nginx/" . $this->site_data['site_url'] . "'" );
 				}
 			}
 			\EE\Site\Utils\reload_global_nginx_proxy();
