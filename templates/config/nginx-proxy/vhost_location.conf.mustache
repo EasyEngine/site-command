@@ -25,7 +25,7 @@ if ($http_cookie ~* "comment_author|wordpress_[a-f0-9]+|wp-postpass|wordpress_no
 }
 
 proxy_buffering on;
-proxy_cache one;
+proxy_cache {{sanitized_site_url}};
 proxy_cache_valid 200 302 1s;
 proxy_cache_use_stale error timeout updating http_500 http_502 http_503 http_504;
 proxy_cache_bypass $skip_cache;
