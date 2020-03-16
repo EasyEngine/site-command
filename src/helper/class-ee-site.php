@@ -241,9 +241,11 @@ abstract class EE_Site_Command {
 			}
 		}
 
-		$proxy_vhost_location = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/' . $site_url . '_location';
-		$proxy_conf_location  = EE_ROOT_DIR . '/services/nginx-proxy/conf.d/' . $site_url . '.conf';
-		$reload               = false;
+		$proxy_vhost_location        = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/' . $site_url . '_location';
+		$proxy_conf_location         = EE_ROOT_DIR . '/services/nginx-proxy/conf.d/' . $site_url . '.conf';
+		$proxy_vhost_location_subdom = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/*.' . $this->site_data['site_url'] . '_location';
+
+		$reload = false;
 
 		if ( $this->fs->exists( $proxy_conf_location ) ) {
 			$this->fs->remove( $proxy_conf_location );
@@ -252,6 +254,11 @@ abstract class EE_Site_Command {
 
 		if ( $this->fs->exists( $proxy_vhost_location ) ) {
 			$this->fs->remove( $proxy_vhost_location );
+			$reload = true;
+		}
+
+		if ( $this->fs->exists( $proxy_vhost_location_subdom ) ) {
+			$this->fs->remove( $proxy_vhost_location_subdom );
 			$reload = true;
 		}
 
@@ -376,11 +383,12 @@ abstract class EE_Site_Command {
 		EE::log( $log_message . ' stale cache for: ' . $this->site_data->site_url );
 
 		try {
-			$site                 = $this->site_data;
-			$array_data           = (array) $this->site_data;
-			$this->site_data      = reset( $array_data );
-			$proxy_conf_location  = EE_ROOT_DIR . '/services/nginx-proxy/conf.d/' . $this->site_data['site_url'] . '.conf';
-			$proxy_vhost_location = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/' . $this->site_data['site_url'] . '_location';
+			$site                        = $this->site_data;
+			$array_data                  = (array) $this->site_data;
+			$this->site_data             = reset( $array_data );
+			$proxy_conf_location         = EE_ROOT_DIR . '/services/nginx-proxy/conf.d/' . $this->site_data['site_url'] . '.conf';
+			$proxy_vhost_location        = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/' . $this->site_data['site_url'] . '_location';
+			$proxy_vhost_location_subdom = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/*.' . $this->site_data['site_url'] . '_location';
 
 			if ( 'on' === $stale_cache ) {
 
@@ -395,6 +403,10 @@ abstract class EE_Site_Command {
 
 				$proxy_vhost_content = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx-proxy/vhost_location.conf.mustache', $data );
 				$this->fs->dumpFile( $proxy_vhost_location, $proxy_vhost_content );
+
+				if ( 'subdom' === $this->site_data['app_sub_type'] ) {
+					$this->fs->dumpFile( $proxy_vhost_location_subdom, $proxy_vhost_content );
+				}
 			} else {
 				$reload = false;
 
@@ -405,6 +417,11 @@ abstract class EE_Site_Command {
 
 				if ( $this->fs->exists( $proxy_vhost_location ) ) {
 					$this->fs->remove( $proxy_vhost_location );
+					$reload = true;
+				}
+
+				if ( $this->fs->exists( $proxy_vhost_location_subdom ) ) {
+					$this->fs->remove( $proxy_vhost_location_subdom );
 					$reload = true;
 				}
 
