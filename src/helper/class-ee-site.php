@@ -325,8 +325,8 @@ abstract class EE_Site_Command {
 	 *  - latest
 	 * ---
 	 *
-	 * [--stale-cache=<on-or-off>]
-	 * : Enable or disable stale cache on site.
+	 * [--proxy-cache=<on-or-off>]
+	 * : Enable or disable proxy cache on site.
 	 * ---
 	 * options:
 	 *  - on
@@ -352,7 +352,7 @@ abstract class EE_Site_Command {
 		$this->site_data = get_site_info( $args, true, true, false );
 		$ssl             = get_flag_value( $assoc_args, 'ssl', false );
 		$php             = get_flag_value( $assoc_args, 'php', false );
-		$stale_cache     = get_flag_value( $assoc_args, 'stale-cache', false );
+		$proxy_cache     = get_flag_value( $assoc_args, 'proxy-cache', false );
 		if ( $ssl ) {
 			$this->update_ssl( $assoc_args );
 		}
@@ -361,26 +361,26 @@ abstract class EE_Site_Command {
 			$this->update_php( $args, $assoc_args );
 		}
 
-		if ( $stale_cache ) {
-			$this->update_stale_cache( $args, $assoc_args );
+		if ( $proxy_cache ) {
+			$this->update_proxy_cache( $args, $assoc_args );
 		}
 	}
 
 
 	/**
-	 * Function to enable/disable stale cache of a site.
+	 * Function to enable/disable proxy cache of a site.
 	 */
-	protected function update_stale_cache( $args, $assoc_args ) {
+	protected function update_proxy_cache( $args, $assoc_args ) {
 
-		$stale_cache = get_flag_value( $assoc_args, 'stale-cache', 'on' );
+		$proxy_cache = get_flag_value( $assoc_args, 'proxy-cache', 'on' );
 
-		if ( $stale_cache === $this->site_data->stale_cache ) {
-			EE::error( 'Site ' . $this->site_data->site_url . ' already has stale cache: ' . $stale_cache );
+		if ( $proxy_cache === $this->site_data->proxy_cache ) {
+			EE::error( 'Site ' . $this->site_data->site_url . ' already has proxy cache: ' . $proxy_cache );
 		}
 
-		$log_message = ( $stale_cache === 'on' ) ? 'Enabling' : 'Disabling';
+		$log_message = ( $proxy_cache === 'on' ) ? 'Enabling' : 'Disabling';
 
-		EE::log( $log_message . ' stale cache for: ' . $this->site_data->site_url );
+		EE::log( $log_message . ' proxy cache for: ' . $this->site_data->site_url );
 
 		try {
 			$site                        = $this->site_data;
@@ -390,7 +390,7 @@ abstract class EE_Site_Command {
 			$proxy_vhost_location        = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/' . $this->site_data['site_url'] . '_location';
 			$proxy_vhost_location_subdom = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/*.' . $this->site_data['site_url'] . '_location';
 
-			if ( 'on' === $stale_cache ) {
+			if ( 'on' === $proxy_cache ) {
 
 				$sanitized_site_url = str_replace( '.', '-', $this->site_data['site_url'] );
 
@@ -431,13 +431,13 @@ abstract class EE_Site_Command {
 				}
 			}
 			\EE\Site\Utils\reload_global_nginx_proxy();
-			$site->stale_cache = $stale_cache;
+			$site->proxy_cache = $proxy_cache;
 		} catch ( \Exception $e ) {
 			EE::error( $e->getMessage() );
 		}
 		$site->save();
 		EE::success( $log_message . ' on site ' . $this->site_data['site_url'] . '.' );
-		delem_log( 'site stale cache update end' );
+		delem_log( 'site proxy cache update end' );
 	}
 
 	/**
