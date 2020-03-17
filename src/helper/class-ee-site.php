@@ -370,25 +370,30 @@ abstract class EE_Site_Command {
 	/**
 	 * Function to enable/disable proxy cache of a site.
 	 */
-	protected function update_proxy_cache( $args, $assoc_args ) {
+	protected function update_proxy_cache( $args, $assoc_args, $call_on_create = false ) {
 
 		$proxy_cache = get_flag_value( $assoc_args, 'proxy-cache', 'on' );
 
-		if ( $proxy_cache === $this->site_data->proxy_cache ) {
-			EE::error( 'Site ' . $this->site_data->site_url . ' already has proxy cache: ' . $proxy_cache );
+		if ( ! $call_on_create ) {
+
+			if ( $proxy_cache === $this->site_data->proxy_cache ) {
+				EE::error( 'Site ' . $this->site_data->site_url . ' already has proxy cache: ' . $proxy_cache );
+			}
 		}
 
 		$log_message = ( $proxy_cache === 'on' ) ? 'Enabling' : 'Disabling';
 
-		EE::log( $log_message . ' proxy cache for: ' . $this->site_data->site_url );
-
 		try {
-			$site                        = $this->site_data;
-			$array_data                  = (array) $this->site_data;
-			$this->site_data             = reset( $array_data );
+			if ( ! $call_on_create ) {
+				$site                        = $this->site_data;
+				$array_data                  = (array) $this->site_data;
+				$this->site_data             = reset( $array_data );
+			}
 			$proxy_conf_location         = EE_ROOT_DIR . '/services/nginx-proxy/conf.d/' . $this->site_data['site_url'] . '.conf';
 			$proxy_vhost_location        = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/' . $this->site_data['site_url'] . '_location';
 			$proxy_vhost_location_subdom = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/*.' . $this->site_data['site_url'] . '_location';
+
+			EE::log( $log_message . ' proxy cache for: ' . $this->site_data['site_url'] );
 
 			if ( 'on' === $proxy_cache ) {
 
@@ -431,11 +436,13 @@ abstract class EE_Site_Command {
 				}
 			}
 			\EE\Site\Utils\reload_global_nginx_proxy();
-			$site->proxy_cache = $proxy_cache;
 		} catch ( \Exception $e ) {
 			EE::error( $e->getMessage() );
 		}
-		$site->save();
+		if ( ! $call_on_create ) {
+			$site->proxy_cache = $proxy_cache;
+			$site->save();
+		}
 		EE::success( $log_message . ' on site ' . $this->site_data['site_url'] . '.' );
 		delem_log( 'site proxy cache update end' );
 	}
