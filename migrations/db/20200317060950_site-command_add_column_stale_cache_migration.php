@@ -35,7 +35,7 @@ class AddColumnStaleCacheMigration extends Base {
 			return;
 		}
 
-		$query = 'ALTER TABLE sites ADD COLUMN stale_cache VARCHAR NOT NULL DEFAULT \'off\';';
+		$query = 'ALTER TABLE sites ADD COLUMN proxy_cache VARCHAR NOT NULL DEFAULT \'off\';';
 
 		try {
 			self::$pdo->exec( $query );
