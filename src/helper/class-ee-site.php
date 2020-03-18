@@ -333,6 +333,13 @@ abstract class EE_Site_Command {
 	 *  - off
 	 * ---
 	 *
+	 * [--proxy-cache-max-size=<size-in-m-or-g>]
+	 * : Max size for proxy-cache.
+	 *
+	 * [--proxy-cache-max-time=<time-in-s-or-m>]
+	 * : Max time for proxy cache to last.
+	 *
+	 *
 	 * ## EXAMPLES
 	 *
 	 *     # Add SSL to non-ssl site
@@ -344,6 +351,14 @@ abstract class EE_Site_Command {
 	 *     # Add self-signed SSL to non-ssl site
 	 *     $ ee site update example.com --ssl=self
 	 *
+	 *     # Update PHP version of site.
+	 *     $ ee site update example.com --php=7.4
+	 *
+	 *     # Update proxy cache of site.
+	 *     $ ee site update example.com --proxy-cache=on
+	 *
+	 *     # Update proxy cache of site.
+	 *     $ ee site update example.com --proxy-cache=on --proxy-cache-max-size=1g --proxy-cache-max-time=30s
 	 */
 	public function update( $args, $assoc_args ) {
 
@@ -393,6 +408,27 @@ abstract class EE_Site_Command {
 			$proxy_vhost_location        = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/' . $this->site_data['site_url'] . '_location';
 			$proxy_vhost_location_subdom = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/*.' . $this->site_data['site_url'] . '_location';
 
+			$proxy_cache_time = strtolower( get_flag_value( $assoc_args, 'proxy-cache-max-time', '30s' ) );
+			$proxy_cache_size = strtolower( get_flag_value( $assoc_args, 'proxy-cache-max-size', '256m' ) );
+			$wrong_time       = false;
+			$wrong_size       = false;
+
+			in_array( substr( $proxy_cache_time, - 1 ), [ 's', 'm' ] ) ?: $wrong_time = true;
+			in_array( substr( $proxy_cache_size, - 1 ), [ 'm', 'g' ] ) ?: $wrong_size = true;
+
+			is_numeric( substr( $proxy_cache_time, 0, - 1 ) ) ?: $wrong_time = true;
+			is_numeric( substr( $proxy_cache_size, 0, - 1 ) ) ?: $wrong_size = true;
+
+			if ( $wrong_time ) {
+				EE::warning( "Wrong value `$proxy_cache_time` supplied to param: `proxy-cache-max-time`, replacing it with default:30s" );
+				$proxy_cache_time = '30s';
+			}
+
+			if ( $wrong_size ) {
+				EE::warning( "Wrong value `$proxy_cache_size` supplied to param: `proxy-cache-max-size`, replacing it with default:256m" );
+				$proxy_cache_size = '256m';
+			}
+
 			EE::log( $log_message . ' proxy cache for: ' . $this->site_data['site_url'] );
 
 			if ( 'on' === $proxy_cache ) {
@@ -402,6 +438,8 @@ abstract class EE_Site_Command {
 				$data               = [
 					'site_url'           => $this->site_data['site_url'],
 					'sanitized_site_url' => $sanitized_site_url,
+					'proxy_cache_size'   => $proxy_cache_size,
+					'proxy_cache_time'   => $proxy_cache_time,
 				];
 				$proxy_conf_content = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx-proxy/proxy.conf.mustache', $data );
 				$this->fs->dumpFile( $proxy_conf_location, $proxy_conf_content );
