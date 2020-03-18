@@ -492,6 +492,10 @@ abstract class EE_Site_Command {
 
 		$php_version = get_flag_value( $assoc_args, 'php', false );
 
+		if ( '7.4' === $php_version ) {
+			$php_version = 'latest';
+		}
+
 		if ( $php_version === $this->site_data->php_version ) {
 			EE::error( 'Site ' . $this->site_data->site_url . ' is already at PHP version: ' . $php_version );
 		}
