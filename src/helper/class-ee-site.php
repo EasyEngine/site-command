@@ -325,13 +325,20 @@ abstract class EE_Site_Command {
 	 *  - latest
 	 * ---
 	 *
-	 * [--stale-cache=<on-or-off>]
-	 * : Enable or disable stale cache on site.
+	 * [--proxy-cache=<on-or-off>]
+	 * : Enable or disable proxy cache on site.
 	 * ---
 	 * options:
 	 *  - on
 	 *  - off
 	 * ---
+	 *
+	 * [--proxy-cache-max-size=<size-in-m-or-g>]
+	 * : Max size for proxy-cache.
+	 *
+	 * [--proxy-cache-max-time=<time-in-s-or-m>]
+	 * : Max time for proxy cache to last.
+	 *
 	 *
 	 * ## EXAMPLES
 	 *
@@ -344,6 +351,14 @@ abstract class EE_Site_Command {
 	 *     # Add self-signed SSL to non-ssl site
 	 *     $ ee site update example.com --ssl=self
 	 *
+	 *     # Update PHP version of site.
+	 *     $ ee site update example.com --php=7.4
+	 *
+	 *     # Update proxy cache of site.
+	 *     $ ee site update example.com --proxy-cache=on
+	 *
+	 *     # Update proxy cache of site.
+	 *     $ ee site update example.com --proxy-cache=on --proxy-cache-max-size=1g --proxy-cache-max-time=30s
 	 */
 	public function update( $args, $assoc_args ) {
 
@@ -352,7 +367,7 @@ abstract class EE_Site_Command {
 		$this->site_data = get_site_info( $args, true, true, false );
 		$ssl             = get_flag_value( $assoc_args, 'ssl', false );
 		$php             = get_flag_value( $assoc_args, 'php', false );
-		$stale_cache     = get_flag_value( $assoc_args, 'stale-cache', false );
+		$proxy_cache     = get_flag_value( $assoc_args, 'proxy-cache', false );
 		if ( $ssl ) {
 			$this->update_ssl( $assoc_args );
 		}
@@ -361,42 +376,70 @@ abstract class EE_Site_Command {
 			$this->update_php( $args, $assoc_args );
 		}
 
-		if ( $stale_cache ) {
-			$this->update_stale_cache( $args, $assoc_args );
+		if ( $proxy_cache ) {
+			$this->update_proxy_cache( $args, $assoc_args );
 		}
 	}
 
 
 	/**
-	 * Function to enable/disable stale cache of a site.
+	 * Function to enable/disable proxy cache of a site.
 	 */
-	protected function update_stale_cache( $args, $assoc_args ) {
+	protected function update_proxy_cache( $args, $assoc_args, $call_on_create = false ) {
 
-		$stale_cache = get_flag_value( $assoc_args, 'stale-cache', 'on' );
+		$proxy_cache = get_flag_value( $assoc_args, 'proxy-cache', 'on' );
 
-		if ( $stale_cache === $this->site_data->stale_cache ) {
-			EE::error( 'Site ' . $this->site_data->site_url . ' already has stale cache: ' . $stale_cache );
+		if ( ! $call_on_create ) {
+
+			if ( $proxy_cache === $this->site_data->proxy_cache ) {
+				EE::error( 'Site ' . $this->site_data->site_url . ' already has proxy cache: ' . $proxy_cache );
+			}
 		}
 
-		$log_message = ( $stale_cache === 'on' ) ? 'Enabling' : 'Disabling';
-
-		EE::log( $log_message . ' stale cache for: ' . $this->site_data->site_url );
+		$log_message = ( $proxy_cache === 'on' ) ? 'Enabling' : 'Disabling';
 
 		try {
-			$site                        = $this->site_data;
-			$array_data                  = (array) $this->site_data;
-			$this->site_data             = reset( $array_data );
+			if ( ! $call_on_create ) {
+				$site                        = $this->site_data;
+				$array_data                  = (array) $this->site_data;
+				$this->site_data             = reset( $array_data );
+			}
 			$proxy_conf_location         = EE_ROOT_DIR . '/services/nginx-proxy/conf.d/' . $this->site_data['site_url'] . '.conf';
 			$proxy_vhost_location        = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/' . $this->site_data['site_url'] . '_location';
 			$proxy_vhost_location_subdom = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/*.' . $this->site_data['site_url'] . '_location';
 
-			if ( 'on' === $stale_cache ) {
+			$proxy_cache_time = strtolower( get_flag_value( $assoc_args, 'proxy-cache-max-time', '30s' ) );
+			$proxy_cache_size = strtolower( get_flag_value( $assoc_args, 'proxy-cache-max-size', '256m' ) );
+			$wrong_time       = false;
+			$wrong_size       = false;
+
+			in_array( substr( $proxy_cache_time, - 1 ), [ 's', 'm' ] ) ?: $wrong_time = true;
+			in_array( substr( $proxy_cache_size, - 1 ), [ 'm', 'g' ] ) ?: $wrong_size = true;
+
+			is_numeric( substr( $proxy_cache_time, 0, - 1 ) ) ?: $wrong_time = true;
+			is_numeric( substr( $proxy_cache_size, 0, - 1 ) ) ?: $wrong_size = true;
+
+			if ( $wrong_time ) {
+				EE::warning( "Wrong value `$proxy_cache_time` supplied to param: `proxy-cache-max-time`, replacing it with default:30s" );
+				$proxy_cache_time = '30s';
+			}
+
+			if ( $wrong_size ) {
+				EE::warning( "Wrong value `$proxy_cache_size` supplied to param: `proxy-cache-max-size`, replacing it with default:256m" );
+				$proxy_cache_size = '256m';
+			}
+
+			EE::log( $log_message . ' proxy cache for: ' . $this->site_data['site_url'] );
+
+			if ( 'on' === $proxy_cache ) {
 
 				$sanitized_site_url = str_replace( '.', '-', $this->site_data['site_url'] );
 
 				$data               = [
 					'site_url'           => $this->site_data['site_url'],
 					'sanitized_site_url' => $sanitized_site_url,
+					'proxy_cache_size'   => $proxy_cache_size,
+					'proxy_cache_time'   => $proxy_cache_time,
 				];
 				$proxy_conf_content = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx-proxy/proxy.conf.mustache', $data );
 				$this->fs->dumpFile( $proxy_conf_location, $proxy_conf_content );
@@ -431,13 +474,15 @@ abstract class EE_Site_Command {
 				}
 			}
 			\EE\Site\Utils\reload_global_nginx_proxy();
-			$site->stale_cache = $stale_cache;
 		} catch ( \Exception $e ) {
 			EE::error( $e->getMessage() );
 		}
-		$site->save();
+		if ( ! $call_on_create ) {
+			$site->proxy_cache = $proxy_cache;
+			$site->save();
+		}
 		EE::success( $log_message . ' on site ' . $this->site_data['site_url'] . '.' );
-		delem_log( 'site stale cache update end' );
+		delem_log( 'site proxy cache update end' );
 	}
 
 	/**
@@ -446,6 +491,10 @@ abstract class EE_Site_Command {
 	protected function update_php( $args, $assoc_args ) {
 
 		$php_version = get_flag_value( $assoc_args, 'php', false );
+
+		if ( '7.4' === $php_version ) {
+			$php_version = 'latest';
+		}
 
 		if ( $php_version === $this->site_data->php_version ) {
 			EE::error( 'Site ' . $this->site_data->site_url . ' is already at PHP version: ' . $php_version );
