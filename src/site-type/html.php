@@ -80,6 +80,9 @@ class HTML extends EE_Site_Command {
 	 * [--public-dir]
 	 * : Set custom source directory for site inside htdocs.
 	 *
+	 * [--git]
+	 * : Create your site using your git repo content. All content will be cloned into webroot.
+	 *
 	 * ## EXAMPLES
 	 *
 	 *     # Create html site
@@ -96,6 +99,9 @@ class HTML extends EE_Site_Command {
 	 *
 	 *     # Create html site with custom source directory inside htdocs ( SITE_ROOT/app/htdocs/src )
 	 *     $ ee site create example.com --public-dir=src
+	 *
+	 *     # Create html site using repository content
+	 *     $ ee site create example.com --git=mdn/beginner-html-site-styled
 	 *
 	 */
 	public function create( $args, $assoc_args ) {
@@ -130,6 +136,14 @@ class HTML extends EE_Site_Command {
 		\EE\Service\Utils\nginx_proxy_check();
 
 		\EE::log( 'Configuring project.' );
+
+		// Check if git repo URL was provided.
+		$this->git_repo = \EE\Utils\get_flag_value( $assoc_args, 'git', '' );
+
+		// Update variable data for further processing.
+		if ( ! empty( $this->git_repo ) ) {
+			$this->is_git_repo = true;
+		}
 
 		$this->create_site();
 		\EE\Utils\delem_log( 'site create end' );
@@ -223,8 +237,20 @@ class HTML extends EE_Site_Command {
 				'site_src_root' => $site_src_dir,
 			];
 
-			$index_html = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/index.html.mustache', $index_data );
-			$this->fs->dumpFile( $site_src_dir . '/index.html', $index_html );
+			// Create sample file if no git repo data was provided else clone into site root.
+			if ( ! $this->is_git_repo ) {
+				$index_html = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/index.html.mustache', $index_data );
+				$this->fs->dumpFile( $site_src_dir . '/index.html', $index_html );
+			} else {
+				// Check if provided git repo is accessible.
+				if ( ! $this->check_git_repo_access( $this->git_repo ) ) {
+					EE::error( "Could not read from remote repository. Please make sure you have the correct access rights and the repository exists." );
+				} else {
+					EE::log( PHP_EOL . "Repo access check completed." . PHP_EOL );
+					// Clone the repo content, defaults to htdocs directory.
+					$this->complete_git_clone( $site_src_dir );
+				}
+			}
 
 			// Assign www-data user ownership.
 			chdir( $this->site_data['site_fs_path'] );
