@@ -405,4 +405,6 @@ class HTML extends EE_Site_Command {
 		exit;
 	}
 
+	protected function generate_default_conf( $site_type, $cache_type, $server_name ) {}
+
 }
