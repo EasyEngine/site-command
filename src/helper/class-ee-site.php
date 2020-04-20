@@ -339,6 +339,11 @@ abstract class EE_Site_Command {
 	 * [--proxy-cache-max-time=<time-in-s-or-m>]
 	 * : Max time for proxy cache to last.
 	 *
+	 * [--add-alias-domains=<comma-seprated-domains-to-add>]
+	 * : Comma seprated list of domains to add to site's alias domains.
+	 *
+	 * [--delete-alias-domains=<comma-seprated-domains-to-delete>]
+	 * : Comma seprated list of domains to delete from site's alias domains.
 	 *
 	 * ## EXAMPLES
 	 *
@@ -368,6 +373,9 @@ abstract class EE_Site_Command {
 		$ssl             = get_flag_value( $assoc_args, 'ssl', false );
 		$php             = get_flag_value( $assoc_args, 'php', false );
 		$proxy_cache     = get_flag_value( $assoc_args, 'proxy-cache', false );
+		$add_domains     = get_flag_value( $assoc_args, 'add-alias-domains', false );
+		$delete_domains  = get_flag_value( $assoc_args, 'delete-alias-domains', false );
+
 		if ( $ssl ) {
 			$this->update_ssl( $assoc_args );
 		}
@@ -379,8 +387,81 @@ abstract class EE_Site_Command {
 		if ( $proxy_cache ) {
 			$this->update_proxy_cache( $args, $assoc_args );
 		}
+
+		if ( $add_domains || $delete_domains ) {
+			$this->update_alias_domains( $args, $assoc_args );
+		}
 	}
 
+
+	/**
+	 * Function to update alias domains of a site.
+	 */
+	protected function update_alias_domains( $args, $assoc_args, $call_on_create = false ) {
+
+
+		if ( ! $call_on_create ) {
+			//
+		}
+
+		$add_domains    = get_flag_value( $assoc_args, 'add-alias-domains', false );
+		$delete_domains = get_flag_value( $assoc_args, 'delete-alias-domains', false );
+
+		try {
+			if ( ! $call_on_create ) {
+				$site            = $this->site_data;
+				$array_data      = (array) $this->site_data;
+				$this->site_data = reset( $array_data );
+			}
+			// Check it is a WP site
+			if ( 'wp' !== $this->site_data['site_type'] ) {
+				EE::error( 'Currently alias domains are only supported in WordPress site type.' );
+			}
+
+			// Validate data
+			$existing_alias_domains = [];
+			$domains_to_add         = [];
+			$domains_to_delete      = [];
+
+			if ( ! empty( $this->site_data['alias_domains'] ) ) {
+				$existing_alias_domains = explode( ',', $this->site_data['alias_domains'] );
+			}
+			if ( ! empty( $add_domains ) ) {
+				$domains_to_add = explode( ',', $add_domains );
+			}
+			if ( ! empty( $delete_domains ) ) {
+				$domains_to_delete = explode( ',', $delete_domains );
+			}
+
+			$domains_to_add        = array_diff( $domains_to_add, $existing_alias_domains );
+			$already_added_domains = array_intersect( $existing_alias_domains, $domains_to_add );
+			if ( empty( $domains_to_add ) ) {
+				EE::error( "Alias domains: $already_added_domains is/are already present on the site." );
+			}
+
+			if ( ! empty ( $already_added_domains ) ) {
+				$already_added_domains = implode( ',', $already_added_domains );
+				EE::warning( "Following domains: $already_added_domains is/are already present on site, skipping addition of those." );
+			}
+
+			$diff_delete_domains = array_diff( $domains_to_delete, $existing_alias_domains );
+			if ( ! empty( $diff_delete_domains ) ) {
+				EE::error( "Domains to delete is/are not a subset of already existing alias domains." );
+			}
+
+			// Update nginx config
+			// Update SSL
+
+		} catch ( \Exception $e ) {
+			EE::error( $e->getMessage() );
+		}
+		if ( ! $call_on_create ) {
+			$site->alias_domains = $alias_domains;
+			$site->save();
+		}
+		EE::success( 'Alias domains updated on site ' . $this->site_data['site_url'] . '.' );
+		delem_log( 'site alias domains update end' );
+	}
 
 	/**
 	 * Function to enable/disable proxy cache of a site.
@@ -995,7 +1076,9 @@ abstract class EE_Site_Command {
 		if ( $this->site_data['site_ssl'] ) {
 			if ( ! $site_enable ) {
 				if ( 'custom' !== $this->site_data['site_ssl'] ) {
-					$this->init_ssl( $this->site_data['site_url'], $this->site_data['site_fs_path'], $this->site_data['site_ssl'], $this->site_data['site_ssl_wildcard'], $is_www_or_non_www_pointed, $force );
+
+					$alias_domains = empty( $this->site_data['alias_domains'] ) ? [] : explode( ',', $this->site_data['alias_domains'] );
+					$this->init_ssl( $this->site_data['site_url'], $this->site_data['site_fs_path'], $this->site_data['site_ssl'], $this->site_data['site_ssl_wildcard'], $is_www_or_non_www_pointed, $force, $alias_domains );
 				}
 
 				$this->dump_docker_compose_yml( [ 'nohttps' => false ] );
@@ -1045,16 +1128,17 @@ abstract class EE_Site_Command {
 	 * @param bool $wildcard       SSL with wildcard or not.
 	 * @param bool $www_or_non_www Allow LetsEncrypt on www or non-www subdomain.
 	 * @param bool $force          Force ssl renewal.
+	 * @param array $alias_domains Array of alias domains if any.
 	 *
 	 * @throws \EE\ExitException If --ssl flag has unrecognized value.
 	 * @throws \Exception
 	 */
-	protected function init_ssl( $site_url, $site_fs_path, $ssl_type, $wildcard = false, $www_or_non_www = false, $force = false ) {
+	protected function init_ssl( $site_url, $site_fs_path, $ssl_type, $wildcard = false, $www_or_non_www = false, $force = false, $alias_domains = [] ) {
 
 		\EE::debug( 'Starting SSL procedure' );
 		if ( 'le' === $ssl_type ) {
 			\EE::debug( 'Initializing LE' );
-			$this->init_le( $site_url, $site_fs_path, $wildcard, $www_or_non_www, $force );
+			$this->init_le( $site_url, $site_fs_path, $wildcard, $www_or_non_www, $force, $alias_domains );
 		} elseif ( 'inherit' === $ssl_type ) {
 			if ( $wildcard ) {
 				throw new \Exception( 'Cannot use --wildcard with --ssl=inherit', false );
@@ -1079,8 +1163,9 @@ abstract class EE_Site_Command {
 	 * @param bool $wildcard       SSL with wildcard or not.
 	 * @param bool $www_or_non_www Allow LetsEncrypt on www or non-www subdomain.
 	 * @param bool $force          Force ssl renewal.
+	 * @param array $alias_domains Array of alias domains if any.
 	 */
-	protected function init_le( $site_url, $site_fs_path, $wildcard = false, $www_or_non_www, $force = false ) {
+	protected function init_le( $site_url, $site_fs_path, $wildcard = false, $www_or_non_www, $force = false, $alias_domains = [] ) {
 		$preferred_challenge = get_config_value( 'preferred_ssl_challenge', '' );
 		$is_solver_dns       = ( $wildcard || 'dns' === $preferred_challenge ) ? true : false;
 		\EE::debug( 'Wildcard in init_le: ' . ( bool ) $wildcard );
@@ -1097,6 +1182,7 @@ abstract class EE_Site_Command {
 		}
 
 		$domains = $this->get_cert_domains( $site_url, $wildcard, $www_or_non_www );
+		$domains = array_merge( $domains, $alias_domains );
 
 		if ( ! $client->authorize( $domains, $wildcard, $preferred_challenge ) ) {
 			return;
@@ -1212,9 +1298,11 @@ abstract class EE_Site_Command {
 			$this->le_mail = \EE::get_config( 'le-mail' ) ?? \EE::input( 'Enter your mail id: ' );
 		}
 
-		$force   = \EE\Utils\get_flag_value( $assoc_args, 'force' );
-		$domains = $this->get_cert_domains( $this->site_data['site_url'], $this->site_data['site_ssl_wildcard'], $www_or_non_www );
-		$client  = new Site_Letsencrypt();
+		$force         = \EE\Utils\get_flag_value( $assoc_args, 'force' );
+		$alias_domains = empty( $this->site_data['alias_domains'] ) ? [] : explode( ',', $this->site_data['alias_domains'] );
+		$domains       = $this->get_cert_domains( $this->site_data['site_url'], $this->site_data['site_ssl_wildcard'], $www_or_non_www );
+		$domains       = array_merge( $domains, $alias_domains );
+		$client        = new Site_Letsencrypt();
 
 		$preferred_challenge = get_config_value( 'preferred_ssl_challenge', '' );
 
