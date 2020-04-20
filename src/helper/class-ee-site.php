@@ -433,9 +433,11 @@ abstract class EE_Site_Command {
 				$domains_to_delete = explode( ',', $delete_domains );
 			}
 
-			$domains_to_add        = array_diff( $domains_to_add, $existing_alias_domains );
 			$already_added_domains = array_intersect( $existing_alias_domains, $domains_to_add );
+			$domains_to_add        = array_diff( $domains_to_add, $existing_alias_domains );
+
 			if ( empty( $domains_to_add ) ) {
+				$already_added_domains = implode( ',', $already_added_domains );
 				EE::error( "Alias domains: $already_added_domains is/are already present on the site." );
 			}
 
@@ -444,20 +446,44 @@ abstract class EE_Site_Command {
 				EE::warning( "Following domains: $already_added_domains is/are already present on site, skipping addition of those." );
 			}
 
+			// Handle primary site in deletion
 			$diff_delete_domains = array_diff( $domains_to_delete, $existing_alias_domains );
 			if ( ! empty( $diff_delete_domains ) ) {
 				EE::error( "Domains to delete is/are not a subset of already existing alias domains." );
 			}
 
-			// Update nginx config
-			// Update SSL
+			$merged_addon_domains = array_merge( $existing_alias_domains, $domains_to_add );
 
+			// Update nginx config
+			$server_name             = implode( ' ', $merged_addon_domains );
+			$default_conf_content    = $this->generate_default_conf( $this->site_data['app_sub_type'], $this->site_data['cache_nginx_browser'], $server_name );
+			$site_conf_dir           = $this->site_data['site_fs_path'] . '/config';
+			$site_nginx_default_conf = $site_conf_dir . '/nginx/conf.d/main.conf';
+			$nginx_conf_backup       = EE_BACKUP_DIR . '/' . $this->site_data['site_url'] . '/main.conf.bak';
+			$this->fs->copy( $site_nginx_default_conf, $nginx_conf_backup, true );
+			$this->fs->dumpFile( $site_nginx_default_conf, $default_conf_content );
+
+			chdir( $this->site_data['site_fs_path'] );
+			if ( ! EE::exec( 'docker-compose exec nginx sh -c "nginx -t && nginx -s reload"' ) ) {
+				$this->fs->copy( $nginx_conf_backup, $site_nginx_default_conf, true );
+				EE::exec( 'docker-compose exec nginx sh -c "nginx -t && nginx -s reload"' );
+				EE::error( "Nginx reload failed. Aborting update." );
+			}
+
+			// Update SSL
+			// TODO: work on redirect confs
+			$this->site_data['alias_domains'] = implode( ',', $merged_addon_domains );
+			$is_ssl                           = $this->site_data['site_ssl'] ? true : false;
+			$this->dump_docker_compose_yml( [ 'nohttps' => $is_ssl ] );
 		} catch ( \Exception $e ) {
 			EE::error( $e->getMessage() );
 		}
 		if ( ! $call_on_create ) {
-			$site->alias_domains = $alias_domains;
+			$site->alias_domains = implode( ',', $merged_addon_domains );
 			$site->save();
+			if ( $is_ssl ) {
+				$this->ssl_renew( [ $this->site_data['site_url'] ], [ 'force' => true ] );
+			}
 		}
 		EE::success( 'Alias domains updated on site ' . $this->site_data['site_url'] . '.' );
 		delem_log( 'site alias domains update end' );
@@ -1690,6 +1716,8 @@ abstract class EE_Site_Command {
 		$this->fs->copy( $this->site_data['ssl_key'], $ssl_key_dest, true );
 		$this->fs->copy( $this->site_data['ssl_crt'], $ssl_crt_dest, true );
 	}
+
+	abstract protected function generate_default_conf( $site_type, $cache_type, $server_name );
 
 	abstract public function create( $args, $assoc_args );
 
