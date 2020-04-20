@@ -78,4 +78,5 @@ class UpdateSslRedirectsExtendor extends EE\Site\Type\EE_Site_Command {
 	public function create( $args, $assoc_args ) {}
 	protected function rollback() {}
 	public function dump_docker_compose_yml( $additional_filters = [] ) {}
+	protected function generate_default_conf( $site_type, $cache_type, $server_name ) {}
 }
