@@ -404,7 +404,4 @@ class HTML extends EE_Site_Command {
 		\EE::success( 'Rollback complete. Exiting now.' );
 		exit;
 	}
-
-	protected function generate_default_conf( $site_type, $cache_type, $server_name ) {}
-
 }
