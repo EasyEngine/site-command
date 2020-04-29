@@ -802,7 +802,7 @@ abstract class EE_Site_Command {
 				if ( EE::exec( "docker-compose exec $container nginx -t" ) ) {
 					\EE\Site\Utils\run_compose_command( 'restart', $container );
 				} else {
-					\EE\Utils\delem_log( 'site restart stop due Nginx test failure' );
+					\EE\Utils\delem_log( 'site restart stop due to Nginx test failure' );
 					\EE::error( 'Nginx test failed' );
 				}
 			} else {
