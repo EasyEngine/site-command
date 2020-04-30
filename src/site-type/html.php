@@ -404,5 +404,4 @@ class HTML extends EE_Site_Command {
 		\EE::success( 'Rollback complete. Exiting now.' );
 		exit;
 	}
-
 }

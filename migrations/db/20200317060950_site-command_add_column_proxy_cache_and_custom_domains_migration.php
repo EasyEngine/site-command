@@ -4,7 +4,7 @@ namespace EE\Migration;
 use EE;
 use EE\Migration\Base;
 
-class AddColumnStaleCacheMigration extends Base {
+class AddColumnProxyCacheAndCustomDomainsMigration extends Base {
 
 	private static $pdo;
 
@@ -35,10 +35,12 @@ class AddColumnStaleCacheMigration extends Base {
 			return;
 		}
 
-		$query = 'ALTER TABLE sites ADD COLUMN proxy_cache VARCHAR NOT NULL DEFAULT \'off\';';
+		$query_for_proxy_cache   = 'ALTER TABLE sites ADD COLUMN proxy_cache VARCHAR NOT NULL DEFAULT \'off\';';
+		$query_for_alias_domains = 'ALTER TABLE sites ADD COLUMN alias_domains VARCHAR';
 
 		try {
-			self::$pdo->exec( $query );
+			self::$pdo->exec( $query_for_proxy_cache );
+			self::$pdo->exec( $query_for_alias_domains );
 		} catch ( PDOException $exception ) {
 			EE::error( 'Encountered Error while adding column: ' . $exception->getMessage(), false );
 		}
