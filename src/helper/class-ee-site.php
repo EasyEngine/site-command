@@ -339,6 +339,8 @@ abstract class EE_Site_Command {
 	 * [--proxy-cache-max-time=<time-in-s-or-m>]
 	 * : Max time for proxy cache to last.
 	 *
+	 * [--proxy-cache-key-zone-size=<size-in-m>]
+	 *
 	 * [--add-alias-domains=<comma-seprated-domains-to-add>]
 	 * : Comma seprated list of domains to add to site's alias domains.
 	 *
@@ -490,33 +492,42 @@ abstract class EE_Site_Command {
 
 		try {
 			if ( ! $call_on_create ) {
-				$site                        = $this->site_data;
-				$array_data                  = (array) $this->site_data;
-				$this->site_data             = reset( $array_data );
+				$site            = $this->site_data;
+				$array_data      = (array) $this->site_data;
+				$this->site_data = reset( $array_data );
 			}
 			$proxy_conf_location         = EE_ROOT_DIR . '/services/nginx-proxy/conf.d/' . $this->site_data['site_url'] . '.conf';
 			$proxy_vhost_location        = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/' . $this->site_data['site_url'] . '_location';
 			$proxy_vhost_location_subdom = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/*.' . $this->site_data['site_url'] . '_location';
 
-			$proxy_cache_time = strtolower( get_flag_value( $assoc_args, 'proxy-cache-max-time', '30s' ) );
-			$proxy_cache_size = strtolower( get_flag_value( $assoc_args, 'proxy-cache-max-size', '256m' ) );
-			$wrong_time       = false;
-			$wrong_size       = false;
+			$proxy_cache_time          = strtolower( get_flag_value( $assoc_args, 'proxy-cache-max-time', '1s' ) );
+			$proxy_cache_size          = strtolower( get_flag_value( $assoc_args, 'proxy-cache-max-size', '256m' ) );
+			$proxy_cache_key_zone_size = strtolower( get_flag_value( $assoc_args, 'proxy-cache-key-zone-size', '10m' ) );
+			$wrong_time                = false;
+			$wrong_size                = false;
+			$wrong_key_size            = false;
 
 			in_array( substr( $proxy_cache_time, - 1 ), [ 's', 'm' ] ) ?: $wrong_time = true;
 			in_array( substr( $proxy_cache_size, - 1 ), [ 'm', 'g' ] ) ?: $wrong_size = true;
+			in_array( substr( $proxy_cache_key_zone_size, - 1 ), [ 'm' ] ) ?: $wrong_key_size = true;
 
 			is_numeric( substr( $proxy_cache_time, 0, - 1 ) ) ?: $wrong_time = true;
 			is_numeric( substr( $proxy_cache_size, 0, - 1 ) ) ?: $wrong_size = true;
+			is_numeric( substr( $proxy_cache_key_zone_size, 0, - 1 ) ) ?: $wrong_key_size = true;
 
 			if ( $wrong_time ) {
-				EE::warning( "Wrong value `$proxy_cache_time` supplied to param: `proxy-cache-max-time`, replacing it with default:30s" );
-				$proxy_cache_time = '30s';
+				EE::warning( "Wrong value `$proxy_cache_time` supplied to param: `proxy-cache-max-time`, replacing it with default:1s" );
+				$proxy_cache_time = '1s';
 			}
 
 			if ( $wrong_size ) {
 				EE::warning( "Wrong value `$proxy_cache_size` supplied to param: `proxy-cache-max-size`, replacing it with default:256m" );
 				$proxy_cache_size = '256m';
+			}
+
+			if ( $wrong_key_size ) {
+				EE::warning( "Wrong value `$proxy_cache_key_zone_size` supplied to param: `proxy-cache-key-zone-size`, replacing it with default:10m" );
+				$proxy_cache_key_zone_size = '10m';
 			}
 
 			EE::log( $log_message . ' proxy cache for: ' . $this->site_data['site_url'] );
@@ -526,10 +537,11 @@ abstract class EE_Site_Command {
 				$sanitized_site_url = str_replace( '.', '-', $this->site_data['site_url'] );
 
 				$data               = [
-					'site_url'           => $this->site_data['site_url'],
-					'sanitized_site_url' => $sanitized_site_url,
-					'proxy_cache_size'   => $proxy_cache_size,
-					'proxy_cache_time'   => $proxy_cache_time,
+					'site_url'                  => $this->site_data['site_url'],
+					'sanitized_site_url'        => $sanitized_site_url,
+					'proxy_cache_size'          => $proxy_cache_size,
+					'proxy_cache_key_zone_size' => $proxy_cache_key_zone_size,
+					'proxy_cache_time'          => $proxy_cache_time,
 				];
 				$proxy_conf_content = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx-proxy/proxy.conf.mustache', $data );
 				$this->fs->dumpFile( $proxy_conf_location, $proxy_conf_content );
@@ -563,7 +575,15 @@ abstract class EE_Site_Command {
 					EE::exec( 'docker exec ' . EE_PROXY_TYPE . " bash -c 'rm -rf /var/cache/nginx/" . $this->site_data['site_url'] . "'" );
 				}
 			}
-			\EE\Site\Utils\reload_global_nginx_proxy();
+			if ( EE::exec( 'docker exec ' . EE_PROXY_TYPE . " bash -c 'nginx -t'" ) ) {
+				\EE\Site\Utils\reload_global_nginx_proxy();
+				EE::exec( 'docker restart ' . EE_PROXY_TYPE );
+			} else {
+				$this->fs->remove( $proxy_conf_location );
+				$this->fs->remove( $proxy_vhost_location );
+				$this->fs->remove( $proxy_vhost_location_subdom );
+				\EE\Site\Utils\reload_global_nginx_proxy();
+			}
 		} catch ( \Exception $e ) {
 			EE::error( $e->getMessage() );
 		}
