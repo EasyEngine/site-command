@@ -542,7 +542,7 @@ abstract class EE_Site_Command {
 					'proxy_cache_size'          => $proxy_cache_size,
 					'proxy_cache_key_zone_size' => $proxy_cache_key_zone_size,
 					'proxy_cache_time'          => $proxy_cache_time,
-                    'easyengine_version'        => 'v' . EE_VERSION,
+					'easyengine_version'        => 'v' . EE_VERSION,
 				];
 				$proxy_conf_content = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx-proxy/proxy.conf.mustache', $data );
 				$this->fs->dumpFile( $proxy_conf_location, $proxy_conf_content );
