@@ -340,6 +340,7 @@ abstract class EE_Site_Command {
 	 * : Max time for proxy cache to last.
 	 *
 	 * [--proxy-cache-key-zone-size=<size-in-m>]
+	 * : Size of proxy cache key zone.
 	 *
 	 * [--add-alias-domains=<comma-seprated-domains-to-add>]
 	 * : Comma seprated list of domains to add to site's alias domains.
