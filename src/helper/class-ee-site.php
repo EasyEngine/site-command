@@ -1104,7 +1104,7 @@ abstract class EE_Site_Command {
 		// Need second reload sometimes for changes to reflect.
 		\EE\Site\Utils\reload_global_nginx_proxy();
 
-		$is_www_or_non_www_pointed = $this->check_www_or_non_www_domain( $this->site_data['site_url'], $this->site_data['site_fs_path'] ) || $this->site_data['site_ssl_wildcard'];
+		$is_www_or_non_www_pointed = $this->check_www_or_non_www_domain( $this->site_data['site_url'], $this->site_data['site_fs_path'], $this->site_data['site_container_fs_path'] ) || $this->site_data['site_ssl_wildcard'];
 		if ( ! $is_www_or_non_www_pointed ) {
 			$fs          = new Filesystem();
 			$confd_path  = EE_ROOT_DIR . '/services/nginx-proxy/conf.d/';
@@ -1273,14 +1273,16 @@ abstract class EE_Site_Command {
 	 *
 	 * @param string Site url.
 	 * @param string Absolute path of site.
+	 * @param string $site_container_path
 	 *
 	 * @return bool
 	 */
-	protected function check_www_or_non_www_domain( $site_url, $site_path ): bool {
+	protected function check_www_or_non_www_domain( $site_url, $site_path, $site_container_path ): bool {
 
 		$random_string = EE\Utils\random_password();
 		$successful    = false;
-		$file_path     = $site_path . '/app/htdocs/check.html';
+		$extra_path    = str_replace( '/var/www/htdocs', '', $site_container_path );
+		$file_path     = $site_path . '/app/htdocs' . $extra_path . '/check.html';
 		file_put_contents( $file_path, $random_string );
 
 		if ( 0 === strpos( $site_url, 'www.' ) ) {
