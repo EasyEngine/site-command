@@ -668,6 +668,7 @@ abstract class EE_Site_Command {
 			EE::error( $e->getMessage() );
 		}
 		$site->save();
+		$this->restart( $args, [ 'php' => true ] );
 		EE::success( 'Updated site ' . $this->site_data['site_url'] . ' to PHP version: ' . $php_version );
 		delem_log( 'site php version update end' );
 	}
