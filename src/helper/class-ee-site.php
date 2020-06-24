@@ -1031,7 +1031,7 @@ abstract class EE_Site_Command {
 		$args = auto_site_name( $args, 'site', __FUNCTION__ );
 		$all  = \EE\Utils\get_flag_value( $assoc_args, 'all' );
 		if ( ! array_key_exists( 'nginx', $reload_commands ) ) {
-			$reload_commands['nginx'] = 'nginx sh -c \'nginx -t && service openresty reload\'';
+			$reload_commands['nginx'] = 'nginx sh -c \'nginx -t && nginx -s reload\'';
 		}
 		$no_service_specified = count( $assoc_args ) === 0;
 
