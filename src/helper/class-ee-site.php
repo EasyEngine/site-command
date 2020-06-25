@@ -343,10 +343,10 @@ abstract class EE_Site_Command {
 	 * : Size of proxy cache key zone.
 	 *
 	 * [--add-alias-domains=<comma-seprated-domains-to-add>]
-	 * : Comma seprated list of domains to add to site's alias domains.
+	 * : Comma seprated list of domains to add to site's alias domains. These can be configured only on WordPress subdom MU.
 	 *
 	 * [--delete-alias-domains=<comma-seprated-domains-to-delete>]
-	 * : Comma seprated list of domains to delete from site's alias domains.
+	 * : Comma seprated list of domains to delete from site's alias domains. These can be configured only on WordPress subdom MU.
 	 *
 	 * ## EXAMPLES
 	 *
@@ -367,6 +367,12 @@ abstract class EE_Site_Command {
 	 *
 	 *     # Update proxy cache of site.
 	 *     $ ee site update example.com --proxy-cache=on --proxy-cache-max-size=1g --proxy-cache-max-time=30s
+	 *
+	 *     # Add alias domains to a WordPress subdom site.
+	 *     $ ee site update example.com --add-alias-domains='a.com,b.com,c.com'
+	 *
+	 *     # Delete alias domains from a WordPress subdom site.
+	 *     $ ee site update example.com --delete-alias-domains='a.com,b.com'
 	 */
 	public function update( $args, $assoc_args ) {
 
@@ -412,8 +418,8 @@ abstract class EE_Site_Command {
 			$this->site_data = reset( $array_data );
 
 			// Check if it is a WP site.
-			if ( 'wp' !== $this->site_data['site_type'] ) {
-				EE::error( 'Currently alias domains are only supported in WordPress site type.' );
+			if ( 'wp' !== $this->site_data['site_type'] || 'subdom' !== $this->site_data['app_sub_type'] ) {
+				EE::error( 'Currently alias domains are only supported in WordPress subdom MU sites.' );
 			}
 
 			// Validate data.
