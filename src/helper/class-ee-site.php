@@ -497,7 +497,6 @@ abstract class EE_Site_Command {
 
 		$site->alias_domains = implode( ',', $final_alias_domains );
 		$site->save();
-		EE::success( 'Alias domains updated.' );
 		if ( $is_ssl ) {
 			// Update SSL.
 			EE::log( 'Updating and force renewing SSL certificate to accomodated alias domain changes.' );
@@ -507,6 +506,15 @@ abstract class EE_Site_Command {
 		// Required as env variables have changed.
 		EE::exec( 'docker-compose up -d nginx' );
 		EE::success( 'Alias domains updated on site ' . $this->site_data['site_url'] . '.' );
+		if ( ! empty( $this->site_data['proxy_cache'] ) && 'on' === $this->site_data['proxy_cache'] ) {
+			EE::log( 'As proxy cache is enabled on this site, updating config to enable it in newly added alias domains.' );
+			$this->site_data = $site;
+			$assoc_args      = [
+				'proxy-cache' => 'on',
+				'force'       => true,
+			];
+			$this->update_proxy_cache( $args, $assoc_args );
+		}
 		delem_log( 'site alias domains update end' );
 	}
 
@@ -516,12 +524,12 @@ abstract class EE_Site_Command {
 	protected function update_proxy_cache( $args, $assoc_args, $call_on_create = false ) {
 
 		$proxy_cache = get_flag_value( $assoc_args, 'proxy-cache', 'on' );
-		$force       = get_flag_value( $assoc_args, 'proxy-cache', 'force' );
+		$force       = get_flag_value( $assoc_args, 'force', false );
 
 
 		if ( ! $call_on_create ) {
 
-			if ( $proxy_cache === $this->site_data->proxy_cache ) {
+			if ( $proxy_cache === $this->site_data->proxy_cache && ! $force ) {
 				EE::error( 'Site ' . $this->site_data->site_url . ' already has proxy cache: ' . $proxy_cache );
 			}
 		}
@@ -595,7 +603,10 @@ abstract class EE_Site_Command {
 					'easyengine_version'        => 'v' . EE_VERSION,
 				];
 				$proxy_conf_content = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx-proxy/proxy.conf.mustache', $data );
-				$this->fs->dumpFile( $proxy_conf_location, $proxy_conf_content );
+
+				if ( ! $force ) {
+					$this->fs->dumpFile( $proxy_conf_location, $proxy_conf_content );
+				}
 
 				$proxy_vhost_content = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx-proxy/vhost_location.conf.mustache', $data );
 				$this->fs->dumpFile( $proxy_vhost_location, $proxy_vhost_content );
