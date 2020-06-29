@@ -11,10 +11,11 @@ use function EE\Utils\extract_zip;
 use function EE\Utils\get_flag_value;
 use function EE\Utils\get_config_value;
 use function EE\Utils\delem_log;
+use function EE\Utils\remove_trailing_slash;
 use function EE\Site\Utils\auto_site_name;
 use function EE\Site\Utils\get_site_info;
 use function EE\Site\Utils\reload_global_nginx_proxy;
-use function EE\Utils\remove_trailing_slash;
+use function EE\Site\Utils\get_parent_of_alias;
 
 /**
  * Base class for Site command
@@ -457,6 +458,18 @@ abstract class EE_Site_Command {
 			}
 			if ( ! empty( $diff_delete_domains ) ) {
 				EE::error( "Domains to delete is/are not a subset of already existing alias domains." );
+			}
+
+			foreach ( $domains_to_add as $ad ) {
+
+				if ( Site::find( $ad ) ) {
+					\EE::error( sprintf( "%1\$s already exists as a site. If you want to add it to alias domain of this site, then please delete the existing site using:\n`ee site delete %1\$s`", $ad ) );
+				}
+
+				$parent_site = get_parent_of_alias( $ad );
+				if ( ! empty( $parent_site ) ) {
+					\EE::error( sprintf( "Site %1\$s already exists as an alias domain for site: %2\$s. Please delete it from alias domains of %2\$s if you want to add it as an alias domain for this site.", $ad, $parent_site ) );
+				}
 			}
 
 			$final_alias_domains = array_merge( $existing_alias_domains, $domains_to_add );
