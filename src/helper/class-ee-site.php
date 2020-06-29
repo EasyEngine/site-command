@@ -477,6 +477,9 @@ abstract class EE_Site_Command {
 			EE::log( 'Updating and force renewing SSL certificate to accomodated alias domain changes.' );
 			$this->ssl_renew( [ $this->site_data['site_url'] ], [ 'force' => true ] );
 		}
+		chdir( $this->site_data['site_fs_path'] );
+		// Required as env variables have changed.
+		EE::exec( 'docker-compose up -d nginx' );
 		EE::success( 'Alias domains updated on site ' . $this->site_data['site_url'] . '.' );
 		delem_log( 'site alias domains update end' );
 	}
