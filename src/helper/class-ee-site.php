@@ -11,10 +11,11 @@ use function EE\Utils\extract_zip;
 use function EE\Utils\get_flag_value;
 use function EE\Utils\get_config_value;
 use function EE\Utils\delem_log;
+use function EE\Utils\remove_trailing_slash;
 use function EE\Site\Utils\auto_site_name;
 use function EE\Site\Utils\get_site_info;
 use function EE\Site\Utils\reload_global_nginx_proxy;
-use function EE\Utils\remove_trailing_slash;
+use function EE\Site\Utils\get_parent_of_alias;
 
 /**
  * Base class for Site command
@@ -245,21 +246,34 @@ abstract class EE_Site_Command {
 		$proxy_conf_location         = EE_ROOT_DIR . '/services/nginx-proxy/conf.d/' . $site_url . '.conf';
 		$proxy_vhost_location_subdom = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/*.' . $this->site_data['site_url'] . '_location';
 
+		$alias_domains = [];
+
+		if ( ! empty( $this->site_data['alias_domains'] ) ) {
+			$alias_domains = array_diff( explode( ',', $this->site_data['alias_domains'] ), [
+				$this->site_data['site_url'],
+				'*.' . $this->site_data['site_url'],
+			] );
+		}
+
+		$conf_locations = [ $proxy_conf_location, $proxy_vhost_location, $proxy_vhost_location_subdom ];
+
 		$reload = false;
 
-		if ( $this->fs->exists( $proxy_conf_location ) ) {
-			$this->fs->remove( $proxy_conf_location );
-			$reload = true;
+		foreach ( $conf_locations as $cl ) {
+
+			if ( $this->fs->exists( $cl ) ) {
+				$this->fs->remove( $cl );
+				$reload = true;
+			}
 		}
 
-		if ( $this->fs->exists( $proxy_vhost_location ) ) {
-			$this->fs->remove( $proxy_vhost_location );
-			$reload = true;
-		}
+		foreach ( $alias_domains as $ad ) {
 
-		if ( $this->fs->exists( $proxy_vhost_location_subdom ) ) {
-			$this->fs->remove( $proxy_vhost_location_subdom );
-			$reload = true;
+			$proxy_vhost_location = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/' . $ad . '_location';
+			if ( $this->fs->exists( $proxy_vhost_location ) ) {
+				$this->fs->remove( $proxy_vhost_location );
+				$reload = true;
+			}
 		}
 
 		if ( $reload ) {
@@ -459,6 +473,18 @@ abstract class EE_Site_Command {
 				EE::error( "Domains to delete is/are not a subset of already existing alias domains." );
 			}
 
+			foreach ( $domains_to_add as $ad ) {
+
+				if ( Site::find( $ad ) ) {
+					\EE::error( sprintf( "%1\$s already exists as a site. If you want to add it to alias domain of this site, then please delete the existing site using:\n`ee site delete %1\$s`", $ad ) );
+				}
+
+				$parent_site = get_parent_of_alias( $ad );
+				if ( ! empty( $parent_site ) ) {
+					\EE::error( sprintf( "Site %1\$s already exists as an alias domain for site: %2\$s. Please delete it from alias domains of %2\$s if you want to add it as an alias domain for this site.", $ad, $parent_site ) );
+				}
+			}
+
 			$final_alias_domains = array_merge( $existing_alias_domains, $domains_to_add );
 			$final_alias_domains = array_diff( $final_alias_domains, $domains_to_delete );
 
@@ -471,13 +497,24 @@ abstract class EE_Site_Command {
 
 		$site->alias_domains = implode( ',', $final_alias_domains );
 		$site->save();
-		EE::success( 'Alias domains updated.' );
 		if ( $is_ssl ) {
 			// Update SSL.
 			EE::log( 'Updating and force renewing SSL certificate to accomodated alias domain changes.' );
 			$this->ssl_renew( [ $this->site_data['site_url'] ], [ 'force' => true ] );
 		}
+		chdir( $this->site_data['site_fs_path'] );
+		// Required as env variables have changed.
+		EE::exec( 'docker-compose up -d nginx' );
 		EE::success( 'Alias domains updated on site ' . $this->site_data['site_url'] . '.' );
+		if ( ! empty( $this->site_data['proxy_cache'] ) && 'on' === $this->site_data['proxy_cache'] ) {
+			EE::log( 'As proxy cache is enabled on this site, updating config to enable it in newly added alias domains.' );
+			$this->site_data = $site;
+			$assoc_args      = [
+				'proxy-cache' => 'on',
+				'force'       => true,
+			];
+			$this->update_proxy_cache( $args, $assoc_args );
+		}
 		delem_log( 'site alias domains update end' );
 	}
 
@@ -487,10 +524,12 @@ abstract class EE_Site_Command {
 	protected function update_proxy_cache( $args, $assoc_args, $call_on_create = false ) {
 
 		$proxy_cache = get_flag_value( $assoc_args, 'proxy-cache', 'on' );
+		$force       = get_flag_value( $assoc_args, 'force', false );
+
 
 		if ( ! $call_on_create ) {
 
-			if ( $proxy_cache === $this->site_data->proxy_cache ) {
+			if ( $proxy_cache === $this->site_data->proxy_cache && ! $force ) {
 				EE::error( 'Site ' . $this->site_data->site_url . ' already has proxy cache: ' . $proxy_cache );
 			}
 		}
@@ -537,7 +576,19 @@ abstract class EE_Site_Command {
 				$proxy_cache_key_zone_size = '10m';
 			}
 
-			EE::log( $log_message . ' proxy cache for: ' . $this->site_data['site_url'] );
+			if ( $force ) {
+				EE::log( $log_message . ' proxy cache for alias domains of site: ' . $this->site_data['site_url'] );
+			} else {
+				EE::log( $log_message . ' proxy cache for: ' . $this->site_data['site_url'] );
+			}
+
+			$alias_domains = [];
+			if ( ! empty( $this->site_data['alias_domains'] ) ) {
+				$alias_domains = array_diff( explode( ',', $this->site_data['alias_domains'] ), [
+					$this->site_data['site_url'],
+					'*.' . $this->site_data['site_url'],
+				] );
+			}
 
 			if ( 'on' === $proxy_cache ) {
 
@@ -552,7 +603,10 @@ abstract class EE_Site_Command {
 					'easyengine_version'        => 'v' . EE_VERSION,
 				];
 				$proxy_conf_content = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx-proxy/proxy.conf.mustache', $data );
-				$this->fs->dumpFile( $proxy_conf_location, $proxy_conf_content );
+
+				if ( ! $force ) {
+					$this->fs->dumpFile( $proxy_conf_location, $proxy_conf_content );
+				}
 
 				$proxy_vhost_content = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx-proxy/vhost_location.conf.mustache', $data );
 				$this->fs->dumpFile( $proxy_vhost_location, $proxy_vhost_content );
@@ -560,22 +614,36 @@ abstract class EE_Site_Command {
 				if ( 'subdom' === $this->site_data['app_sub_type'] ) {
 					$this->fs->dumpFile( $proxy_vhost_location_subdom, $proxy_vhost_content );
 				}
+
+				foreach ( $alias_domains as $ad ) {
+
+					$proxy_vhost_location = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/' . $ad . '_location';
+					$proxy_vhost_content  = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx-proxy/vhost_location.conf.mustache', $data );
+					$this->fs->dumpFile( $proxy_vhost_location, $proxy_vhost_content );
+				}
 			} else {
 				$reload = false;
 
-				if ( $this->fs->exists( $proxy_conf_location ) ) {
-					$this->fs->remove( $proxy_conf_location );
-					$reload = true;
+
+				$conf_locations = [ $proxy_conf_location, $proxy_vhost_location, $proxy_vhost_location_subdom ];
+
+				$reload = false;
+
+				foreach ( $conf_locations as $cl ) {
+
+					if ( $this->fs->exists( $cl ) ) {
+						$this->fs->remove( $cl );
+						$reload = true;
+					}
 				}
 
-				if ( $this->fs->exists( $proxy_vhost_location ) ) {
-					$this->fs->remove( $proxy_vhost_location );
-					$reload = true;
-				}
+				foreach ( $alias_domains as $ad ) {
 
-				if ( $this->fs->exists( $proxy_vhost_location_subdom ) ) {
-					$this->fs->remove( $proxy_vhost_location_subdom );
-					$reload = true;
+					$proxy_vhost_location = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/' . $ad . '_location';
+					if ( $this->fs->exists( $proxy_vhost_location ) ) {
+						$this->fs->remove( $proxy_vhost_location );
+						$reload = true;
+					}
 				}
 
 				if ( $reload ) {
@@ -599,7 +667,7 @@ abstract class EE_Site_Command {
 			$site->proxy_cache = $proxy_cache;
 			$site->save();
 		}
-		EE::success( $log_message . ' on site ' . $this->site_data['site_url'] . '.' );
+		EE::success( 'Proxy cache update on site ' . $this->site_data['site_url'] . ' completed.' );
 		delem_log( 'site proxy cache update end' );
 	}
 

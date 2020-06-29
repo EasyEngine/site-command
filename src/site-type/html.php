@@ -13,6 +13,7 @@ use function EE\Site\Utils\auto_site_name;
 use function EE\Site\Utils\get_site_info;
 use function EE\Site\Utils\get_public_dir;
 use function EE\Site\Utils\get_webroot;
+use function EE\Site\Utils\get_parent_of_alias;
 use function EE\Utils\get_flag_value;
 
 /**
@@ -111,6 +112,12 @@ class HTML extends EE_Site_Command {
 		}
 		if ( Site::find( $this->site_data['site_url'] ) ) {
 			\EE::error( sprintf( "Site %1\$s already exists. If you want to re-create it please delete the older one using:\n`ee site delete %1\$s`", $this->site_data['site_url'] ) );
+		}
+
+		$parent_site = get_parent_of_alias( $this->site_data['site_url'] );
+
+		if ( ! empty( $parent_site ) ) {
+			\EE::error( sprintf( "Site %1\$s already exists as an alias domain for site: %2\$s. Please delete it from alias domains of %2\$s if you want to create an independent site for it.", $this->site_data['site_url'], $parent_site ) );
 		}
 
 		$this->site_data['site_fs_path']           = WEBROOT . $this->site_data['site_url'];
