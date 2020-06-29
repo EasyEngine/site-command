@@ -585,3 +585,56 @@ function get_webroot( $original_src_dir, $container_fs_path ) {
 
 	return empty( $public_dir_path ) ? $original_src_dir : $original_src_dir . '/' . rtrim( $public_dir_path, '/' );
 }
+
+/**
+ * Get all existing alias domains from db.
+ *
+ * @return array of all alias domains.
+ */
+function get_all_alias_domains() {
+
+	$existing_alias_domains     = Site::all( [ 'alias_domains' ] );
+	$existing_site_domains      = Site::all( [ 'site_url' ] );
+	$all_existing_alias_domains = [];
+	$all_existing_site_domains  = [];
+	if ( ! empty( $existing_alias_domains ) ) {
+		$all_existing_alias_domains = array_column( $existing_alias_domains, 'alias_domains' );
+	}
+
+	if ( ! empty( $existing_site_domains ) ) {
+		$all_existing_site_domains = array_column( $existing_site_domains, 'site_url' );
+	}
+	$array_of_alias_domains = [];
+	foreach ( $all_existing_alias_domains as $existing_alias_domains ) {
+		foreach ( explode( ',', $existing_alias_domains ) as $ad ) {
+			if ( ! empty( $ad ) ) {
+				$array_of_alias_domains[] = $ad;
+			}
+		}
+	}
+
+	return array_diff( $array_of_alias_domains, $all_existing_site_domains );
+}
+
+/**
+ * Get parent site of an alias domain.
+ *
+ * @param string $alias  alias domain whose parent needs to be found.
+ *
+ * @return string parent site.
+ */
+function get_parent_of_alias( $alias ) {
+
+	if ( ! in_array( $alias, get_all_alias_domains(), true ) ) {
+		// the alis domain does not exist. So it has no parent.
+		return '';
+	}
+
+	$output = EE::db()
+				->table( 'sites' )
+				->select( ...[ 'site_url' ] )
+				->where( 'alias_domains', 'like', '%' . $alias . '%' )
+				->first();
+
+	return reset( $output );
+}
