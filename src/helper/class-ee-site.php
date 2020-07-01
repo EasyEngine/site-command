@@ -383,10 +383,10 @@ abstract class EE_Site_Command {
 	 *     $ ee site update example.com --proxy-cache=on --proxy-cache-max-size=1g --proxy-cache-max-time=30s
 	 *
 	 *     # Add alias domains to a WordPress subdom site.
-	 *     $ ee site update example.com --add-alias-domains='a.com,b.com,c.com'
+	 *     $ ee site update example.com --add-alias-domains='a.com,*.a.com,b.com,c.com'
 	 *
 	 *     # Delete alias domains from a WordPress subdom site.
-	 *     $ ee site update example.com --delete-alias-domains='a.com,b.com'
+	 *     $ ee site update example.com --delete-alias-domains='a.com,*.a.com,b.com'
 	 */
 	public function update( $args, $assoc_args ) {
 
