@@ -1013,9 +1013,12 @@ abstract class EE_Site_Command {
 	 * [--object]
 	 * : Clear object cache.
 	 *
+	 * [--proxy]
+	 * : Clear proxy cache.
+	 *
 	 * ## EXAMPLES
 	 *
-	 *     # Clear Both cache type for site.
+	 *     # Clear all enabled caches for site.
 	 *     $ ee site clean example.com
 	 *
 	 *     # Clear Object cache for site.
@@ -1023,21 +1026,30 @@ abstract class EE_Site_Command {
 	 *
 	 *     # Clear Page cache for site.
 	 *     $ ee site clean example.com --page
+	 *
+	 *     # Clear Proxy cache for site.
+	 *     $ ee site clean example.com --proxy
 	 */
 	public function clean( $args, $assoc_args ) {
 
 		\EE\Utils\delem_log( 'site clean start' );
 		$object          = \EE\Utils\get_flag_value( $assoc_args, 'object' );
 		$page            = \EE\Utils\get_flag_value( $assoc_args, 'page' );
+		$proxy           = \EE\Utils\get_flag_value( $assoc_args, 'proxy' );
 		$args            = auto_site_name( $args, 'site', __FUNCTION__ );
 		$this->site_data = get_site_info( $args, false, true, false );
 		$purge_key       = '';
 		$error           = [];
 
 		// No param passed.
-		if ( empty( $object ) && empty( $page ) ) {
+		if ( empty( $object ) && empty( $page ) && empty( $proxy ) ) {
+
 			$object = true;
 			$page   = true;
+
+			if ( 'on' === $this->site_data->proxy_cache ) {
+				$proxy = true;
+			}
 		}
 
 		// Object cache clean.
@@ -1058,6 +1070,15 @@ abstract class EE_Site_Command {
 			}
 		}
 
+		// Clear proxy cache.
+		if ( ! empty( $proxy ) ) {
+			if ( 'on' === $this->site_data->proxy_cache ) {
+				EE::exec( sprintf( 'docker exec -it %s bash -c "rm -r /var/cache/nginx/%s/*"', EE_PROXY_TYPE, $this->site_data->site_url ) );
+			} else {
+				$error[] = 'Proxy cache is not enabled on site.';
+			}
+		}
+
 		// If Page and Object both passed.
 		if ( ! empty( $object ) && ! empty( $page ) ) {
 			$purge_key = $this->site_data->site_url;
@@ -1069,11 +1090,13 @@ abstract class EE_Site_Command {
 
 		EE\Site\Utils\clean_site_cache( $purge_key );
 
-		if ( $page ) {
-			\EE::success( 'Page cache cleared for ' . $this->site_data->site_url );
-		}
-		if ( $object ) {
-			\EE::success( 'Object cache cleared for ' . $this->site_data->site_url );
+		$cache_flags = [ 'Page' => $page, 'Object' => $object, 'Proxy' => $proxy ];
+
+		foreach ( $cache_flags as $name => $is_purged ) {
+
+			if ( $is_purged ) {
+				\EE::success( $name . ' cache cleared for ' . $this->site_data->site_url );
+			}
 		}
 
 		\EE\Utils\delem_log( 'site clean end' );
