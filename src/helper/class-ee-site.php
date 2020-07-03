@@ -1455,7 +1455,12 @@ abstract class EE_Site_Command {
 			$is_solver_dns   = ( $this->site_data['site_ssl_wildcard'] || 'dns' === $preferred_challenge ) ? true : false;
 			$api_key_present = ! empty( get_config_value( 'cloudflare-api-key' ) );
 
+			if ( $called_by_ee && ! $is_solver_dns && $api_key_present ) {
+				throw $e;
+			}
+
 			$warning = ( $is_solver_dns && $api_key_present ) ? "The dns entries have not yet propogated. Manually check: \nhost -t TXT _acme-challenge." . $this->site_data['site_url'] . "\nBefore retrying `ee site ssl " . $this->site_data['site_url'] . "`" : 'Failed to verify SSL: ' . $e->getMessage();
+
 			EE::warning( $warning );
 			EE::warning( sprintf( 'Check logs and retry `ee site ssl %s` once the issue is resolved.', $this->site_data['site_url'] ) );
 
