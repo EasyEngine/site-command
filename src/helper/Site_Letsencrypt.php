@@ -262,7 +262,7 @@ class Site_Letsencrypt {
 					\EE::debug( $e->getMessage() );
 					\EE::warning( 'Challenge Authorization failed. Check logs and check if your domain is pointed correctly to this server.' );
 
-					$site_name = isset( $domains[1] ) ? $domains[1] : $domains[0];
+					$site_name = $domains[0];
 					$site_name = str_replace( '*.', '', $site_name );
 
 					\EE::log( "Re-run `ee site ssl $site_name` after fixing the issue." );
@@ -436,8 +436,8 @@ class Site_Letsencrypt {
 				$certificateParser = new CertificateParser();
 				$parsedCertificate = $certificateParser->parse( $certificate );
 
-				// 2160000 = 25 days.
-				if ( $parsedCertificate->getValidTo()->format( 'U' ) - time() >= 2160000 ) {
+				// 3024000 = 35 days.
+				if ( $parsedCertificate->getValidTo()->format( 'U' ) - time() >= 3024000 ) {
 
 					\EE::log(
 						sprintf(
