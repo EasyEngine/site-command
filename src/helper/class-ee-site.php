@@ -357,10 +357,10 @@ abstract class EE_Site_Command {
 	 * : Size of proxy cache key zone.
 	 *
 	 * [--add-alias-domains=<comma-seprated-domains-to-add>]
-	 * : Comma seprated list of domains to add to site's alias domains. These can be configured only on WordPress subdom MU.
+	 * : Comma seprated list of domains to add to site's alias domains.
 	 *
 	 * [--delete-alias-domains=<comma-seprated-domains-to-delete>]
-	 * : Comma seprated list of domains to delete from site's alias domains. These can be configured only on WordPress subdom MU.
+	 * : Comma seprated list of domains to delete from site's alias domains.
 	 *
 	 * ## EXAMPLES
 	 *
@@ -432,8 +432,8 @@ abstract class EE_Site_Command {
 			$this->site_data = reset( $array_data );
 
 			// Check if it is a WP site.
-			if ( 'wp' !== $this->site_data['site_type'] || 'subdom' !== $this->site_data['app_sub_type'] ) {
-				EE::error( 'Currently alias domains are only supported in WordPress subdom MU sites.' );
+			if ( 'wp' !== $this->site_data['site_type'] ) {
+				EE::error( 'Currently alias domains are only supported in WordPress site type.' );
 			}
 
 			// Validate data.
