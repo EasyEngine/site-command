@@ -496,7 +496,23 @@ abstract class EE_Site_Command {
 		}
 
 		$site->alias_domains = implode( ',', $final_alias_domains );
+
+		$all_domains = $final_alias_domains;
+		array_push($all_domains, $site->site_url);
+		$all_domains = array_unique($all_domains);
+
+		foreach( $all_domains as $domain ) {
+			if( strpos( $domain,'*' ) !== false ) {
+				$site->site_ssl_wildcard = "1";
+			}
+		}
+
+		$client = new Site_Letsencrypt();
+		$client->revoke($all_domains);
+
+		//TODO: Move it to after site completion
 		$site->save();
+
 		if ( $is_ssl ) {
 			// Update SSL.
 			EE::log( 'Updating and force renewing SSL certificate to accomodated alias domain changes.' );
@@ -1216,7 +1232,18 @@ abstract class EE_Site_Command {
 				if ( 'custom' !== $this->site_data['site_ssl'] ) {
 
 					$alias_domains = empty( $this->site_data['alias_domains'] ) ? [] : explode( ',', $this->site_data['alias_domains'] );
-					$this->init_ssl( $this->site_data['site_url'], $this->site_data['site_fs_path'], $this->site_data['site_ssl'], $this->site_data['site_ssl_wildcard'], $is_www_or_non_www_pointed, $force, $alias_domains );
+					$wildcard = $this->site_data['site_ssl_wildcard'];
+
+					if ( empty( $wildcard ) ) {
+						foreach ( $alias_domains as $domain ) {
+							if ( preg_match( '/^\*/', $domain ) ) {
+								$wildcard = "1";
+								break;
+							}
+						}
+					}
+
+					$this->init_ssl( $this->site_data['site_url'], $this->site_data['site_fs_path'], $this->site_data['site_ssl'], $wildcard, $is_www_or_non_www_pointed, $force, $alias_domains );
 				}
 
 				$this->dump_docker_compose_yml( [ 'nohttps' => false ] );
@@ -1320,7 +1347,7 @@ abstract class EE_Site_Command {
 		}
 
 		$domains = $this->get_cert_domains( $site_url, $wildcard, $www_or_non_www );
-		$domains = array_merge( $domains, $alias_domains );
+		$domains = array_unique( array_merge( $domains, $alias_domains ) );
 
 		if ( ! $client->authorize( $domains, $wildcard, $preferred_challenge ) ) {
 			return;
@@ -1441,7 +1468,7 @@ abstract class EE_Site_Command {
 		$force         = \EE\Utils\get_flag_value( $assoc_args, 'force' );
 		$alias_domains = empty( $this->site_data['alias_domains'] ) ? [] : explode( ',', $this->site_data['alias_domains'] );
 		$domains       = $this->get_cert_domains( $this->site_data['site_url'], $this->site_data['site_ssl_wildcard'], $www_or_non_www );
-		$domains       = array_merge( $domains, $alias_domains );
+		$domains       = array_unique( array_merge( $domains, $alias_domains ) );
 		$client        = new Site_Letsencrypt();
 
 		$preferred_challenge = get_config_value( 'preferred_ssl_challenge', '' );
@@ -1553,6 +1580,7 @@ abstract class EE_Site_Command {
 	 */
 	private function renew_ssl_cert( $args, $force ) {
 
+		//TODO: populate only if necessary
 		$this->site_data = get_site_info( $args );
 
 		if ( 'inherit' === $this->site_data['site_ssl'] ) {

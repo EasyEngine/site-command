@@ -2,6 +2,7 @@
 
 namespace EE\Site\Type;
 
+use AcmePhp\Cli\Exception\AcmeCliException;
 use AcmePhp\Cli\Repository\Repository;
 use AcmePhp\Cli\Serializer\PemEncoder;
 use AcmePhp\Cli\Serializer\PemNormalizer;
@@ -14,6 +15,10 @@ use AcmePhp\Core\Challenge\Http\HttpValidator;
 use AcmePhp\Core\Challenge\Http\SimpleHttpSolver;
 use AcmePhp\Core\Challenge\WaitingValidator;
 use AcmePhp\Core\Exception\Protocol\ChallengeNotSupportedException;
+use AcmePhp\Core\Exception\Protocol\CertificateRevocationException;
+use AcmePhp\Core\Protocol\AuthorizationChallenge;
+use AcmePhp\Core\Protocol\ResourcesDirectory;
+use AcmePhp\Core\Protocol\RevocationReason;
 use AcmePhp\Core\Http\Base64SafeEncoder;
 use AcmePhp\Core\Http\SecureHttpClient;
 use AcmePhp\Core\Http\ServerErrorHandler;
@@ -35,6 +40,57 @@ use Symfony\Component\Serializer\Normalizer\GetSetMethodNormalizer;
 use Symfony\Component\Serializer\Serializer;
 use function EE\Site\Utils\reload_global_nginx_proxy;
 use function EE\Utils\get_config_value;
+
+//TODO: Try to get this code merged in upstream
+class EEAcmeClient extends AcmeClient {
+
+	/**
+	 * @var string
+	 */
+	private $account;
+
+	/**
+	 * Retrieve the resource account.
+	 *
+	 * @return string
+	 */
+	private function getResourceAccount()
+	{
+		if (!$this->account) {
+			$payload = [
+				'onlyReturnExisting' => true,
+			];
+
+			$this->requestResource('POST', ResourcesDirectory::NEW_ACCOUNT, $payload);
+			$this->account = $this->getHttpClient()->getLastLocation();
+		}
+
+		return $this->account;
+	}
+
+	public function revokeAuthorizationChallenge(AuthorizationChallenge $challenge)
+	{
+		$payload = [
+			'identifiers' => [[
+						'type' => 'dns',
+						'value' => $challenge->getDomain(),
+				]]
+		];
+
+		$client = $this->getHttpClient();
+		$resourceUrl = $this->getResourceUrl(ResourcesDirectory::NEW_ORDER);
+		$response = $client->request('POST', $resourceUrl, $client->signKidPayload($resourceUrl, $this->getResourceAccount(), $payload));
+		if (!isset($response['authorizations']) || !$response['authorizations']) {
+			throw new ChallengeNotSupportedException();
+		}
+
+		$orderEndpoint = $client->getLastLocation();
+		foreach ($response['authorizations'] as $authorizationEndpoint) {
+			$authorizationsResponse = $client->request('POST', $authorizationEndpoint, $client->signKidPayload($authorizationEndpoint, $this->getResourceAccount(), [ 'status' => 'deactivated' ]));
+		}
+		return;
+	}
+}
 
 
 class Site_Letsencrypt {
@@ -78,7 +134,7 @@ class Site_Letsencrypt {
 		$secureHttpClient = $this->getSecureHttpClient();
 		$csrSigner        = new CertificateRequestSigner();
 
-		$this->client = new AcmeClient( $secureHttpClient, 'https://acme-v02.api.letsencrypt.org/directory', $csrSigner );
+		$this->client = new EEAcmeClient( $secureHttpClient, 'https://acme-v02.api.letsencrypt.org/directory', $csrSigner );
 
 	}
 
@@ -200,6 +256,54 @@ class Site_Letsencrypt {
 		$this->repository->storeCertificateOrder( $domains, $order );
 
 		return true;
+	}
+
+	public function revoke( array $domains ) {
+		$reasonCode = null; // ok to be null. LE expects 0 as default reason
+
+		try {
+			$revocationReason = isset($reasonCode[0]) ? new RevocationReason($reasonCode[0]) : RevocationReason::createDefaultReason();
+		} catch (\InvalidArgumentException $e) {
+			\EE::error('Reason code must be one of: '.PHP_EOL.implode(PHP_EOL, RevocationReason::getFormattedReasons()));
+
+			return;
+		}
+		foreach($domains as $domain) {
+			if ($this->repository->hasDomainAuthorizationChallenge($domain)) {
+				$challenge = $this->repository->loadDomainAuthorizationChallenge($domain);
+
+				try {
+					$this->client->revokeAuthorizationChallenge($challenge);
+				} catch (CertificateRevocationException $e) {
+					\EE::warning($e->getMessage());
+				}
+			} else {
+				\EE::warning('Domain Authorization Challenge for ' . $domain . ' not found locally');
+			}
+
+
+			if ($this->repository->hasDomainCertificate($domain)) {
+				$certificate = $this->repository->loadDomainCertificate($domain);
+
+				try {
+					$this->client->revokeCertificate($certificate, $revocationReason);
+				} catch (CertificateRevocationException $e) {
+					\EE::warning($e->getMessage());
+				}
+			} else {
+				\EE::warning('Certificate for ' . $domain . ' not found locally');
+			}
+		}
+
+		try {
+			$this->repository->removeDomain($domains);
+		} catch(AcmeCliException $e) {
+			\EE::warning($e->getMessage());
+		}
+
+		\EE::success('Certificate revoked successfully!');
+
+		return 0;
 	}
 
 	public function check( Array $domains, $wildcard = false, $preferred_challenge = '' ) {
@@ -367,23 +471,27 @@ class Site_Letsencrypt {
 	 */
 	public function isAlreadyExpired( $domain ) {
 
-		// Check expiration date to avoid too much renewal
-		\EE::log( "Loading current certificate for $domain" );
+		try {
+			// Check expiration date to avoid too much renewal
+			\EE::log( "Loading current certificate for $domain" );
 
-		$certificate       = $this->repository->loadDomainCertificate( $domain );
-		$certificateParser = new CertificateParser();
-		$parsedCertificate = $certificateParser->parse( $certificate );
+			$certificate       = $this->repository->loadDomainCertificate( $domain );
+			$certificateParser = new CertificateParser();
+			$parsedCertificate = $certificateParser->parse( $certificate );
 
-		// 2160000 = 25 days.
-		if ( $parsedCertificate->getValidTo()->format( 'U' ) - time() < 0 ) {
-			\EE::log(
-				sprintf(
-					'Current certificate is alerady expired on %s, renewal is necessary.',
-					$parsedCertificate->getValidTo()->format( 'Y-m-d H:i:s' )
-				)
-			);
+			// 2160000 = 25 days.
+			if ( $parsedCertificate->getValidTo()->format( 'U' ) - time() < 0 ) {
+				\EE::log(
+					sprintf(
+						'Current certificate is alerady expired on %s, renewal is necessary.',
+						$parsedCertificate->getValidTo()->format( 'Y-m-d H:i:s' )
+					)
+				);
 
-			return true;
+				return true;
+			}
+		} catch (\Exception $e) {
+			\EE::warning($e->getMessage());
 		}
 
 		return false;
