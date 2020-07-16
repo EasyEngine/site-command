@@ -510,18 +510,19 @@ abstract class EE_Site_Command {
 		$client = new Site_Letsencrypt();
 		$client->revoke($all_domains);
 
-		//TODO: Move it to after site completion
-		$site->save();
-
 		if ( $is_ssl ) {
 			// Update SSL.
 			EE::log( 'Updating and force renewing SSL certificate to accomodated alias domain changes.' );
 			$this->ssl_renew( [ $this->site_data['site_url'] ], [ 'force' => true ] );
 		}
+
 		chdir( $this->site_data['site_fs_path'] );
 		// Required as env variables have changed.
 		EE::exec( 'docker-compose up -d nginx' );
 		EE::success( 'Alias domains updated on site ' . $this->site_data['site_url'] . '.' );
+
+		$site->save();
+
 		if ( ! empty( $this->site_data['proxy_cache'] ) && 'on' === $this->site_data['proxy_cache'] ) {
 			EE::log( 'As proxy cache is enabled on this site, updating config to enable it in newly added alias domains.' );
 			$this->site_data = $site;
@@ -1580,8 +1581,9 @@ abstract class EE_Site_Command {
 	 */
 	private function renew_ssl_cert( $args, $force ) {
 
-		//TODO: populate only if necessary
-		$this->site_data = get_site_info( $args );
+		if ( empty( $this->site_data ) ) {
+			$this->site_data = get_site_info($args);
+		}
 
 		if ( 'inherit' === $this->site_data['site_ssl'] ) {
 			EE::error( 'No need to renew certs for site who have inherited ssl. Please renew certificate of the parent site.' );
