@@ -5,6 +5,11 @@ namespace EE\Site\Utils;
 use EE;
 use EE\Model\Site;
 use Symfony\Component\Filesystem\Filesystem;
+use function EE\Utils\get_flag_value;
+use function EE\Utils\get_config_value;
+use function EE\Utils\sanitize_file_folder_name;
+use function EE\Utils\remove_trailing_slash;
+use function EE\Utils\trailingslashit;
 
 /**
  * Get the site-name from the path from where ee is running if it is a valid site path.
@@ -109,62 +114,6 @@ function get_site_info( $args, $site_enabled_check = true, $exit_if_not_found = 
 }
 
 /**
- * Generates global docker-compose.yml at EE_ROOT_DIR/services
- *
- * @param Filesystem $fs Filesystem object to write file
- */
-function generate_global_docker_compose_yml( Filesystem $fs ) {
-	$img_versions = EE\Utils\get_image_versions();
-
-	$data = [
-		'services' => [
-			[
-				'name'           => 'nginx-proxy',
-				'container_name' => EE_PROXY_TYPE,
-				'image'          => 'easyengine/nginx-proxy:' . $img_versions['easyengine/nginx-proxy'],
-				'restart'        => 'always',
-				'ports'          => [
-					'80:80',
-					'443:443',
-				],
-				'environment'    => [
-					'LOCAL_USER_ID=' . posix_geteuid(),
-					'LOCAL_GROUP_ID=' . posix_getegid(),
-				],
-				'volumes'        => [
-					EE_ROOT_DIR . '/services/nginx-proxy/certs:/etc/nginx/certs',
-					EE_ROOT_DIR . '/services/nginx-proxy/dhparam:/etc/nginx/dhparam',
-					EE_ROOT_DIR . '/services/nginx-proxy/conf.d:/etc/nginx/conf.d',
-					EE_ROOT_DIR . '/services/nginx-proxy/htpasswd:/etc/nginx/htpasswd',
-					EE_ROOT_DIR . '/services/nginx-proxy/vhost.d:/etc/nginx/vhost.d',
-					EE_ROOT_DIR . '/services/nginx-proxy/html:/usr/share/nginx/html',
-					'/var/run/docker.sock:/tmp/docker.sock:ro',
-				],
-				'networks'       => [
-					'global-frontend-network',
-				],
-			],
-			[
-				'name'           => GLOBAL_DB,
-				'container_name' => GLOBAL_DB_CONTAINER,
-				'image'          => 'easyengine/mariadb:' . $img_versions['easyengine/mariadb'],
-				'restart'        => 'always',
-				'environment'    => [
-					'MYSQL_ROOT_PASSWORD=' . \EE\Utils\random_password(),
-				],
-				'volumes'        => [ './app/db:/var/lib/mysql' ],
-				'networks'       => [
-					'global-backend-network',
-				],
-			],
-		],
-	];
-
-	$contents = EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/global_docker_compose.yml.mustache', $data );
-	$fs->dumpFile( EE_ROOT_DIR . '/services/docker-compose.yml', $contents );
-}
-
-/**
  * Create user in remote or global db.
  *
  * @param string $db_host Database Hostname.
@@ -188,10 +137,10 @@ function create_user_in_db( $db_host, $db_name = '', $db_user = '', $db_pass = '
 		$db_script_path = \EE\Utils\get_temp_dir() . 'db_exec';
 		file_put_contents( $db_script_path, $health_script );
 		$mysql_unhealthy = true;
-		EE::exec( sprintf( 'docker cp %s ee-global-db:/db_exec', $db_script_path ) );
+		EE::exec( sprintf( 'docker cp %s %s:/db_exec', $db_script_path, GLOBAL_DB_CONTAINER ) );
 		$count = 0;
 		while ( $mysql_unhealthy ) {
-			$mysql_unhealthy = ! EE::exec( 'docker exec ee-global-db sh db_exec' );
+			$mysql_unhealthy = ! EE::exec( sprintf( 'docker exec %s sh db_exec', GLOBAL_DB_CONTAINER ) );
 			if ( $count ++ > 60 ) {
 				break;
 			}
@@ -201,8 +150,8 @@ function create_user_in_db( $db_host, $db_name = '', $db_user = '', $db_pass = '
 		$db_script_path = \EE\Utils\get_temp_dir() . 'db_exec';
 		file_put_contents( $db_script_path, sprintf( 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e"%s"', $create_string ) );
 
-		EE::exec( sprintf( 'docker cp %s ee-global-db:/db_exec', $db_script_path ) );
-		if ( ! EE::exec( 'docker exec ee-global-db sh db_exec' ) ) {
+		EE::exec( sprintf( 'docker cp %s %s:/db_exec', $db_script_path, GLOBAL_DB_CONTAINER ) );
+		if ( ! EE::exec( sprintf( 'docker exec %s sh db_exec', GLOBAL_DB_CONTAINER ) ) ) {
 			return false;
 		}
 	} else {
@@ -232,8 +181,8 @@ function cleanup_db( $db_host, $db_name, $db_user = '', $db_pass = '' ) {
 		$db_script_path = \EE\Utils\get_temp_dir() . 'db_exec';
 		file_put_contents( $db_script_path, sprintf( 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e"%s"', $cleanup_string ) );
 
-		EE::exec( sprintf( 'docker cp %s ee-global-db:/db_exec', $db_script_path ) );
-		EE::exec( 'docker exec ee-global-db sh db_exec' );
+		EE::exec( sprintf( 'docker cp %s %s:/db_exec', $db_script_path, GLOBAL_DB_CONTAINER ) );
+		EE::exec( sprintf( 'docker exec %s sh db_exec', GLOBAL_DB_CONTAINER ) );
 	}
 
 }
@@ -254,8 +203,8 @@ function cleanup_db_user( $db_host, $db_user_to_be_cleaned, $db_privileged_pass 
 		$db_script_path = \EE\Utils\get_temp_dir() . 'db_exec';
 		file_put_contents( $db_script_path, sprintf( 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e"%s"', $cleanup_string ) );
 
-		EE::exec( sprintf( 'docker cp %s ee-global-db:/db_exec', $db_script_path ) );
-		EE::exec( 'docker exec ee-global-db sh db_exec' );
+		EE::exec( sprintf( 'docker cp %s %s:/db_exec', $db_script_path, GLOBAL_DB_CONTAINER ) );
+		EE::exec( sprintf( 'docker exec %s sh db_exec', GLOBAL_DB_CONTAINER ) );
 	}
 }
 
@@ -294,6 +243,9 @@ function add_site_redirects( string $site_url, bool $ssl, bool $inherit ) {
 	$config_file_path = $confd_path . $site_url . '-redirect.conf';
 	$has_www          = strpos( $site_url, 'www.' ) === 0;
 	$cert_site_name   = $site_url;
+	$ssl_policy       = get_ssl_policy();
+
+	$conf_ssl_policy = 'ssl_policy_' . str_replace( '-', '_', $ssl_policy );
 
 	if ( $inherit ) {
 		$cert_site_name = implode( '.', array_slice( explode( '.', $site_url ), 1 ) );
@@ -310,10 +262,35 @@ function add_site_redirects( string $site_url, bool $ssl, bool $inherit ) {
 		'cert_site_name' => $cert_site_name,
 		'server_name'    => $server_name,
 		'ssl'            => $ssl,
+		$conf_ssl_policy => true,
 	];
 
 	$content = EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/redirect.conf.mustache', $conf_data );
 	$fs->dumpFile( $config_file_path, ltrim( $content, PHP_EOL ) );
+}
+
+/**
+ * Function to check config and return a valid ssl-policy.
+ *
+ * @return string Valid ssl-policy.
+ */
+function get_ssl_policy() {
+
+	$ssl_policy = get_config_value( 'ssl-policy', 'Mozilla-Modern' );
+
+	$valid_configurations = [
+		'Mozilla-Old',
+		'Mozilla-Intermediate',
+		'Mozilla-Modern',
+		'AWS-TLS-1-2-2017-01',
+		'AWS-TLS-1-1-2017-01',
+		'AWS-2016-08',
+		'AWS-2015-05',
+		'AWS-2015-03',
+		'AWS-2015-02',
+	];
+
+	return in_array( $ssl_policy, $valid_configurations, true ) ? $ssl_policy : 'Mozilla-Modern';
 }
 
 /**
@@ -323,14 +300,20 @@ function add_site_redirects( string $site_url, bool $ssl, bool $inherit ) {
  */
 function create_etc_hosts_entry( $site_url ) {
 
+	if ( IS_DARWIN ) {
+
+		// setup_dnsmasq_for_darwin only if domain ends with `.test`
+		$ends_with_string = '.test';
+		$diff             = strlen( $site_url ) - strlen( $ends_with_string );
+		if ( $diff >= 0 && false !== strpos( $site_url, $ends_with_string, $diff ) ) {
+			setup_dnsmasq_for_darwin();
+		}
+
+		return;
+	}
 	$host_line = LOCALHOST_IP . "\t$site_url";
 	$etc_hosts = file_get_contents( '/etc/hosts' );
 	if ( ! preg_match( "/\s+$site_url\$/m", $etc_hosts ) ) {
-		if ( IS_DARWIN && ! is_writable( '/etc/hosts' ) ) {
-			EE::log( 'You may need to enter password to create host entry for site.' );
-			EE::exec( 'sudo chmod g+rw /etc/hosts' );
-			EE::exec( 'sudo chown root:staff /etc/hosts' );
-		}
 		if ( EE::exec( "/bin/bash -c 'echo \"$host_line\" >> /etc/hosts'" ) ) {
 			EE::success( 'Host entry successfully added.' );
 		} else {
@@ -341,6 +324,56 @@ function create_etc_hosts_entry( $site_url ) {
 	}
 }
 
+/**
+ * Setup dnsmasq for darwin to resolve `*.test` domain.
+ *
+ * @return bool success.
+ */
+function setup_dnsmasq_for_darwin() {
+
+	if ( ! IS_DARWIN ) {
+		return false;
+	}
+
+	// check if brew is installed.
+	if ( EE::exec( 'command -v brew' ) ) {
+		$fs = new Filesystem();
+		if ( $fs->exists( '/etc/resolver/test' ) ) {
+			return true;
+		}
+	} else {
+		return false;
+	}
+
+	// check if dnsmasq is installed.
+	if ( ! EE::exec( 'brew ls --versions dnsmasq' ) ) {
+		return false;
+	}
+
+	// create config directory.
+	EE::exec( 'mkdir -p $(brew --prefix)/etc/' );
+
+	// Setup `*.test` domain.
+	EE::exec( "echo 'address=/.test/127.0.0.1' > $(brew --prefix)/etc/dnsmasq.conf" );
+
+	EE::log( 'Setting up dnsmasq for *.test domain. You might need to enter password.' );
+
+	// Add to LaunchDaemons so that it works after reboot.
+	EE::exec( 'sudo cp -v $(brew --prefix dnsmasq)/homebrew.mxcl.dnsmasq.plist /Library/LaunchDaemons' );
+
+	// Create resolver directory.
+	EE::exec( 'sudo mkdir -v /etc/resolver' );
+
+	// Adding 127.0.0.1 nameserver to resolvers.
+	EE::exec( "sudo bash -c 'echo \"nameserver 127.0.0.1\" > /etc/resolver/test'" );
+
+	// start it.
+	if ( EE::exec( 'sudo launchctl load -w /Library/LaunchDaemons/homebrew.mxcl.dnsmasq.plist' ) ) {
+		return true;
+	}
+
+	return false;
+}
 
 /**
  * Checking site is running or not.
@@ -362,7 +395,7 @@ function site_status_check( $site_url ) {
 			$user_pass = get_global_auth();
 			$auth      = $user_pass['username'] . ':' . $user_pass['password'];
 		}
-		$httpcode = \EE\Utils\get_curl_info( $site_url, $config_80_port, false, $auth );
+		$httpcode = \EE\Utils\get_curl_info( $site_url, $config_80_port, false, $auth, true );
 		echo '.';
 		sleep( 2 );
 		if ( $i ++ > 60 ) {
@@ -389,7 +422,7 @@ function start_site_containers( $site_fs_path, $containers = [] ) {
 
 	chdir( $site_fs_path );
 	EE::log( 'Starting site\'s services.' );
-	if ( ! EE::docker()::docker_compose_up( $site_fs_path, $containers ) ) {
+	if ( ! \EE_DOCKER::docker_compose_up( $site_fs_path, $containers ) ) {
 		throw new \Exception( 'There was some error in docker-compose up.' );
 	}
 }
@@ -508,4 +541,100 @@ function get_global_auth() {
 		'password' => $auth[0]->password,
 	];
 
+}
+
+/**
+ * Clear site cache with specific key.
+ *
+ * @param string $key Cache key to clear.
+ */
+function clean_site_cache( $key ) {
+	EE::exec( sprintf( 'docker exec -it %s redis-cli --eval purge_all_cache.lua 0 , "%s*"', GLOBAL_REDIS_CONTAINER, $key ) );
+}
+
+/**
+ * Function to get the public-dir from assoc args with checks and sanitizations.
+ *
+ * @param $assoc_args
+ *
+ * @return string processed value for public-dir.
+ */
+function get_public_dir( $assoc_args ) {
+
+	// Create container fs path for site.
+	$public_root           = get_flag_value( $assoc_args, 'public-dir' );
+	$public_root           = str_replace( '/var/www/htdocs/', '', trailingslashit( $public_root ) );
+	$public_root           = remove_trailing_slash( $public_root );
+	$sanitized_public_dir  = sanitize_file_folder_name( $public_root );
+	$user_input_public_dir = sprintf( '/var/www/htdocs/%s', trim( $sanitized_public_dir, '/' ) );
+
+	return empty( $public_root ) ? '/var/www/htdocs' : $user_input_public_dir;
+}
+
+/**
+ * Get final source directory for site webroot.
+ *
+ * @param $original_src_dir  Default source directory.
+ * @param $container_fs_path public directory set by user if any.
+ *
+ * @return string final webroot for site.
+ */
+function get_webroot( $original_src_dir, $container_fs_path ) {
+
+	$public_dir_path = str_replace( '/var/www/htdocs/', '', trailingslashit( $container_fs_path ) );
+
+	return empty( $public_dir_path ) ? $original_src_dir : $original_src_dir . '/' . rtrim( $public_dir_path, '/' );
+}
+
+/**
+ * Get all existing alias domains from db.
+ *
+ * @return array of all alias domains.
+ */
+function get_all_alias_domains() {
+
+	$existing_alias_domains     = Site::all( [ 'alias_domains' ] );
+	$existing_site_domains      = Site::all( [ 'site_url' ] );
+	$all_existing_alias_domains = [];
+	$all_existing_site_domains  = [];
+	if ( ! empty( $existing_alias_domains ) ) {
+		$all_existing_alias_domains = array_column( $existing_alias_domains, 'alias_domains' );
+	}
+
+	if ( ! empty( $existing_site_domains ) ) {
+		$all_existing_site_domains = array_column( $existing_site_domains, 'site_url' );
+	}
+	$array_of_alias_domains = [];
+	foreach ( $all_existing_alias_domains as $existing_alias_domains ) {
+		foreach ( explode( ',', $existing_alias_domains ) as $ad ) {
+			if ( ! empty( $ad ) ) {
+				$array_of_alias_domains[] = $ad;
+			}
+		}
+	}
+
+	return array_diff( $array_of_alias_domains, $all_existing_site_domains );
+}
+
+/**
+ * Get parent site of an alias domain.
+ *
+ * @param string $alias  alias domain whose parent needs to be found.
+ *
+ * @return string parent site.
+ */
+function get_parent_of_alias( $alias ) {
+
+	if ( ! in_array( $alias, get_all_alias_domains(), true ) ) {
+		// the alis domain does not exist. So it has no parent.
+		return '';
+	}
+
+	$output = EE::db()
+				->table( 'sites' )
+				->select( ...[ 'site_url' ] )
+				->where( 'alias_domains', 'like', '%' . $alias . '%' )
+				->first();
+
+	return reset( $output );
 }

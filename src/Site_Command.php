@@ -75,7 +75,9 @@ class Site_Command {
 		if ( substr( $last_arg, 0, 4 ) === 'http' ) {
 			$last_arg = str_replace( [ 'https://', 'http://' ], '', $last_arg );
 		}
-		$args[] = EE\Utils\remove_trailing_slash( $last_arg );
+		if ( ! empty( $last_arg ) ) {
+			$args[] = EE\Utils\remove_trailing_slash( $last_arg );
+		}
 
 		$site_types = self::get_site_types();
 		$assoc_args = $this->convert_old_args_to_new_args( $args, $assoc_args );
@@ -84,11 +86,52 @@ class Site_Command {
 		$type = 'html';
 
 		if ( in_array( reset( $args ), [ 'create', 'update' ], true ) || empty( $args ) ) {
-			\EE\Auth\Utils\init_global_admin_tools_auth( false );
+			$unset = true;
+			if ( ! empty( $args[0] ) && 'create' === $args[0] ) {
+				$args = $this->name_checks_and_updates( $args );
+				\EE\Auth\Utils\init_global_admin_tools_auth( false );
+			}
+			if ( ! empty( $args[0] ) && 'update' === $args[0] ) {
+				$unset = false;
+				$type  = $this->determine_type( $type, $args );
+			}
 			if ( isset( $assoc_args['type'] ) ) {
 				$type = $assoc_args['type'];
-				unset( $assoc_args['type'] );
+				if ( $unset ) {
+					unset( $assoc_args['type'] );
+				}
 			}
+		} elseif ( in_array( reset( $args ), [ 'ssl-renew' ], true ) && array_key_exists( 'all', $assoc_args ) ) {
+			$sites = Site::all();
+			unset( $assoc_args['all'] );
+			foreach ( $sites as $site ) {
+				$type     = $site->site_type;
+				$args     = [ 'site', 'ssl-renew', $site->site_url ];
+				$callback = $site_types[ $type ];
+
+				if ( 'le' !== $site->site_ssl || ! $site->site_enabled || 'inherit' === $site->site_ssl ) {
+					continue;
+				}
+
+				$api_key_absent        = empty( EE\Utils\get_config_value( 'cloudflare-api-key' ) );
+				$skip_wildcard_warning = false;
+
+				if ( $site->site_ssl_wildcard && $api_key_absent ) {
+					EE::warning( "Wildcard site found: $site->site_url, skipping it as api keys not found. Please renew this site manually using command `ee site ssl-renew $site->site_url`" );
+					if ( ! $skip_wildcard_warning ) {
+						EE::warning( "As this is a wildcard certificate, it cannot be automatically renewed.\nPlease run `ee site ssl-renew $site->site_url` to renew the certificate, or add cloudflare api key in EasyEngine config. Ref: https://rt.cx/eecf" );
+						$skip_wildcard_warning = true;
+					}
+					continue;
+				}
+
+				$command      = EE::get_root_command();
+				$leaf_command = CommandFactory::create( 'site', $callback, $command );
+				$command->add_subcommand( 'site', $leaf_command );
+
+				EE::run_command( $args, $assoc_args );
+			}
+			die;
 		} else {
 			$type = $this->determine_type( $type, $args );
 		}
@@ -166,7 +209,7 @@ class Site_Command {
 	private function convert_old_args_to_new_args( $args, $assoc_args ) {
 
 		if (
-			( ! in_array( reset( $args ), [ 'create', 'update' ], true ) &&
+			( ! in_array( reset( $args ), [ 'create' ], true ) &&
 			  ! empty( $args ) ) ||
 			! empty( $assoc_args['type'] )
 		) {
@@ -175,6 +218,7 @@ class Site_Command {
 
 		$ee3_compat_array_map_to_type = [
 			'wp'          => [ 'type' => 'wp' ],
+			'vip'         => [ 'type' => 'wp', 'vip' => ( $assoc_args['vip'] ?? '' ) ],
 			'wpsubdom'    => [ 'type' => 'wp', 'mu' => 'subdom' ],
 			'wpsubdir'    => [ 'type' => 'wp', 'mu' => 'subdir' ],
 			'wpredis'     => [ 'type' => 'wp', 'cache' => true ],
@@ -187,8 +231,8 @@ class Site_Command {
 
 		foreach ( $ee3_compat_array_map_to_type as $from => $to ) {
 			if ( isset( $assoc_args[ $from ] ) ) {
-				$assoc_args = array_merge( $assoc_args, $to );
 				unset( $assoc_args[ $from ] );
+				$assoc_args = array_merge( $assoc_args, $to );
 			}
 		}
 
@@ -226,6 +270,39 @@ class Site_Command {
 		}
 
 		return $assoc_args;
+	}
+
+	/**
+	 * Check and update site-url according to the environment and minimum requirements.
+	 *
+	 * @param array $args Input args.
+	 *
+	 * @return array $args Updated args.
+	 */
+	private function name_checks_and_updates( $args ) {
+
+		if ( empty( $args[1] ) ) {
+			return $args;
+		}
+
+		$site_url = $args[1];
+
+		$ends_with_string = '.test';
+		$diff             = strlen( $site_url ) - strlen( $ends_with_string );
+		if ( $diff >= 0 && false !== strpos( $site_url, $ends_with_string, $diff ) ) {
+			return $args;
+		}
+
+		if ( false !== strpos( $site_url, '.' ) ) {
+			if ( IS_DARWIN ) {
+				EE::warning( sprintf( 'We only support the `.test` TLD in dev environment. Please configure dns entry manually for %s', $site_url ) );
+			}
+		} else {
+			$site_url .= $ends_with_string;
+			$args[1]  = $site_url;
+		}
+
+		return $args;
 	}
 
 	private function cmd_dump() {

@@ -1,6 +1,7 @@
 <?php
 
 use EE\Model\Site;
+use EE\Model\Option;
 
 if ( ! class_exists( 'EE' ) ) {
 	return;
@@ -57,8 +58,27 @@ function cleanup_redis_entries( $site_url ) {
 		return;
 	}
 
-	EE::exec( sprintf( 'docker exec -it %s redis-cli --eval purge_all_cache.lua 0 , "%s*"', GLOBAL_REDIS_CONTAINER, $site_data->site_url ) );
+	\EE\Site\Utils\clean_site_cache( $site_data->site_url );
+
+}
+
+/**
+ * Hook to cleanup sharing if any on site delete.
+ *
+ * @param string $site_url The site to be cleaned up.
+ */
+function cleanup_sharing( $site_url ) {
+
+	$active_publish = Option::get( 'publish_site' );
+	$publish_url    = Option::get( 'publish_url' );
+	if ( $site_url !== $active_publish ) {
+		return;
+	}
+	EE::exec( 'killall ngrok' );
+	Option::set( 'publish_site', '' );
+	Option::set( 'publish_url', '' );
 }
 
 EE::add_hook( 'site_cleanup', 'cleanup_redis_entries' );
+EE::add_hook( 'site_cleanup', 'cleanup_sharing' );
 EE::add_hook( 'before_invoke:help', 'ee_site_help_cmd_routing' );

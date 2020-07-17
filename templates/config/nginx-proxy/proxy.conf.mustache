@@ -1,0 +1,1 @@
+proxy_cache_path /var/cache/nginx/{{site_url}} levels=1:2 keys_zone={{sanitized_site_url}}:{{proxy_cache_key_zone_size}} max_size={{proxy_cache_size}};
