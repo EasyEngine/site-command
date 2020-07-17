@@ -262,7 +262,7 @@ class Site_Letsencrypt {
 					\EE::debug( $e->getMessage() );
 					\EE::warning( 'Challenge Authorization failed. Check logs and check if your domain is pointed correctly to this server.' );
 
-					$site_name = isset( $domains[1] ) ? $domains[1] : $domains[0];
+					$site_name = $domains[0];
 					$site_name = str_replace( '*.', '', $site_name );
 
 					\EE::log( "Re-run `ee site ssl-verify $site_name` after fixing the issue." );
@@ -361,6 +361,64 @@ class Site_Letsencrypt {
 	}
 
 	/**
+	 * Check expiry if a certificate is already expired.
+	 *
+	 * @param string $domain
+	 */
+	public function isAlreadyExpired( $domain ) {
+
+		// Check expiration date to avoid too much renewal
+		\EE::log( "Loading current certificate for $domain" );
+
+		$certificate       = $this->repository->loadDomainCertificate( $domain );
+		$certificateParser = new CertificateParser();
+		$parsedCertificate = $certificateParser->parse( $certificate );
+
+		// 2160000 = 25 days.
+		if ( $parsedCertificate->getValidTo()->format( 'U' ) - time() < 0 ) {
+			\EE::log(
+				sprintf(
+					'Current certificate is alerady expired on %s, renewal is necessary.',
+					$parsedCertificate->getValidTo()->format( 'Y-m-d H:i:s' )
+				)
+			);
+
+			return true;
+		}
+
+		return false;
+	}
+
+	/**
+	 * Check expiry of a certificate.
+	 *
+	 * @param string $domain
+	 */
+	public function isRenewalNecessary( $domain ) {
+
+		// Check expiration date to avoid too much renewal
+		\EE::log( "Loading current certificate for $domain" );
+
+		$certificate       = $this->repository->loadDomainCertificate( $domain );
+		$certificateParser = new CertificateParser();
+		$parsedCertificate = $certificateParser->parse( $certificate );
+
+		// 2160000 = 25 days.
+		if ( $parsedCertificate->getValidTo()->format( 'U' ) - time() >= 2160000 ) {
+			\EE::log(
+				sprintf(
+					'Current certificate is valid until %s, renewal is not necessary.',
+					$parsedCertificate->getValidTo()->format( 'Y-m-d H:i:s' )
+				)
+			);
+
+			return false;
+		}
+
+		return true;
+	}
+
+	/**
 	 * Renew a given domain certificate.
 	 *
 	 * @param string $domain
@@ -378,7 +436,8 @@ class Site_Letsencrypt {
 				$certificateParser = new CertificateParser();
 				$parsedCertificate = $certificateParser->parse( $certificate );
 
-				if ( $parsedCertificate->getValidTo()->format( 'U' ) - time() >= 604800 ) {
+				// 3024000 = 35 days.
+				if ( $parsedCertificate->getValidTo()->format( 'U' ) - time() >= 3024000 ) {
 
 					\EE::log(
 						sprintf(
@@ -392,7 +451,7 @@ class Site_Letsencrypt {
 
 				\EE::log(
 					sprintf(
-						'Current certificate will expire in less than a week (%s), renewal is required.',
+						'Current certificate will expire in less than 25 days (%s), renewal is required.',
 						$parsedCertificate->getValidTo()->format( 'Y-m-d H:i:s' )
 					)
 				);
@@ -568,3 +627,4 @@ class Site_Letsencrypt {
 		}
 	}
 }
+
