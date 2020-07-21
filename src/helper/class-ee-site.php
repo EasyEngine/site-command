@@ -1076,6 +1076,8 @@ abstract class EE_Site_Command {
 		if ( ! empty( $proxy ) ) {
 			if ( 'on' === $this->site_data->proxy_cache ) {
 				EE::exec( sprintf( 'docker exec -it %s bash -c "rm -r /var/cache/nginx/%s/*"', EE_PROXY_TYPE, $this->site_data->site_url ) );
+				EE::log( 'Restarting nginx-proxy after clearing proxy cache.' );
+				EE::exec( sprintf( 'docker exec -it %1$s bash -c "nginx -t" && docker restart %1$s', EE_PROXY_TYPE ) );
 			} else {
 				$error[] = 'Proxy cache is not enabled on site.';
 			}
