@@ -1056,6 +1056,7 @@ abstract class EE_Site_Command {
 		if ( ! empty( $object ) ) {
 			if ( 1 === intval( $this->site_data->cache_mysql_query ) ) {
 				$purge_key = $this->site_data->site_url . '_obj';
+				EE\Site\Utils\clean_site_cache( $purge_key );
 			} else {
 				$error[] = 'Site object cache is not enabled.';
 			}
@@ -1065,6 +1066,7 @@ abstract class EE_Site_Command {
 		if ( ! empty( $page ) ) {
 			if ( 1 === intval( $this->site_data->cache_nginx_fullpage ) ) {
 				$purge_key = $this->site_data->site_url . '_page';
+				EE\Site\Utils\clean_site_cache( $purge_key );
 			} else {
 				$error[] = 'Site page cache is not enabled.';
 			}
@@ -1074,21 +1076,16 @@ abstract class EE_Site_Command {
 		if ( ! empty( $proxy ) ) {
 			if ( 'on' === $this->site_data->proxy_cache ) {
 				EE::exec( sprintf( 'docker exec -it %s bash -c "rm -r /var/cache/nginx/%s/*"', EE_PROXY_TYPE, $this->site_data->site_url ) );
+				EE::log( 'Restarting nginx-proxy after clearing proxy cache.' );
+				EE::exec( sprintf( 'docker exec -it %1$s bash -c "nginx -t" && docker restart %1$s', EE_PROXY_TYPE ) );
 			} else {
 				$error[] = 'Proxy cache is not enabled on site.';
 			}
 		}
 
-		// If Page and Object both passed.
-		if ( ! empty( $object ) && ! empty( $page ) ) {
-			$purge_key = $this->site_data->site_url;
-		}
-
 		if ( ! empty( $error ) ) {
 			\EE::error( implode( ' ', $error ) );
 		}
-
-		EE\Site\Utils\clean_site_cache( $purge_key );
 
 		$cache_flags = [ 'Page' => $page, 'Object' => $object, 'Proxy' => $proxy ];
 
