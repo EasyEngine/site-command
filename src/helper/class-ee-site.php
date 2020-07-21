@@ -11,10 +11,11 @@ use function EE\Utils\extract_zip;
 use function EE\Utils\get_flag_value;
 use function EE\Utils\get_config_value;
 use function EE\Utils\delem_log;
+use function EE\Utils\remove_trailing_slash;
 use function EE\Site\Utils\auto_site_name;
 use function EE\Site\Utils\get_site_info;
 use function EE\Site\Utils\reload_global_nginx_proxy;
-use function EE\Utils\remove_trailing_slash;
+use function EE\Site\Utils\get_parent_of_alias;
 
 /**
  * Base class for Site command
@@ -245,21 +246,34 @@ abstract class EE_Site_Command {
 		$proxy_conf_location         = EE_ROOT_DIR . '/services/nginx-proxy/conf.d/' . $site_url . '.conf';
 		$proxy_vhost_location_subdom = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/*.' . $this->site_data['site_url'] . '_location';
 
+		$alias_domains = [];
+
+		if ( ! empty( $this->site_data['alias_domains'] ) ) {
+			$alias_domains = array_diff( explode( ',', $this->site_data['alias_domains'] ), [
+				$this->site_data['site_url'],
+				'*.' . $this->site_data['site_url'],
+			] );
+		}
+
+		$conf_locations = [ $proxy_conf_location, $proxy_vhost_location, $proxy_vhost_location_subdom ];
+
 		$reload = false;
 
-		if ( $this->fs->exists( $proxy_conf_location ) ) {
-			$this->fs->remove( $proxy_conf_location );
-			$reload = true;
+		foreach ( $conf_locations as $cl ) {
+
+			if ( $this->fs->exists( $cl ) ) {
+				$this->fs->remove( $cl );
+				$reload = true;
+			}
 		}
 
-		if ( $this->fs->exists( $proxy_vhost_location ) ) {
-			$this->fs->remove( $proxy_vhost_location );
-			$reload = true;
-		}
+		foreach ( $alias_domains as $ad ) {
 
-		if ( $this->fs->exists( $proxy_vhost_location_subdom ) ) {
-			$this->fs->remove( $proxy_vhost_location_subdom );
-			$reload = true;
+			$proxy_vhost_location = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/' . $ad . '_location';
+			if ( $this->fs->exists( $proxy_vhost_location ) ) {
+				$this->fs->remove( $proxy_vhost_location );
+				$reload = true;
+			}
 		}
 
 		if ( $reload ) {
@@ -339,6 +353,14 @@ abstract class EE_Site_Command {
 	 * [--proxy-cache-max-time=<time-in-s-or-m>]
 	 * : Max time for proxy cache to last.
 	 *
+	 * [--proxy-cache-key-zone-size=<size-in-m>]
+	 * : Size of proxy cache key zone.
+	 *
+	 * [--add-alias-domains=<comma-seprated-domains-to-add>]
+	 * : Comma seprated list of domains to add to site's alias domains. These can be configured only on WordPress subdom MU.
+	 *
+	 * [--delete-alias-domains=<comma-seprated-domains-to-delete>]
+	 * : Comma seprated list of domains to delete from site's alias domains. These can be configured only on WordPress subdom MU.
 	 *
 	 * ## EXAMPLES
 	 *
@@ -359,6 +381,12 @@ abstract class EE_Site_Command {
 	 *
 	 *     # Update proxy cache of site.
 	 *     $ ee site update example.com --proxy-cache=on --proxy-cache-max-size=1g --proxy-cache-max-time=30s
+	 *
+	 *     # Add alias domains to a WordPress subdom site.
+	 *     $ ee site update example.com --add-alias-domains='a.com,*.a.com,b.com,c.com'
+	 *
+	 *     # Delete alias domains from a WordPress subdom site.
+	 *     $ ee site update example.com --delete-alias-domains='a.com,*.a.com,b.com'
 	 */
 	public function update( $args, $assoc_args ) {
 
@@ -368,6 +396,9 @@ abstract class EE_Site_Command {
 		$ssl             = get_flag_value( $assoc_args, 'ssl', false );
 		$php             = get_flag_value( $assoc_args, 'php', false );
 		$proxy_cache     = get_flag_value( $assoc_args, 'proxy-cache', false );
+		$add_domains     = get_flag_value( $assoc_args, 'add-alias-domains', false );
+		$delete_domains  = get_flag_value( $assoc_args, 'delete-alias-domains', false );
+
 		if ( $ssl ) {
 			$this->update_ssl( $assoc_args );
 		}
@@ -379,8 +410,113 @@ abstract class EE_Site_Command {
 		if ( $proxy_cache ) {
 			$this->update_proxy_cache( $args, $assoc_args );
 		}
+
+		if ( $add_domains || $delete_domains ) {
+			$this->update_alias_domains( $args, $assoc_args );
+		}
 	}
 
+
+	/**
+	 * Function to update alias domains of a site.
+	 */
+	protected function update_alias_domains( $args, $assoc_args ) {
+
+		$add_domains    = get_flag_value( $assoc_args, 'add-alias-domains', false );
+		$delete_domains = get_flag_value( $assoc_args, 'delete-alias-domains', false );
+
+		try {
+
+			$site            = $this->site_data;
+			$array_data      = (array) $this->site_data;
+			$this->site_data = reset( $array_data );
+
+			// Check if it is a WP site.
+			if ( 'wp' !== $this->site_data['site_type'] || 'subdom' !== $this->site_data['app_sub_type'] ) {
+				EE::error( 'Currently alias domains are only supported in WordPress subdom MU sites.' );
+			}
+
+			// Validate data.
+			$existing_alias_domains = [];
+			$domains_to_add         = [];
+			$domains_to_delete      = [];
+
+			if ( ! empty( $this->site_data['alias_domains'] ) ) {
+				$existing_alias_domains = explode( ',', $this->site_data['alias_domains'] );
+			}
+			if ( ! empty( $add_domains ) ) {
+				$domains_to_add = explode( ',', $add_domains );
+			}
+			if ( ! empty( $delete_domains ) ) {
+				$domains_to_delete = explode( ',', $delete_domains );
+			}
+
+			$already_added_domains = array_intersect( $existing_alias_domains, $domains_to_add );
+			$domains_to_add        = array_diff( $domains_to_add, $existing_alias_domains );
+
+			if ( empty( $domains_to_add ) && $add_domains ) {
+				$already_added_domains = implode( ',', $already_added_domains );
+				EE::error( "Alias domains: $already_added_domains is/are already present on the site." );
+			}
+
+			if ( ! empty ( $already_added_domains ) ) {
+				$already_added_domains = implode( ',', $already_added_domains );
+				EE::warning( "Following domains: $already_added_domains is/are already present on site, skipping addition of those." );
+			}
+
+			// Handle primary site in deletion.
+			$diff_delete_domains = array_diff( $domains_to_delete, $existing_alias_domains );
+			if ( in_array( $this->site_data['site_url'], $domains_to_delete ) ) {
+				EE::error( 'Primary site domain: `' . $this->site_data['site_url'] . '` can not be deleted.' );
+			}
+			if ( ! empty( $diff_delete_domains ) ) {
+				EE::error( "Domains to delete is/are not a subset of already existing alias domains." );
+			}
+
+			foreach ( $domains_to_add as $ad ) {
+
+				if ( Site::find( $ad ) ) {
+					\EE::error( sprintf( "%1\$s already exists as a site. If you want to add it to alias domain of this site, then please delete the existing site using:\n`ee site delete %1\$s`", $ad ) );
+				}
+
+				$parent_site = get_parent_of_alias( $ad );
+				if ( ! empty( $parent_site ) ) {
+					\EE::error( sprintf( "Site %1\$s already exists as an alias domain for site: %2\$s. Please delete it from alias domains of %2\$s if you want to add it as an alias domain for this site.", $ad, $parent_site ) );
+				}
+			}
+
+			$final_alias_domains = array_merge( $existing_alias_domains, $domains_to_add );
+			$final_alias_domains = array_diff( $final_alias_domains, $domains_to_delete );
+
+			$this->site_data['alias_domains'] = implode( ',', $final_alias_domains );
+			$is_ssl                           = $this->site_data['site_ssl'] ? true : false;
+			$this->dump_docker_compose_yml( [ 'nohttps' => $is_ssl ] );
+		} catch ( \Exception $e ) {
+			EE::error( $e->getMessage() );
+		}
+
+		$site->alias_domains = implode( ',', $final_alias_domains );
+		$site->save();
+		if ( $is_ssl ) {
+			// Update SSL.
+			EE::log( 'Updating and force renewing SSL certificate to accomodated alias domain changes.' );
+			$this->ssl_renew( [ $this->site_data['site_url'] ], [ 'force' => true ] );
+		}
+		chdir( $this->site_data['site_fs_path'] );
+		// Required as env variables have changed.
+		EE::exec( 'docker-compose up -d nginx' );
+		EE::success( 'Alias domains updated on site ' . $this->site_data['site_url'] . '.' );
+		if ( ! empty( $this->site_data['proxy_cache'] ) && 'on' === $this->site_data['proxy_cache'] ) {
+			EE::log( 'As proxy cache is enabled on this site, updating config to enable it in newly added alias domains.' );
+			$this->site_data = $site;
+			$assoc_args      = [
+				'proxy-cache' => 'on',
+				'force'       => true,
+			];
+			$this->update_proxy_cache( $args, $assoc_args );
+		}
+		delem_log( 'site alias domains update end' );
+	}
 
 	/**
 	 * Function to enable/disable proxy cache of a site.
@@ -388,10 +524,12 @@ abstract class EE_Site_Command {
 	protected function update_proxy_cache( $args, $assoc_args, $call_on_create = false ) {
 
 		$proxy_cache = get_flag_value( $assoc_args, 'proxy-cache', 'on' );
+		$force       = get_flag_value( $assoc_args, 'force', false );
+
 
 		if ( ! $call_on_create ) {
 
-			if ( $proxy_cache === $this->site_data->proxy_cache ) {
+			if ( $proxy_cache === $this->site_data->proxy_cache && ! $force ) {
 				EE::error( 'Site ' . $this->site_data->site_url . ' already has proxy cache: ' . $proxy_cache );
 			}
 		}
@@ -400,28 +538,32 @@ abstract class EE_Site_Command {
 
 		try {
 			if ( ! $call_on_create ) {
-				$site                        = $this->site_data;
-				$array_data                  = (array) $this->site_data;
-				$this->site_data             = reset( $array_data );
+				$site            = $this->site_data;
+				$array_data      = (array) $this->site_data;
+				$this->site_data = reset( $array_data );
 			}
 			$proxy_conf_location         = EE_ROOT_DIR . '/services/nginx-proxy/conf.d/' . $this->site_data['site_url'] . '.conf';
 			$proxy_vhost_location        = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/' . $this->site_data['site_url'] . '_location';
 			$proxy_vhost_location_subdom = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/*.' . $this->site_data['site_url'] . '_location';
 
-			$proxy_cache_time = strtolower( get_flag_value( $assoc_args, 'proxy-cache-max-time', '30s' ) );
-			$proxy_cache_size = strtolower( get_flag_value( $assoc_args, 'proxy-cache-max-size', '256m' ) );
-			$wrong_time       = false;
-			$wrong_size       = false;
+			$proxy_cache_time          = strtolower( get_flag_value( $assoc_args, 'proxy-cache-max-time', '1s' ) );
+			$proxy_cache_size          = strtolower( get_flag_value( $assoc_args, 'proxy-cache-max-size', '256m' ) );
+			$proxy_cache_key_zone_size = strtolower( get_flag_value( $assoc_args, 'proxy-cache-key-zone-size', '10m' ) );
+			$wrong_time                = false;
+			$wrong_size                = false;
+			$wrong_key_size            = false;
 
 			in_array( substr( $proxy_cache_time, - 1 ), [ 's', 'm' ] ) ?: $wrong_time = true;
 			in_array( substr( $proxy_cache_size, - 1 ), [ 'm', 'g' ] ) ?: $wrong_size = true;
+			in_array( substr( $proxy_cache_key_zone_size, - 1 ), [ 'm' ] ) ?: $wrong_key_size = true;
 
 			is_numeric( substr( $proxy_cache_time, 0, - 1 ) ) ?: $wrong_time = true;
 			is_numeric( substr( $proxy_cache_size, 0, - 1 ) ) ?: $wrong_size = true;
+			is_numeric( substr( $proxy_cache_key_zone_size, 0, - 1 ) ) ?: $wrong_key_size = true;
 
 			if ( $wrong_time ) {
-				EE::warning( "Wrong value `$proxy_cache_time` supplied to param: `proxy-cache-max-time`, replacing it with default:30s" );
-				$proxy_cache_time = '30s';
+				EE::warning( "Wrong value `$proxy_cache_time` supplied to param: `proxy-cache-max-time`, replacing it with default:1s" );
+				$proxy_cache_time = '1s';
 			}
 
 			if ( $wrong_size ) {
@@ -429,20 +571,42 @@ abstract class EE_Site_Command {
 				$proxy_cache_size = '256m';
 			}
 
-			EE::log( $log_message . ' proxy cache for: ' . $this->site_data['site_url'] );
+			if ( $wrong_key_size ) {
+				EE::warning( "Wrong value `$proxy_cache_key_zone_size` supplied to param: `proxy-cache-key-zone-size`, replacing it with default:10m" );
+				$proxy_cache_key_zone_size = '10m';
+			}
+
+			if ( $force ) {
+				EE::log( $log_message . ' proxy cache for alias domains of site: ' . $this->site_data['site_url'] );
+			} else {
+				EE::log( $log_message . ' proxy cache for: ' . $this->site_data['site_url'] );
+			}
+
+			$alias_domains = [];
+			if ( ! empty( $this->site_data['alias_domains'] ) ) {
+				$alias_domains = array_diff( explode( ',', $this->site_data['alias_domains'] ), [
+					$this->site_data['site_url'],
+					'*.' . $this->site_data['site_url'],
+				] );
+			}
 
 			if ( 'on' === $proxy_cache ) {
 
 				$sanitized_site_url = str_replace( '.', '-', $this->site_data['site_url'] );
 
 				$data               = [
-					'site_url'           => $this->site_data['site_url'],
-					'sanitized_site_url' => $sanitized_site_url,
-					'proxy_cache_size'   => $proxy_cache_size,
-					'proxy_cache_time'   => $proxy_cache_time,
+					'site_url'                  => $this->site_data['site_url'],
+					'sanitized_site_url'        => $sanitized_site_url,
+					'proxy_cache_size'          => $proxy_cache_size,
+					'proxy_cache_key_zone_size' => $proxy_cache_key_zone_size,
+					'proxy_cache_time'          => $proxy_cache_time,
+					'easyengine_version'        => 'v' . EE_VERSION,
 				];
 				$proxy_conf_content = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx-proxy/proxy.conf.mustache', $data );
-				$this->fs->dumpFile( $proxy_conf_location, $proxy_conf_content );
+
+				if ( ! $force ) {
+					$this->fs->dumpFile( $proxy_conf_location, $proxy_conf_content );
+				}
 
 				$proxy_vhost_content = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx-proxy/vhost_location.conf.mustache', $data );
 				$this->fs->dumpFile( $proxy_vhost_location, $proxy_vhost_content );
@@ -450,22 +614,36 @@ abstract class EE_Site_Command {
 				if ( 'subdom' === $this->site_data['app_sub_type'] ) {
 					$this->fs->dumpFile( $proxy_vhost_location_subdom, $proxy_vhost_content );
 				}
+
+				foreach ( $alias_domains as $ad ) {
+
+					$proxy_vhost_location = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/' . $ad . '_location';
+					$proxy_vhost_content  = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx-proxy/vhost_location.conf.mustache', $data );
+					$this->fs->dumpFile( $proxy_vhost_location, $proxy_vhost_content );
+				}
 			} else {
 				$reload = false;
 
-				if ( $this->fs->exists( $proxy_conf_location ) ) {
-					$this->fs->remove( $proxy_conf_location );
-					$reload = true;
+
+				$conf_locations = [ $proxy_conf_location, $proxy_vhost_location, $proxy_vhost_location_subdom ];
+
+				$reload = false;
+
+				foreach ( $conf_locations as $cl ) {
+
+					if ( $this->fs->exists( $cl ) ) {
+						$this->fs->remove( $cl );
+						$reload = true;
+					}
 				}
 
-				if ( $this->fs->exists( $proxy_vhost_location ) ) {
-					$this->fs->remove( $proxy_vhost_location );
-					$reload = true;
-				}
+				foreach ( $alias_domains as $ad ) {
 
-				if ( $this->fs->exists( $proxy_vhost_location_subdom ) ) {
-					$this->fs->remove( $proxy_vhost_location_subdom );
-					$reload = true;
+					$proxy_vhost_location = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/' . $ad . '_location';
+					if ( $this->fs->exists( $proxy_vhost_location ) ) {
+						$this->fs->remove( $proxy_vhost_location );
+						$reload = true;
+					}
 				}
 
 				if ( $reload ) {
@@ -473,7 +651,15 @@ abstract class EE_Site_Command {
 					EE::exec( 'docker exec ' . EE_PROXY_TYPE . " bash -c 'rm -rf /var/cache/nginx/" . $this->site_data['site_url'] . "'" );
 				}
 			}
-			\EE\Site\Utils\reload_global_nginx_proxy();
+			if ( EE::exec( 'docker exec ' . EE_PROXY_TYPE . " bash -c 'nginx -t'" ) ) {
+				\EE\Site\Utils\reload_global_nginx_proxy();
+				EE::exec( 'docker restart ' . EE_PROXY_TYPE );
+			} else {
+				$this->fs->remove( $proxy_conf_location );
+				$this->fs->remove( $proxy_vhost_location );
+				$this->fs->remove( $proxy_vhost_location_subdom );
+				\EE\Site\Utils\reload_global_nginx_proxy();
+			}
 		} catch ( \Exception $e ) {
 			EE::error( $e->getMessage() );
 		}
@@ -481,7 +667,7 @@ abstract class EE_Site_Command {
 			$site->proxy_cache = $proxy_cache;
 			$site->save();
 		}
-		EE::success( $log_message . ' on site ' . $this->site_data['site_url'] . '.' );
+		EE::success( 'Proxy cache update on site ' . $this->site_data['site_url'] . ' completed.' );
 		delem_log( 'site proxy cache update end' );
 	}
 
@@ -556,6 +742,7 @@ abstract class EE_Site_Command {
 			EE::error( $e->getMessage() );
 		}
 		$site->save();
+		$this->restart( $args, [ 'php' => true ] );
 		EE::success( 'Updated site ' . $this->site_data['site_url'] . ' to PHP version: ' . $php_version );
 		delem_log( 'site php version update end' );
 	}
@@ -798,7 +985,16 @@ abstract class EE_Site_Command {
 		}
 
 		foreach ( $containers as $container ) {
-			\EE\Site\Utils\run_compose_command( 'restart', $container );
+			if ( 'nginx' === $container ) {
+				if ( EE::exec( "docker-compose exec $container nginx -t", true, true ) ) {
+					\EE\Site\Utils\run_compose_command( 'restart', $container );
+				} else {
+					\EE\Utils\delem_log( 'site restart stop due to Nginx test failure' );
+					\EE::error( 'Nginx test failed' );
+				}
+			} else {
+				\EE\Site\Utils\run_compose_command( 'restart', $container );
+			}
 		}
 		\EE\Utils\delem_log( 'site restart stop' );
 	}
@@ -817,9 +1013,12 @@ abstract class EE_Site_Command {
 	 * [--object]
 	 * : Clear object cache.
 	 *
+	 * [--proxy]
+	 * : Clear proxy cache.
+	 *
 	 * ## EXAMPLES
 	 *
-	 *     # Clear Both cache type for site.
+	 *     # Clear all enabled caches for site.
 	 *     $ ee site clean example.com
 	 *
 	 *     # Clear Object cache for site.
@@ -827,27 +1026,37 @@ abstract class EE_Site_Command {
 	 *
 	 *     # Clear Page cache for site.
 	 *     $ ee site clean example.com --page
+	 *
+	 *     # Clear Proxy cache for site.
+	 *     $ ee site clean example.com --proxy
 	 */
 	public function clean( $args, $assoc_args ) {
 
 		\EE\Utils\delem_log( 'site clean start' );
 		$object          = \EE\Utils\get_flag_value( $assoc_args, 'object' );
 		$page            = \EE\Utils\get_flag_value( $assoc_args, 'page' );
+		$proxy           = \EE\Utils\get_flag_value( $assoc_args, 'proxy' );
 		$args            = auto_site_name( $args, 'site', __FUNCTION__ );
 		$this->site_data = get_site_info( $args, false, true, false );
 		$purge_key       = '';
 		$error           = [];
 
 		// No param passed.
-		if ( empty( $object ) && empty( $page ) ) {
+		if ( empty( $object ) && empty( $page ) && empty( $proxy ) ) {
+
 			$object = true;
 			$page   = true;
+
+			if ( 'on' === $this->site_data->proxy_cache ) {
+				$proxy = true;
+			}
 		}
 
 		// Object cache clean.
 		if ( ! empty( $object ) ) {
 			if ( 1 === intval( $this->site_data->cache_mysql_query ) ) {
 				$purge_key = $this->site_data->site_url . '_obj';
+				EE\Site\Utils\clean_site_cache( $purge_key );
 			} else {
 				$error[] = 'Site object cache is not enabled.';
 			}
@@ -857,27 +1066,34 @@ abstract class EE_Site_Command {
 		if ( ! empty( $page ) ) {
 			if ( 1 === intval( $this->site_data->cache_nginx_fullpage ) ) {
 				$purge_key = $this->site_data->site_url . '_page';
+				EE\Site\Utils\clean_site_cache( $purge_key );
 			} else {
 				$error[] = 'Site page cache is not enabled.';
 			}
 		}
 
-		// If Page and Object both passed.
-		if ( ! empty( $object ) && ! empty( $page ) ) {
-			$purge_key = $this->site_data->site_url;
+		// Clear proxy cache.
+		if ( ! empty( $proxy ) ) {
+			if ( 'on' === $this->site_data->proxy_cache ) {
+				EE::exec( sprintf( 'docker exec -it %s bash -c "rm -r /var/cache/nginx/%s/*"', EE_PROXY_TYPE, $this->site_data->site_url ) );
+				EE::log( 'Restarting nginx-proxy after clearing proxy cache.' );
+				EE::exec( sprintf( 'docker exec -it %1$s bash -c "nginx -t" && docker restart %1$s', EE_PROXY_TYPE ) );
+			} else {
+				$error[] = 'Proxy cache is not enabled on site.';
+			}
 		}
 
 		if ( ! empty( $error ) ) {
 			\EE::error( implode( ' ', $error ) );
 		}
 
-		EE\Site\Utils\clean_site_cache( $purge_key );
+		$cache_flags = [ 'Page' => $page, 'Object' => $object, 'Proxy' => $proxy ];
 
-		if ( $page ) {
-			\EE::success( 'Page cache cleared for ' . $this->site_data->site_url );
-		}
-		if ( $object ) {
-			\EE::success( 'Object cache cleared for ' . $this->site_data->site_url );
+		foreach ( $cache_flags as $name => $is_purged ) {
+
+			if ( $is_purged ) {
+				\EE::success( $name . ' cache cleared for ' . $this->site_data->site_url );
+			}
 		}
 
 		\EE\Utils\delem_log( 'site clean end' );
@@ -909,7 +1125,7 @@ abstract class EE_Site_Command {
 		$args = auto_site_name( $args, 'site', __FUNCTION__ );
 		$all  = \EE\Utils\get_flag_value( $assoc_args, 'all' );
 		if ( ! array_key_exists( 'nginx', $reload_commands ) ) {
-			$reload_commands['nginx'] = 'nginx sh -c \'nginx -t && service openresty reload\'';
+			$reload_commands['nginx'] = 'nginx sh -c \'nginx -t && nginx -s reload\'';
 		}
 		$no_service_specified = count( $assoc_args ) === 0;
 
@@ -983,7 +1199,7 @@ abstract class EE_Site_Command {
 		// Need second reload sometimes for changes to reflect.
 		\EE\Site\Utils\reload_global_nginx_proxy();
 
-		$is_www_or_non_www_pointed = $this->check_www_or_non_www_domain( $this->site_data['site_url'], $this->site_data['site_fs_path'] ) || $this->site_data['site_ssl_wildcard'];
+		$is_www_or_non_www_pointed = $this->check_www_or_non_www_domain( $this->site_data['site_url'], $this->site_data['site_fs_path'], $this->site_data['site_container_fs_path'] ) || $this->site_data['site_ssl_wildcard'];
 		if ( ! $is_www_or_non_www_pointed ) {
 			$fs          = new Filesystem();
 			$confd_path  = EE_ROOT_DIR . '/services/nginx-proxy/conf.d/';
@@ -995,7 +1211,9 @@ abstract class EE_Site_Command {
 		if ( $this->site_data['site_ssl'] ) {
 			if ( ! $site_enable ) {
 				if ( 'custom' !== $this->site_data['site_ssl'] ) {
-					$this->init_ssl( $this->site_data['site_url'], $this->site_data['site_fs_path'], $this->site_data['site_ssl'], $this->site_data['site_ssl_wildcard'], $is_www_or_non_www_pointed, $force );
+
+					$alias_domains = empty( $this->site_data['alias_domains'] ) ? [] : explode( ',', $this->site_data['alias_domains'] );
+					$this->init_ssl( $this->site_data['site_url'], $this->site_data['site_fs_path'], $this->site_data['site_ssl'], $this->site_data['site_ssl_wildcard'], $is_www_or_non_www_pointed, $force, $alias_domains );
 				}
 
 				$this->dump_docker_compose_yml( [ 'nohttps' => false ] );
@@ -1045,16 +1263,17 @@ abstract class EE_Site_Command {
 	 * @param bool $wildcard       SSL with wildcard or not.
 	 * @param bool $www_or_non_www Allow LetsEncrypt on www or non-www subdomain.
 	 * @param bool $force          Force ssl renewal.
+	 * @param array $alias_domains Array of alias domains if any.
 	 *
 	 * @throws \EE\ExitException If --ssl flag has unrecognized value.
 	 * @throws \Exception
 	 */
-	protected function init_ssl( $site_url, $site_fs_path, $ssl_type, $wildcard = false, $www_or_non_www = false, $force = false ) {
+	protected function init_ssl( $site_url, $site_fs_path, $ssl_type, $wildcard = false, $www_or_non_www = false, $force = false, $alias_domains = [] ) {
 
 		\EE::debug( 'Starting SSL procedure' );
 		if ( 'le' === $ssl_type ) {
 			\EE::debug( 'Initializing LE' );
-			$this->init_le( $site_url, $site_fs_path, $wildcard, $www_or_non_www, $force );
+			$this->init_le( $site_url, $site_fs_path, $wildcard, $www_or_non_www, $force, $alias_domains );
 		} elseif ( 'inherit' === $ssl_type ) {
 			if ( $wildcard ) {
 				throw new \Exception( 'Cannot use --wildcard with --ssl=inherit', false );
@@ -1079,8 +1298,9 @@ abstract class EE_Site_Command {
 	 * @param bool $wildcard       SSL with wildcard or not.
 	 * @param bool $www_or_non_www Allow LetsEncrypt on www or non-www subdomain.
 	 * @param bool $force          Force ssl renewal.
+	 * @param array $alias_domains Array of alias domains if any.
 	 */
-	protected function init_le( $site_url, $site_fs_path, $wildcard = false, $www_or_non_www, $force = false ) {
+	protected function init_le( $site_url, $site_fs_path, $wildcard = false, $www_or_non_www, $force = false, $alias_domains = [] ) {
 		$preferred_challenge = get_config_value( 'preferred_ssl_challenge', '' );
 		$is_solver_dns       = ( $wildcard || 'dns' === $preferred_challenge ) ? true : false;
 		\EE::debug( 'Wildcard in init_le: ' . ( bool ) $wildcard );
@@ -1097,6 +1317,7 @@ abstract class EE_Site_Command {
 		}
 
 		$domains = $this->get_cert_domains( $site_url, $wildcard, $www_or_non_www );
+		$domains = array_merge( $domains, $alias_domains );
 
 		if ( ! $client->authorize( $domains, $wildcard, $preferred_challenge ) ) {
 			return;
@@ -1147,14 +1368,16 @@ abstract class EE_Site_Command {
 	 *
 	 * @param string Site url.
 	 * @param string Absolute path of site.
+	 * @param string $site_container_path
 	 *
 	 * @return bool
 	 */
-	protected function check_www_or_non_www_domain( $site_url, $site_path ): bool {
+	protected function check_www_or_non_www_domain( $site_url, $site_path, $site_container_path ): bool {
 
 		$random_string = EE\Utils\random_password();
 		$successful    = false;
-		$file_path     = $site_path . '/app/htdocs/check.html';
+		$extra_path    = str_replace( '/var/www/htdocs', '', $site_container_path );
+		$file_path     = $site_path . '/app/htdocs' . $extra_path . '/check.html';
 		file_put_contents( $file_path, $random_string );
 
 		if ( 0 === strpos( $site_url, 'www.' ) ) {
@@ -1212,9 +1435,11 @@ abstract class EE_Site_Command {
 			$this->le_mail = \EE::get_config( 'le-mail' ) ?? \EE::input( 'Enter your mail id: ' );
 		}
 
-		$force   = \EE\Utils\get_flag_value( $assoc_args, 'force' );
-		$domains = $this->get_cert_domains( $this->site_data['site_url'], $this->site_data['site_ssl_wildcard'], $www_or_non_www );
-		$client  = new Site_Letsencrypt();
+		$force         = \EE\Utils\get_flag_value( $assoc_args, 'force' );
+		$alias_domains = empty( $this->site_data['alias_domains'] ) ? [] : explode( ',', $this->site_data['alias_domains'] );
+		$domains       = $this->get_cert_domains( $this->site_data['site_url'], $this->site_data['site_ssl_wildcard'], $www_or_non_www );
+		$domains       = array_merge( $domains, $alias_domains );
+		$client        = new Site_Letsencrypt();
 
 		$preferred_challenge = get_config_value( 'preferred_ssl_challenge', '' );
 
@@ -1227,7 +1452,12 @@ abstract class EE_Site_Command {
 			$is_solver_dns   = ( $this->site_data['site_ssl_wildcard'] || 'dns' === $preferred_challenge ) ? true : false;
 			$api_key_present = ! empty( get_config_value( 'cloudflare-api-key' ) );
 
+			if ( $called_by_ee && ! $is_solver_dns && $api_key_present ) {
+				throw $e;
+			}
+
 			$warning = ( $is_solver_dns && $api_key_present ) ? "The dns entries have not yet propogated. Manually check: \nhost -t TXT _acme-challenge." . $this->site_data['site_url'] . "\nBefore retrying `ee site ssl " . $this->site_data['site_url'] . "`" : 'Failed to verify SSL: ' . $e->getMessage();
+
 			EE::warning( $warning );
 			EE::warning( sprintf( 'Check logs and retry `ee site ssl %s` once the issue is resolved.', $this->site_data['site_url'] ) );
 
@@ -1603,6 +1833,7 @@ abstract class EE_Site_Command {
 		$this->fs->copy( $this->site_data['ssl_crt'], $ssl_crt_dest, true );
 	}
 
+
 	abstract public function create( $args, $assoc_args );
 
 	abstract protected function rollback();
@@ -1610,4 +1841,3 @@ abstract class EE_Site_Command {
 	abstract public function dump_docker_compose_yml( $additional_filters = [] );
 
 }
-
