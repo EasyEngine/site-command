@@ -864,6 +864,12 @@ abstract class EE_Site_Command {
 		$success             = false;
 		$containers_to_start = [ 'nginx' ];
 
+		# Required when newrelic is enabled on site. Newrelic ini is updated via docker-entrypoint.
+		$php_confd_dir = $this->site_data->site_fs_path . '/config/php/php/conf.d';
+		if ( $this->fs->exists( $php_confd_dir ) ) {
+			$this->fs->chown( $php_confd_dir, 'www-data', true );
+		}
+
 		if ( \EE_DOCKER::docker_compose_up( $this->site_data->site_fs_path, $containers_to_start ) ) {
 			$this->site_data->site_enabled = 1;
 			$this->site_data->save();
