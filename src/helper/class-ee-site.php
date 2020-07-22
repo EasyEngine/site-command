@@ -700,6 +700,7 @@ abstract class EE_Site_Command {
 			$site_backup_dir     = $this->site_data['site_fs_path'] . '/.backup';
 			$php_conf_backup_dir = $site_backup_dir . '/config/php-' . $old_php_version;
 			$php_conf_dir        = $this->site_data['site_fs_path'] . '/config/php';
+			$php_confd_dir       = $this->site_data['site_fs_path'] . '/config/php/php/conf.d';
 			$this->fs->mkdir( $php_conf_backup_dir );
 			$this->fs->mirror( $php_conf_dir, $php_conf_backup_dir );
 
@@ -724,6 +725,7 @@ abstract class EE_Site_Command {
 			$this->fs->remove( $removal_files );
 			$this->fs->mirror( $unzip_folder, $php_conf_dir );
 			$this->fs->remove( [ $zip_path, $unzip_folder ] );
+			$this->fs->chown( $php_confd_dir, 'www-data', true );
 
 			// Recover previous custom configs.
 			EE::log( 'Re-applying previous custom.ini and easyengine.conf changes.' );
@@ -861,6 +863,12 @@ abstract class EE_Site_Command {
 
 		$success             = false;
 		$containers_to_start = [ 'nginx' ];
+
+		# Required when newrelic is enabled on site. Newrelic ini is updated via docker-entrypoint.
+		$php_confd_dir = $this->site_data->site_fs_path . '/config/php/php/conf.d';
+		if ( $this->fs->exists( $php_confd_dir ) ) {
+			$this->fs->chown( $php_confd_dir, 'www-data', true );
+		}
 
 		if ( \EE_DOCKER::docker_compose_up( $this->site_data->site_fs_path, $containers_to_start ) ) {
 			$this->site_data->site_enabled = 1;
