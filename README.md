@@ -105,12 +105,12 @@ ee site update [<site-name>] [--ssl=<ssl>] [--wildcard]
 
 
 
-### ee site info --type=html
+### ee site create --type=html
 
 Runs the standard HTML site installation.
 
 ~~~
-ee site info --type=html <site-name> [--ssl=<value>] [--wildcard] [--type=<type>] [--skip-status-check]
+ee site create --type=html <site-name> [--ssl=<value>] [--wildcard] [--type=<type>] [--skip-status-check]
 ~~~
 
 **OPTIONS**
