@@ -717,6 +717,7 @@ abstract class EE_Site_Command {
 			$site_backup_dir     = $this->site_data['site_fs_path'] . '/.backup';
 			$php_conf_backup_dir = $site_backup_dir . '/config/php-' . $old_php_version;
 			$php_conf_dir        = $this->site_data['site_fs_path'] . '/config/php';
+			$php_confd_dir       = $this->site_data['site_fs_path'] . '/config/php/php/conf.d';
 			$this->fs->mkdir( $php_conf_backup_dir );
 			$this->fs->mirror( $php_conf_dir, $php_conf_backup_dir );
 
@@ -741,6 +742,7 @@ abstract class EE_Site_Command {
 			$this->fs->remove( $removal_files );
 			$this->fs->mirror( $unzip_folder, $php_conf_dir );
 			$this->fs->remove( [ $zip_path, $unzip_folder ] );
+			$this->fs->chown( $php_confd_dir, 'www-data', true );
 
 			// Recover previous custom configs.
 			EE::log( 'Re-applying previous custom.ini and easyengine.conf changes.' );
@@ -878,6 +880,12 @@ abstract class EE_Site_Command {
 
 		$success             = false;
 		$containers_to_start = [ 'nginx' ];
+
+		# Required when newrelic is enabled on site. Newrelic ini is updated via docker-entrypoint.
+		$php_confd_dir = $this->site_data->site_fs_path . '/config/php/php/conf.d';
+		if ( $this->fs->exists( $php_confd_dir ) ) {
+			$this->fs->chown( $php_confd_dir, 'www-data', true );
+		}
 
 		if ( \EE_DOCKER::docker_compose_up( $this->site_data->site_fs_path, $containers_to_start ) ) {
 			$this->site_data->site_enabled = 1;
@@ -1073,6 +1081,7 @@ abstract class EE_Site_Command {
 		if ( ! empty( $object ) ) {
 			if ( 1 === intval( $this->site_data->cache_mysql_query ) ) {
 				$purge_key = $this->site_data->site_url . '_obj';
+				EE\Site\Utils\clean_site_cache( $purge_key );
 			} else {
 				$error[] = 'Site object cache is not enabled.';
 			}
@@ -1082,6 +1091,7 @@ abstract class EE_Site_Command {
 		if ( ! empty( $page ) ) {
 			if ( 1 === intval( $this->site_data->cache_nginx_fullpage ) ) {
 				$purge_key = $this->site_data->site_url . '_page';
+				EE\Site\Utils\clean_site_cache( $purge_key );
 			} else {
 				$error[] = 'Site page cache is not enabled.';
 			}
@@ -1091,21 +1101,16 @@ abstract class EE_Site_Command {
 		if ( ! empty( $proxy ) ) {
 			if ( 'on' === $this->site_data->proxy_cache ) {
 				EE::exec( sprintf( 'docker exec -it %s bash -c "rm -r /var/cache/nginx/%s/*"', EE_PROXY_TYPE, $this->site_data->site_url ) );
+				EE::log( 'Restarting nginx-proxy after clearing proxy cache.' );
+				EE::exec( sprintf( 'docker exec -it %1$s bash -c "nginx -t" && docker restart %1$s', EE_PROXY_TYPE ) );
 			} else {
 				$error[] = 'Proxy cache is not enabled on site.';
 			}
 		}
 
-		// If Page and Object both passed.
-		if ( ! empty( $object ) && ! empty( $page ) ) {
-			$purge_key = $this->site_data->site_url;
-		}
-
 		if ( ! empty( $error ) ) {
 			\EE::error( implode( ' ', $error ) );
 		}
-
-		EE\Site\Utils\clean_site_cache( $purge_key );
 
 		$cache_flags = [ 'Page' => $page, 'Object' => $object, 'Proxy' => $proxy ];
 
