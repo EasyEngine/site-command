@@ -177,7 +177,19 @@ abstract class EE_Site_Command {
 		];
 
 		\EE::confirm( sprintf( 'Are you sure you want to delete %s?', $this->site_data['site_url'] ), $assoc_args );
+
+		if($this->site_data['site_ssl']) {
+			$all_domains = array_unique(array_merge(
+				explode( ',', $this->site_data['alias_domains'] ),
+				[$this->site_data['site_url']]
+			));
+
+			$client = new Site_Letsencrypt();
+			$client->revoke($all_domains, true);
+		}
+
 		$this->delete_site( 5, $this->site_data['site_url'], $this->site_data['site_fs_path'], $db_data );
+
 		\EE\Utils\delem_log( 'site delete end' );
 	}
 
