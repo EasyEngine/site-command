@@ -258,50 +258,59 @@ class Site_Letsencrypt {
 		return true;
 	}
 
-	public function revoke( array $domains ) {
+	public function revoke(array $domains, bool $revoke_cert = false) {
 		$reasonCode = null; // ok to be null. LE expects 0 as default reason
 
 		try {
 			$revocationReason = isset($reasonCode[0]) ? new RevocationReason($reasonCode[0]) : RevocationReason::createDefaultReason();
 		} catch (\InvalidArgumentException $e) {
-			\EE::error('Reason code must be one of: '.PHP_EOL.implode(PHP_EOL, RevocationReason::getFormattedReasons()));
-
-			return;
+			\EE::error('Reason code must be one of: ' . PHP_EOL . implode(PHP_EOL, RevocationReason::getFormattedReasons()));
 		}
-		foreach($domains as $domain) {
+
+		foreach ($domains as $domain) {
 			if ($this->repository->hasDomainAuthorizationChallenge($domain)) {
 				$challenge = $this->repository->loadDomainAuthorizationChallenge($domain);
 
 				try {
 					$this->client->revokeAuthorizationChallenge($challenge);
+					\EE::debug('Domain Authorization Challenge for ' . $domain . ' revoked successfully');
 				} catch (CertificateRevocationException $e) {
-					\EE::warning($e->getMessage());
+					\EE::debug($e->getMessage());
 				}
 			} else {
-				\EE::warning('Domain Authorization Challenge for ' . $domain . ' not found locally');
+				\EE::debug('Domain Authorization Challenge for ' . $domain . ' not found locally');
 			}
 
+			if ($revoke_cert) {
+				if ($this->repository->hasDomainCertificate($domain)) {
+					$certificate = $this->repository->loadDomainCertificate($domain);
 
-			if ($this->repository->hasDomainCertificate($domain)) {
-				$certificate = $this->repository->loadDomainCertificate($domain);
-
+					try {
+						$this->client->revokeCertificate($certificate, $revocationReason);
+						\EE::success('Certificate for ' . $domain . ' revoked successfully');
+					} catch (CertificateRevocationException $e) {
+						\EE::debug($e->getMessage());
+					}
+				} else {
+					\EE::debug('Certificate for ' . $domain . ' not found locally');
+				}
+			} else {
+				\EE::debug('Skipping Certificate Revokation for ' . $domain );
 				try {
-					$this->client->revokeCertificate($certificate, $revocationReason);
-				} catch (CertificateRevocationException $e) {
-					\EE::warning($e->getMessage());
+					$this->repository->removeDomainCertificate($domain);
+				} catch (AcmeCliException $e) {
+					\EE::debug($e->getMessage());
 				}
-			} else {
-				\EE::warning('Certificate for ' . $domain . ' not found locally');
 			}
 		}
 
-		try {
-			$this->repository->removeDomain($domains);
-		} catch(AcmeCliException $e) {
-			\EE::warning($e->getMessage());
+		if ($revoke_cert) {
+			try {
+				$this->repository->removeDomain($domains);
+			} catch (AcmeCliException $e) {
+				\EE::debug($e->getMessage());
+			}
 		}
-
-		\EE::success('Certificate revoked successfully!');
 
 		return 0;
 	}
