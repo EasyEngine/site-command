@@ -185,7 +185,9 @@ abstract class EE_Site_Command {
 			));
 
 			$client = new Site_Letsencrypt();
-			$client->revoke($all_domains, true);
+			$client->revokeAuthorizationChallenges($all_domains);
+			$client->revokeCertificates($all_domains);
+			$client->removeDomain($all_domains);
 		}
 
 		$this->delete_site( 5, $this->site_data['site_url'], $this->site_data['site_fs_path'], $db_data );
@@ -520,13 +522,18 @@ abstract class EE_Site_Command {
 		}
 
 		$client = new Site_Letsencrypt();
-		$client->revoke($all_domains);
+
+		$old_certs = $client->loadDomainCertificates($all_domains);
+		$client->revokeAuthorizationChallenges($all_domains);
+		$client->removeDomain($all_domains);
 
 		if ( $is_ssl ) {
 			// Update SSL.
 			EE::log( 'Updating and force renewing SSL certificate to accomodated alias domain changes.' );
 			$this->ssl_renew( [ $this->site_data['site_url'] ], [ 'force' => true ] );
 		}
+
+		$client->revokeCertificates($old_certs);
 
 		chdir( $this->site_data['site_fs_path'] );
 		// Required as env variables have changed.
