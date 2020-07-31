@@ -129,7 +129,7 @@ function create_user_in_db( $db_host, $db_name = '', $db_user = '', $db_pass = '
 	$db_user = empty( $db_user ) ? \EE\Utils\random_password( 5 ) : $db_user;
 	$db_pass = empty( $db_pass ) ? \EE\Utils\random_password() : $db_pass;
 
-	$create_string = sprintf( "CREATE USER '%1\$s'@'%%' IDENTIFIED BY '%2\$s'; CREATE DATABASE %3\$s; GRANT ALL PRIVILEGES ON %3\$s.* TO '%1\$s'@'%%'; FLUSH PRIVILEGES;", $db_user, $db_pass, $db_name );
+	$create_string = sprintf( 'CREATE USER "%1$s"@"%%" IDENTIFIED BY "%2$s"; CREATE DATABASE `%3$s`; GRANT ALL PRIVILEGES ON `%3$s`.* TO "%1$s"@"%%"; FLUSH PRIVILEGES;', $db_user, $db_pass, $db_name );
 
 	if ( GLOBAL_DB === $db_host ) {
 
@@ -148,7 +148,7 @@ function create_user_in_db( $db_host, $db_name = '', $db_user = '', $db_pass = '
 		}
 
 		$db_script_path = \EE\Utils\get_temp_dir() . 'db_exec';
-		file_put_contents( $db_script_path, sprintf( 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e"%s"', $create_string ) );
+		file_put_contents( $db_script_path, sprintf( 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e\'%s\'', $create_string ) );
 
 		EE::exec( sprintf( 'docker cp %s %s:/db_exec', $db_script_path, GLOBAL_DB_CONTAINER ) );
 		if ( ! EE::exec( sprintf( 'docker exec %s sh db_exec', GLOBAL_DB_CONTAINER ) ) ) {
