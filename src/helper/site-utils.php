@@ -638,3 +638,24 @@ function get_parent_of_alias( $alias ) {
 
 	return reset( $output );
 }
+
+/**
+ * 'sysctl' parameters for docker-compose file.
+ *
+ * @return array of all 'sysctl' parameters.
+ */
+function sysctl_parameters() {
+	return [
+		'sysctl' => [
+			[ 'name' => 'net.ipv4.tcp_synack_retries=2' ],
+			[ 'name' => 'net.ipv4.ip_local_port_range=2000 65535' ],
+			[ 'name' => 'net.ipv4.tcp_rfc1337=1' ],
+			[ 'name' => 'net.ipv4.tcp_fin_timeout=15' ],
+			[ 'name' => 'net.ipv4.tcp_keepalive_time=300' ],
+			[ 'name' => 'net.ipv4.tcp_keepalive_probes=5' ],
+			[ 'name' => 'net.ipv4.tcp_keepalive_intvl=15' ],
+			[ 'name' => 'net.core.somaxconn=65536' ],
+			[ 'name' => 'net.ipv4.tcp_max_tw_buckets=1440000' ],
+		],
+	];
+}
