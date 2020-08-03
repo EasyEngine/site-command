@@ -516,8 +516,8 @@ abstract class EE_Site_Command {
 		array_push($all_domains, $site->site_url);
 		$all_domains = array_unique($all_domains);
 
-		foreach( $all_domains as $domain ) {
-			if( strpos( $domain,'*' ) !== false ) {
+		foreach ( $all_domains as $domain ) {
+			if ( '*.' . $site->site_url === $domain ) {
 				$site->site_ssl_wildcard = "1";
 			}
 		}
