@@ -184,9 +184,15 @@ abstract class EE_Site_Command {
 				[$this->site_data['site_url']]
 			));
 
-			$client = new Site_Letsencrypt();
-			$client->revokeAuthorizationChallenges($all_domains);
-			$client->revokeCertificates($all_domains);
+			EE::log( 'Revoking certificate.' );
+
+			try {
+				$client = new Site_Letsencrypt();
+				$client->revokeAuthorizationChallenges($all_domains);
+				$client->revokeCertificates($all_domains);
+			} catch (\Exception $e) {
+				EE::warning($e->getMessage());
+			}
 			$client->removeDomain($all_domains);
 		}
 
@@ -326,7 +332,7 @@ abstract class EE_Site_Command {
 				\EE::error( 'Could not remove the database entry' );
 			}
 		}
-		\EE::log( "Site $site_url deleted." );
+		\EE::success( "Site $site_url deleted." );
 	}
 
 	/**
@@ -505,7 +511,7 @@ abstract class EE_Site_Command {
 			$this->site_data['alias_domains'] = implode( ',', $final_alias_domains );
 			$is_ssl                           = $this->site_data['site_ssl'] ? true : false;
 			$this->dump_docker_compose_yml( [ 'nohttps' => $is_ssl ] );
-			EE::exec( 'docker-compose up -d nginx' );
+			\EE_DOCKER::docker_compose_up( $this->site_data['site_fs_path'], ['nginx'] );
 		} catch ( \Exception $e ) {
 			EE::error( $e->getMessage() );
 		}
@@ -526,7 +532,6 @@ abstract class EE_Site_Command {
 
 		$old_certs = $client->loadDomainCertificates($all_domains);
 		$client->revokeAuthorizationChallenges($all_domains);
-		$client->removeDomain($all_domains);
 
 		if ( $is_ssl ) {
 			// Update SSL.
@@ -544,7 +549,7 @@ abstract class EE_Site_Command {
 
 		chdir( $this->site_data['site_fs_path'] );
 		// Required as env variables have changed.
-		EE::exec( 'docker-compose up -d nginx' );
+		\EE_DOCKER::docker_compose_up( $this->site_data['site_fs_path'], ['nginx'] );
 		EE::success( 'Alias domains updated on site ' . $this->site_data['site_url'] . '.' );
 
 		$site->save();
@@ -1268,7 +1273,7 @@ abstract class EE_Site_Command {
 
 					if ( empty( $wildcard ) ) {
 						foreach ( $alias_domains as $domain ) {
-							if ( preg_match( '/^\*/', $domain ) ) {
+							if ( '*.' . $this->site_data['site_url'] === $domain  ) {
 								$wildcard = "1";
 								break;
 							}
@@ -1364,6 +1369,16 @@ abstract class EE_Site_Command {
 	 */
 	protected function init_le( $site_url, $site_fs_path, $wildcard = false, $www_or_non_www, $force = false, $alias_domains = [] ) {
 		$preferred_challenge = get_config_value( 'preferred_ssl_challenge', '' );
+
+		if( 'dns' !== $preferred_challenge ) {
+			foreach ( $alias_domains as $domain ) {
+				if ( preg_match( '/^\*/', $domain ) ) {
+					$preferred_challenge = 'dns';
+					break;
+				}
+			}
+		}
+
 		$is_solver_dns       = ( $wildcard || 'dns' === $preferred_challenge ) ? true : false;
 		\EE::debug( 'Wildcard in init_le: ' . ( bool ) $wildcard );
 
@@ -1411,7 +1426,7 @@ abstract class EE_Site_Command {
 
 		$domains = [ $site_url ];
 
-		if ( $wildcard ) {
+		if ( ! empty( $wildcard ) ) {
 			$domains[] = "*.{$site_url}";
 		} elseif ( $www_or_non_www || $is_solver_dns ) {
 			if ( 0 === strpos( $site_url, 'www.' ) ) {
