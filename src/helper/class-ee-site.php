@@ -505,6 +505,7 @@ abstract class EE_Site_Command {
 			$this->site_data['alias_domains'] = implode( ',', $final_alias_domains );
 			$is_ssl                           = $this->site_data['site_ssl'] ? true : false;
 			$this->dump_docker_compose_yml( [ 'nohttps' => $is_ssl ] );
+			EE::exec( 'docker-compose up -d nginx' );
 		} catch ( \Exception $e ) {
 			EE::error( $e->getMessage() );
 		}
@@ -530,7 +531,13 @@ abstract class EE_Site_Command {
 		if ( $is_ssl ) {
 			// Update SSL.
 			EE::log( 'Updating and force renewing SSL certificate to accomodated alias domain changes.' );
-			$this->ssl_renew( [ $this->site_data['site_url'] ], [ 'force' => true ] );
+			try {
+				$this->ssl_renew( [ $this->site_data['site_url'] ], [ 'force' => true ] );
+			} catch ( \Exception $e ) {
+				EE::warning( 'Certificate could not be issued. Reverting back to original state.' );
+				$this->enable( [ $site->site_url ], [ 'refresh' => 'true' ] );
+				EE::error( $e->getMessage() );
+			}
 		}
 
 		$client->revokeCertificates($old_certs);
