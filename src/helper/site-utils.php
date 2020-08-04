@@ -114,6 +114,29 @@ function get_site_info( $args, $site_enabled_check = true, $exit_if_not_found = 
 }
 
 /**
+ * Populate basic site info from db.
+ *
+ * @param array $domains       Array of all domains.
+ *
+ * @return string $preferred_challenge Type of challenge preffered.
+ */
+function get_preferred_ssl_challenge(array $domains) {
+
+	$preferred_challenge = get_config_value( 'preferred_ssl_challenge', '' );
+	if ( ! empty ( $preferred_challenge ) ) {
+		return $preferred_challenge;
+	}
+
+	foreach ( $domains as $domain ) {
+		if ( preg_match( '/^\*/', $domain ) ) {
+			return 'dns';
+		}
+	}
+
+	return $preferred_challenge;
+}
+
+/**
  * Create user in remote or global db.
  *
  * @param string $db_host Database Hostname.

@@ -214,6 +214,10 @@ class Site_Letsencrypt {
 		foreach ( $order->getAuthorizationsChallenges() as $domainKey => $authorizationChallenges ) {
 			$authorizationChallenge = null;
 			foreach ( $authorizationChallenges as $candidate ) {
+				if ( 'valid' === $candidate->getStatus()) {
+					\EE::debug( 'Authorization challenge already solved. Challenge: ' . print_r( $candidate, true ) );
+					continue 2;
+				}
 				if ( $solver->supports( $candidate ) ) {
 					$authorizationChallenge = $candidate;
 					\EE::debug( 'Authorization challenge supported by solver. Solver: ' . $solverName . ' Challenge: ' . $candidate->getType() );
@@ -221,6 +225,7 @@ class Site_Letsencrypt {
 				}
 				// Should not get here as we are handling it.
 				\EE::debug( 'Authorization challenge not supported by solver. Solver: ' . $solverName . ' Challenge: ' . $candidate->getType() );
+				\EE::debug( print_r( $candidate, true ) );
 			}
 			if ( null === $authorizationChallenge ) {
 				throw new ChallengeNotSupportedException();

@@ -6,6 +6,7 @@ use EE;
 use EE\Model\Site;
 use EE\Model\Option;
 use Symfony\Component\Filesystem\Filesystem;
+use function EE\Site\Utils\get_preferred_ssl_challenge;
 use function EE\Utils\download;
 use function EE\Utils\extract_zip;
 use function EE\Utils\get_flag_value;
@@ -516,22 +517,21 @@ abstract class EE_Site_Command {
 			EE::error( $e->getMessage() );
 		}
 
-		$site->alias_domains = implode( ',', $final_alias_domains );
+		$this->site_data['alias_domains'] = implode( ',', $final_alias_domains );
 
 		$all_domains = $final_alias_domains;
-		array_push($all_domains, $site->site_url);
+		array_push($all_domains, $this->site_data['site_url']);
 		$all_domains = array_unique($all_domains);
 
 		foreach ( $all_domains as $domain ) {
-			if ( '*.' . $site->site_url === $domain ) {
-				$site->site_ssl_wildcard = "1";
+			if ( '*.' . $this->site_data['site_url'] === $domain ) {
+				$this->site_data['site_ssl_wildcard'] = "1";
 			}
 		}
 
 		$client = new Site_Letsencrypt();
 
 		$old_certs = $client->loadDomainCertificates($all_domains);
-		$client->revokeAuthorizationChallenges($all_domains);
 
 		if ( $is_ssl ) {
 			// Update SSL.
@@ -540,7 +540,7 @@ abstract class EE_Site_Command {
 				$this->ssl_renew( [ $this->site_data['site_url'] ], [ 'force' => true ] );
 			} catch ( \Exception $e ) {
 				EE::warning( 'Certificate could not be issued. Reverting back to original state.' );
-				$this->enable( [ $site->site_url ], [ 'refresh' => 'true' ] );
+				$this->enable( [ $this->site_data['site_url'] ], [ 'refresh' => 'true' ] );
 				EE::error( $e->getMessage() );
 			}
 		}
@@ -552,7 +552,7 @@ abstract class EE_Site_Command {
 		\EE_DOCKER::docker_compose_up( $this->site_data['site_fs_path'], ['nginx'] );
 		EE::success( 'Alias domains updated on site ' . $this->site_data['site_url'] . '.' );
 
-		$site->save();
+		$this->update_site_db_entry();
 
 		if ( ! empty( $this->site_data['proxy_cache'] ) && 'on' === $this->site_data['proxy_cache'] ) {
 			EE::log( 'As proxy cache is enabled on this site, updating config to enable it in newly added alias domains.' );
@@ -944,6 +944,7 @@ abstract class EE_Site_Command {
 		$site_data_array = (array) $this->site_data;
 		$this->site_data = reset( $site_data_array );
 		$this->www_ssl_wrapper( $containers_to_start, true );
+		$this->update_site_db_entry();
 
 		if ( $postfix_exists ) {
 			\EE\Site\Utils\configure_postfix( $this->site_data['site_url'], $this->site_data['site_fs_path'] );
@@ -1262,6 +1263,12 @@ abstract class EE_Site_Command {
 			$config_file = $confd_path . $this->site_data['site_url'] . '-redirect.conf';
 			$fs->remove( $config_file );
 			\EE\Site\Utils\reload_global_nginx_proxy();
+		} else {
+			$www_domain = array_diff($this->get_cert_domains($this->site_data['site_url'],false, true), explode(',',$this->site_data['alias_domains']));
+
+			if ( ! empty ( $www_domain ) ) {
+				$this->site_data['alias_domains'] .= ',' . implode(',', $www_domain);
+			}
 		}
 
 		if ( $this->site_data['site_ssl'] ) {
@@ -1396,6 +1403,8 @@ abstract class EE_Site_Command {
 		$domains = $this->get_cert_domains( $site_url, $wildcard, $www_or_non_www );
 		$domains = array_unique( array_merge( $domains, $alias_domains ) );
 
+		$client->revokeAuthorizationChallenges($domains);
+
 		if ( ! $client->authorize( $domains, $wildcard, $preferred_challenge ) ) {
 			return;
 		}
@@ -1518,7 +1527,7 @@ abstract class EE_Site_Command {
 		$domains       = array_unique( array_merge( $domains, $alias_domains ) );
 		$client        = new Site_Letsencrypt();
 
-		$preferred_challenge = get_config_value( 'preferred_ssl_challenge', '' );
+		$preferred_challenge = get_preferred_ssl_challenge($domains);
 
 		try {
 			$client->check( $domains, $this->site_data['site_ssl_wildcard'], $preferred_challenge );
@@ -1910,6 +1919,51 @@ abstract class EE_Site_Command {
 
 		$this->fs->copy( $this->site_data['ssl_key'], $ssl_key_dest, true );
 		$this->fs->copy( $this->site_data['ssl_crt'], $ssl_crt_dest, true );
+	}
+
+	/**
+	 * Function to update the site configuration entry into database.
+	 */
+	private function update_site_db_entry() {
+		$ssl = null;
+
+		$data = [
+			'site_url'               => $this->site_data['site_url'],
+			'site_type'              => $this->site_data['site_type'],
+			'app_admin_url'          => $this->site_data['app_admin_url'],
+			'app_admin_email'        => $this->site_data['app_admin_email'],
+			'app_mail'               => $this->site_data['app_mail'],
+			'app_sub_type'           => $this->site_data['app_sub_type'],
+			'alias_domains'          => $this->site_data['alias_domains'],
+			'cache_nginx_browser'    => $this->site_data['cache_nginx_browser'],
+			'cache_nginx_fullpage'   => $this->site_data['cache_nginx_fullpage'],
+			'cache_mysql_query'      => $this->site_data['cache_mysql_query'],
+			'cache_app_object'       => $this->site_data['cache_app_object'],
+			'cache_host'             => $this->site_data['cache_host'],
+			'proxy_cache'            => $this->site_data['proxy_cache'],
+			'site_fs_path'           => $this->site_data['site_fs_path'],
+			'db_name'                => $this->site_data['db_name'],
+			'db_user'                => $this->site_data['db_user'],
+			'db_host'                => $this->site_data['db_host'],
+			'db_port'                => $this->site_data['db_port'],
+			'db_password'            => $this->site_data['db_password'],
+			'db_root_password'       => $this->site_data['db_root_password'],
+			'site_ssl'               => $this->site_data['site_ssl'],
+			'site_ssl_wildcard'      => $this->site_data['site_ssl_wildcard'],
+			'php_version'            => $this->site_data['php_version'],
+			'site_container_fs_path' => rtrim( $this->site_data['site_container_fs_path'], '/' ),
+		];
+
+		try {
+			$site_id = Site::update( [ 'site_url' => $this->site_data['site_url'] ], $data );
+
+			if ( ! $site_id ) {
+				throw new \Exception( 'Unable to update values in EE database.' );
+			}
+
+		} catch ( \Exception $e ) {
+			$this->catch_clean( $e );
+		}
 	}
 
 
