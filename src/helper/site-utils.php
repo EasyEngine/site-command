@@ -693,3 +693,25 @@ function get_parent_of_alias( $alias ) {
 
 	return reset( $output );
 }
+
+/**
+ * Check if given array of domains exist as alias for some site in db or not.
+ *
+ * @param array $domains array of domains to be checked.
+ */
+function check_alias_in_db( $domains ) {
+
+	$alias_error = false;
+	foreach ( $domains as $domain_check ) {
+		if ( $alias_error ) {
+			break;
+		}
+		$parent_site          = get_parent_of_alias( trim( $domain_check ) );
+		$alias_error          = ! empty( $parent_site );
+		$domain_having_parent = $alias_error ? $domain_check : '';
+	}
+
+	if ( $alias_error ) {
+		\EE::error( sprintf( "Site %1\$s already exists as an alias domain for site: %2\$s. Please delete it from alias domains of %2\$s if you want to create an independent site for it.", $domain_having_parent, $parent_site ) );
+	}
+}
