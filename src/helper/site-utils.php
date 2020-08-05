@@ -640,6 +640,24 @@ function get_all_alias_domains() {
 }
 
 /**
+ * Update information of site in EE database
+ *
+ * @param string $site_url URL os site.
+ * @param array $data      Data to update.
+ *
+ * @return string final webroot for site.
+ */
+function update_site_db_entry( string $site_url, array $data ) {
+	$site_id = Site::update( [ 'site_url' => $site_url ], $data );
+
+	if ( ! $site_id ) {
+		throw new \Exception( 'Unable to update values in EE database.' );
+	}
+}
+
+
+
+/**
  * Get all domains of site.
  *
  * @param string $site_url       alias domain whose parent needs to be found.
