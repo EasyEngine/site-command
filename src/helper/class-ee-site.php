@@ -945,7 +945,11 @@ abstract class EE_Site_Command {
 		$site_data_array = (array) $this->site_data;
 		$this->site_data = reset( $site_data_array );
 		$this->www_ssl_wrapper( $containers_to_start, true );
-		$this->update_site_db_entry();
+		try {
+			update_site_db_entry( $this->site_data['site_url'], $this->site_data );
+		} catch ( \Exception $e ) {
+			EE::error( $e->getMessage() );
+		}
 
 		if ( $postfix_exists ) {
 			\EE\Site\Utils\configure_postfix( $this->site_data['site_url'], $this->site_data['site_fs_path'] );
