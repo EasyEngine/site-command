@@ -6,6 +6,7 @@ use EE;
 use EE\Model\Site;
 use EE\Model\Option;
 use Symfony\Component\Filesystem\Filesystem;
+use function EE\Site\Utils\get_domains_of_site;
 use function EE\Site\Utils\get_preferred_ssl_challenge;
 use function EE\Utils\download;
 use function EE\Utils\extract_zip;
@@ -1375,17 +1376,7 @@ abstract class EE_Site_Command {
 	 * @param array $alias_domains Array of alias domains if any.
 	 */
 	protected function init_le( $site_url, $site_fs_path, $wildcard = false, $www_or_non_www, $force = false, $alias_domains = [] ) {
-		$preferred_challenge = get_config_value( 'preferred_ssl_challenge', '' );
-
-		if( 'dns' !== $preferred_challenge ) {
-			foreach ( $alias_domains as $domain ) {
-				if ( preg_match( '/^\*/', $domain ) ) {
-					$preferred_challenge = 'dns';
-					break;
-				}
-			}
-		}
-
+		$preferred_challenge = get_preferred_ssl_challenge($alias_domains);
 		$is_solver_dns       = ( $wildcard || 'dns' === $preferred_challenge ) ? true : false;
 		\EE::debug( 'Wildcard in init_le: ' . ( bool ) $wildcard );
 
@@ -1649,7 +1640,9 @@ abstract class EE_Site_Command {
 		}
 
 		$client = new Site_Letsencrypt();
-		if ( $client->isAlreadyExpired( $this->site_data['site_url'] ) ) {
+		$preferred_challenge = get_preferred_ssl_challenge( get_domains_of_site( $this->site_data['site_url'] ) );
+
+		if ( $client->isAlreadyExpired( $this->site_data['site_url'] ) && $preferred_challenge !== 'dns' ) {
 			$this->dump_docker_compose_yml( [ 'nohttps' => true ] );
 			$this->enable( $args, [ 'force' => true ] );
 		}
