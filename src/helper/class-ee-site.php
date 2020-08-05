@@ -454,11 +454,6 @@ abstract class EE_Site_Command {
 			$array_data      = (array) $this->site_data;
 			$this->site_data = reset( $array_data );
 
-			// Check if it is a WP site.
-			if ( 'wp' !== $this->site_data['site_type'] ) {
-				EE::error( 'Currently alias domains are only supported in WordPress site type.' );
-			}
-
 			// Validate data.
 			$existing_alias_domains = [];
 			$domains_to_add         = [];
