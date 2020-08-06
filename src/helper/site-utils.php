@@ -650,26 +650,25 @@ function update_site_db_entry( string $site_url, array $data ) {
 	}
 }
 
-
-
 /**
  * Get all domains of site.
  *
- * @param string $site_url       alias domain whose parent needs to be found.
+ * @param string $site_url alias domain whose parent needs to be found.
  *
  * @return string parent site.
  */
-function get_domains_of_site( string $site_url ) : array {
-	$alias_domains = Site::find($site_url)->alias_domains;
-	$all_domains = explode( ',', $alias_domains );
-	array_push($all_domains, $site_url);
-	return array_unique($all_domains);
+function get_domains_of_site( string $site_url ): array {
+	$alias_domains = Site::find( $site_url )->alias_domains;
+	$all_domains   = explode( ',', $alias_domains );
+	array_push( $all_domains, $site_url );
+
+	return array_unique( $all_domains );
 }
 
 /**
  * Get parent site of an alias domain.
  *
- * @param string $alias  alias domain whose parent needs to be found.
+ * @param string $alias alias domain whose parent needs to be found.
  *
  * @return string parent site.
  */
@@ -681,10 +680,10 @@ function get_parent_of_alias( $alias ) {
 	}
 
 	$output = EE::db()
-				->table( 'sites' )
-				->select( ...[ 'site_url' ] )
-				->where( 'alias_domains', 'like', '%' . $alias . '%' )
-				->first();
+	            ->table( 'sites' )
+	            ->select( ...[ 'site_url' ] )
+	            ->where( 'alias_domains', 'like', '%' . $alias . '%' )
+	            ->first();
 
 	return reset( $output );
 }

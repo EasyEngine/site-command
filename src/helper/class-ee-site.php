@@ -181,22 +181,23 @@ abstract class EE_Site_Command {
 
 		\EE::confirm( sprintf( 'Are you sure you want to delete %s?', $this->site_data['site_url'] ), $assoc_args );
 
-		if($this->site_data['site_ssl']) {
-			$all_domains = array_unique(array_merge(
-				explode( ',', $this->site_data['alias_domains'] ),
-				[$this->site_data['site_url']]
-			));
+		if ( $this->site_data['site_ssl'] ) {
+			$all_domains = array_unique( array_merge(
+					explode( ',', $this->site_data['alias_domains'] ),
+					[ $this->site_data['site_url'] ]
+				)
+			);
 
 			EE::log( 'Revoking certificate.' );
 
 			try {
 				$client = new Site_Letsencrypt();
-				$client->revokeAuthorizationChallenges($all_domains);
-				$client->revokeCertificates($all_domains);
-			} catch (\Exception $e) {
-				EE::warning($e->getMessage());
+				$client->revokeAuthorizationChallenges( $all_domains );
+				$client->revokeCertificates( $all_domains );
+			} catch ( \Exception $e ) {
+				EE::warning( $e->getMessage() );
 			}
-			$client->removeDomain($all_domains);
+			$client->removeDomain( $all_domains );
 		}
 
 		$this->delete_site( 5, $this->site_data['site_url'], $this->site_data['site_fs_path'], $db_data );
@@ -508,10 +509,10 @@ abstract class EE_Site_Command {
 
 			$this->site_data['alias_domains'] = implode( ',', $final_alias_domains );
 			$is_ssl                           = $this->site_data['site_ssl'] ? true : false;
-			$preferred_ssl_challenge = get_preferred_ssl_challenge( get_domains_of_site( $this->site_data['site_url'] ) );
-			$nohttps = $is_ssl && 'dns' !== $preferred_ssl_challenge ;
+			$preferred_ssl_challenge          = get_preferred_ssl_challenge( get_domains_of_site( $this->site_data['site_url'] ) );
+			$nohttps                          = $is_ssl && 'dns' !== $preferred_ssl_challenge;
 			$this->dump_docker_compose_yml( [ 'nohttps' => $nohttps ] );
-			\EE_DOCKER::docker_compose_up( $this->site_data['site_fs_path'], ['nginx'] );
+			\EE_DOCKER::docker_compose_up( $this->site_data['site_fs_path'], [ 'nginx' ] );
 		} catch ( \Exception $e ) {
 			EE::error( $e->getMessage() );
 		}
@@ -519,8 +520,8 @@ abstract class EE_Site_Command {
 		$this->site_data['alias_domains'] = implode( ',', $final_alias_domains );
 
 		$all_domains = $final_alias_domains;
-		array_push($all_domains, $this->site_data['site_url']);
-		$all_domains = array_unique($all_domains);
+		array_push( $all_domains, $this->site_data['site_url'] );
+		$all_domains = array_unique( $all_domains );
 
 		foreach ( $all_domains as $domain ) {
 			if ( '*.' . $this->site_data['site_url'] === $domain ) {
@@ -545,17 +546,17 @@ abstract class EE_Site_Command {
 		}
 
 		// Revoke old certificate which will not be used
-		$client->revokeCertificates($old_certs);
+		$client->revokeCertificates( $old_certs );
 
 		chdir( $this->site_data['site_fs_path'] );
 		// Required as env variables have changed.
-		\EE_DOCKER::docker_compose_up( $this->site_data['site_fs_path'], ['nginx'] );
+		\EE_DOCKER::docker_compose_up( $this->site_data['site_fs_path'], [ 'nginx' ] );
 		EE::success( 'Alias domains updated on site ' . $this->site_data['site_url'] . '.' );
 
 		try {
-			update_site_db_entry($this->site_data['site_url'], $this->site_data);
-		} catch (\Exception $e) {
-			EE::error($e->getMessage());
+			update_site_db_entry( $this->site_data['site_url'], $this->site_data );
+		} catch ( \Exception $e ) {
+			EE::error( $e->getMessage() );
 		}
 
 		if ( ! empty( $this->site_data['proxy_cache'] ) && 'on' === $this->site_data['proxy_cache'] ) {
@@ -1278,11 +1279,11 @@ abstract class EE_Site_Command {
 				if ( 'custom' !== $this->site_data['site_ssl'] ) {
 
 					$alias_domains = empty( $this->site_data['alias_domains'] ) ? [] : explode( ',', $this->site_data['alias_domains'] );
-					$wildcard = $this->site_data['site_ssl_wildcard'];
+					$wildcard      = $this->site_data['site_ssl_wildcard'];
 
 					if ( empty( $wildcard ) ) {
 						foreach ( $alias_domains as $domain ) {
-							if ( '*.' . $this->site_data['site_url'] === $domain  ) {
+							if ( '*.' . $this->site_data['site_url'] === $domain ) {
 								$wildcard = "1";
 								break;
 							}
@@ -1377,7 +1378,7 @@ abstract class EE_Site_Command {
 	 * @param array $alias_domains Array of alias domains if any.
 	 */
 	protected function init_le( $site_url, $site_fs_path, $wildcard = false, $www_or_non_www, $force = false, $alias_domains = [] ) {
-		$preferred_challenge = get_preferred_ssl_challenge($alias_domains);
+		$preferred_challenge = get_preferred_ssl_challenge( $alias_domains );
 		$is_solver_dns       = ( $wildcard || 'dns' === $preferred_challenge ) ? true : false;
 		\EE::debug( 'Wildcard in init_le: ' . ( bool ) $wildcard );
 
@@ -1395,7 +1396,7 @@ abstract class EE_Site_Command {
 		$domains = $this->get_cert_domains( $site_url, $wildcard, $www_or_non_www );
 		$domains = array_unique( array_merge( $domains, $alias_domains ) );
 
-		$client->revokeAuthorizationChallenges($domains);
+		$client->revokeAuthorizationChallenges( $domains );
 
 		if ( ! $client->authorize( $domains, $wildcard, $preferred_challenge ) ) {
 			return;
@@ -1519,7 +1520,7 @@ abstract class EE_Site_Command {
 		$domains       = array_unique( array_merge( $domains, $alias_domains ) );
 		$client        = new Site_Letsencrypt();
 
-		$preferred_challenge = get_preferred_ssl_challenge($domains);
+		$preferred_challenge = get_preferred_ssl_challenge( $domains );
 
 		try {
 			$client->check( $domains, $this->site_data['site_ssl_wildcard'], $preferred_challenge );
@@ -1629,7 +1630,7 @@ abstract class EE_Site_Command {
 	private function renew_ssl_cert( $args, $force ) {
 
 		if ( empty( $this->site_data ) ) {
-			$this->site_data = get_site_info($args);
+			$this->site_data = get_site_info( $args );
 		}
 
 		if ( 'inherit' === $this->site_data['site_ssl'] ) {
@@ -1640,7 +1641,7 @@ abstract class EE_Site_Command {
 			EE::error( 'Only Letsencrypt certificate renewal is supported.' );
 		}
 
-		$client = new Site_Letsencrypt();
+		$client              = new Site_Letsencrypt();
 		$preferred_challenge = get_preferred_ssl_challenge( get_domains_of_site( $this->site_data['site_url'] ) );
 
 		if ( $client->isAlreadyExpired( $this->site_data['site_url'] ) && $preferred_challenge !== 'dns' ) {

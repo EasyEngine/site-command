@@ -214,7 +214,7 @@ class Site_Letsencrypt {
 		foreach ( $order->getAuthorizationsChallenges() as $domainKey => $authorizationChallenges ) {
 			$authorizationChallenge = null;
 			foreach ( $authorizationChallenges as $candidate ) {
-				if ( 'valid' === $candidate->getStatus()) {
+				if ( 'valid' === $candidate->getStatus() ) {
 					\EE::debug( 'Authorization challenge already solved. Challenge: ' . print_r( $candidate, true ) );
 					continue 2;
 				}
@@ -263,72 +263,71 @@ class Site_Letsencrypt {
 		return true;
 	}
 
-	public function revokeAuthorizationChallenges(array $domains) {
-		foreach ($domains as $domain) {
-			if ($this->repository->hasDomainAuthorizationChallenge($domain)) {
-				$challenge = $this->repository->loadDomainAuthorizationChallenge($domain);
+	public function revokeAuthorizationChallenges( array $domains ) {
+		foreach ( $domains as $domain ) {
+			if ( $this->repository->hasDomainAuthorizationChallenge( $domain ) ) {
+				$challenge = $this->repository->loadDomainAuthorizationChallenge( $domain );
 
 				try {
-					$this->client->revokeAuthorizationChallenge($challenge);
-					$this->repository->removeDomainAuthorizationChallenge($domain);
-					\EE::debug('Domain Authorization Challenge for ' . $domain . ' revoked successfully');
-				} catch (CertificateRevocationException | AcmeCliException $e) {
-					\EE::debug($e->getMessage());
+					$this->client->revokeAuthorizationChallenge( $challenge );
+					$this->repository->removeDomainAuthorizationChallenge( $domain );
+					\EE::debug( 'Domain Authorization Challenge for ' . $domain . ' revoked successfully' );
+				} catch ( CertificateRevocationException | AcmeCliException $e ) {
+					\EE::debug( $e->getMessage() );
 				}
 			} else {
-				\EE::debug('Domain Authorization Challenge for ' . $domain . ' not found locally');
+				\EE::debug( 'Domain Authorization Challenge for ' . $domain . ' not found locally' );
 			}
 		}
 	}
 
-	public function revokeCertificates(array $domains) {
-		$reasonCode = null; // ok to be null. LE expects 0 as default reason
+	public function revokeCertificates( array $domains ) {
+		$reasonCode = null; // ok to be null. LE expects 0 as default reason.
 
 		try {
-			$revocationReason = isset($reasonCode[0]) ? new RevocationReason($reasonCode[0]) : RevocationReason::createDefaultReason();
-		} catch (\InvalidArgumentException $e) {
-			\EE::error('Reason code must be one of: ' . PHP_EOL . implode(PHP_EOL, RevocationReason::getFormattedReasons()));
+			$revocationReason = isset( $reasonCode[0] ) ? new RevocationReason( $reasonCode[0] ) : RevocationReason::createDefaultReason();
+		} catch ( \InvalidArgumentException $e ) {
+			\EE::error( 'Reason code must be one of: ' . PHP_EOL . implode( PHP_EOL, RevocationReason::getFormattedReasons() ) );
 		}
 
-		foreach ($domains as $domain) {
-			if(gettype($domain) === 'string') {
-				if ($this->repository->hasDomainCertificate($domain)) {
-					$certificate = $this->repository->loadDomainCertificate($domain);
+		foreach ( $domains as $domain ) {
+			if ( gettype( $domain ) === 'string' ) {
+				if ( $this->repository->hasDomainCertificate( $domain ) ) {
+					$certificate = $this->repository->loadDomainCertificate( $domain );
 				} else {
-					\EE::debug('Certificate for ' . $domain . ' not found locally');
+					\EE::debug( 'Certificate for ' . $domain . ' not found locally' );
 					continue;
 				}
-			} elseif( get_class($domain) === 'AcmePhp\Ssl\Certificate') {
+			} elseif ( get_class( $domain ) === 'AcmePhp\Ssl\Certificate' ) {
 				$certificate = $domain;
 			} else {
-				\EE::error('Unknown type of certificate ' . get_class($domain) );
+				\EE::error( 'Unknown type of certificate ' . get_class( $domain ) );
 			}
 
 			try {
-				$this->client->revokeCertificate($certificate, $revocationReason);
-				$domain = gettype($domain) === 'string'? $domain : get_class($domain) === 'AcmePhp\Ssl\Certificate' ? array_search($domain, $domains) : '';
-				\EE::debug('Certificate for ' . $domain . ' revoked successfully');
-			} catch (CertificateRevocationException $e) {
-				\EE::debug($e->getMessage());
+				$this->client->revokeCertificate( $certificate, $revocationReason );
+				$domain = gettype( $domain ) === 'string' ? $domain : get_class( $domain ) === 'AcmePhp\Ssl\Certificate' ? array_search( $domain, $domains ) : '';
+				\EE::debug( 'Certificate for ' . $domain . ' revoked successfully' );
+			} catch ( CertificateRevocationException $e ) {
+				\EE::debug( $e->getMessage() );
 			}
 		}
 	}
 
-	public function removeDomain(array $domains) {
+	public function removeDomain( array $domains ) {
 		try {
-			$this->repository->removeDomain($domains);
-		} catch (AcmeCliException $e) {
-			\EE::debug($e->getMessage());
+			$this->repository->removeDomain( $domains );
+		} catch ( AcmeCliException $e ) {
+			\EE::debug( $e->getMessage() );
 		}
 	}
 
-	public function loadDomainCertificates(array $domains)
-	{
+	public function loadDomainCertificates( array $domains ) {
 		$certificates = [];
 
-		foreach ($domains as $domain) {
-			if ($this->repository->hasDomainCertificate($domain)) {
-				$certificates[$domain] = $this->repository->loadDomainCertificate($domain);
+		foreach ( $domains as $domain ) {
+			if ( $this->repository->hasDomainCertificate( $domain ) ) {
+				$certificates[ $domain ] = $this->repository->loadDomainCertificate( $domain );
 			}
 		}
 
@@ -519,8 +518,8 @@ class Site_Letsencrypt {
 
 				return true;
 			}
-		} catch (\Exception $e) {
-			\EE::warning($e->getMessage());
+		} catch ( \Exception $e ) {
+			\EE::warning( $e->getMessage() );
 		}
 
 		return false;
