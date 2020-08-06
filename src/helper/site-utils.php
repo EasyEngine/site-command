@@ -194,11 +194,11 @@ function create_user_in_db( $db_host, $db_name = '', $db_user = '', $db_pass = '
  */
 function cleanup_db( $db_host, $db_name, $db_user = '', $db_pass = '' ) {
 
-	$cleanup_string = sprintf( 'DROP DATABASE %s;', $db_name );
+	$cleanup_string = sprintf( 'DROP DATABASE `%s`;', $db_name );
 
 	if ( GLOBAL_DB === $db_host ) {
 		$db_script_path = \EE\Utils\get_temp_dir() . 'db_exec';
-		file_put_contents( $db_script_path, sprintf( 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e"%s"', $cleanup_string ) );
+		file_put_contents( $db_script_path, sprintf( 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e\'%s\'', $cleanup_string ) );
 
 		EE::exec( sprintf( 'docker cp %s %s:/db_exec', $db_script_path, GLOBAL_DB_CONTAINER ) );
 		EE::exec( sprintf( 'docker exec %s sh db_exec', GLOBAL_DB_CONTAINER ) );
