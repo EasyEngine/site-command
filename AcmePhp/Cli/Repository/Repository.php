@@ -94,6 +94,28 @@ class Repository implements RepositoryV2Interface
     /**
      * {@inheritdoc}
      */
+    public function removeCertificateResponse($domain)
+    {
+        $this->removeDomainKeyPair($domain);
+        $this->removeDomainDistinguishedName($domain);
+        $this->removeDomainCertificate($domain);
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function removeDomain(array $domains)
+    {
+        foreach($domains as $domain){
+            $this->removeDomainAuthorizationChallenge($domain);
+            $this->removeCertificateResponse($domain);
+        }
+        $this->removeCertificateOrder($domains);
+    }
+
+    /**
+     * {@inheritdoc}
+     */
     public function storeAccountKeyPair(KeyPair $keyPair)
     {
         try {
@@ -108,6 +130,24 @@ class Repository implements RepositoryV2Interface
             );
         } catch (\Exception $e) {
             throw new AcmeCliException('Storing of account key pair failed', $e);
+        }
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function removeAccountKeyPair(KeyPair $keyPair)
+    {
+        try {
+            $this->delete(
+                self::PATH_ACCOUNT_KEY_PUBLIC
+            );
+
+            $this->delete(
+                self::PATH_ACCOUNT_KEY_PRIVATE
+            );
+        } catch (\Exception $e) {
+            throw new AcmeCliException('Removing of account key pair failed', $e);
         }
     }
 
@@ -168,6 +208,24 @@ class Repository implements RepositoryV2Interface
     }
 
     /**
+	 * {@inheritdoc}
+	 */
+	public function removeDomainKeyPair($domain)
+	{
+		try {
+			$this->delete(
+				$this->getPathForDomain(self::PATH_DOMAIN_KEY_PUBLIC, $domain)
+			);
+
+			$this->delete(
+				$this->getPathForDomain(self::PATH_DOMAIN_KEY_PRIVATE, $domain)
+			);
+		} catch (\Exception $e) {
+			throw new AcmeCliException(sprintf('Removing of domain %s key pair failed', $domain), $e);
+		}
+	}
+
+	/**
      * {@inheritdoc}
      */
     public function hasDomainKeyPair($domain)
@@ -209,6 +267,20 @@ class Repository implements RepositoryV2Interface
     }
 
     /**
+	 * {@inheritdoc}
+	 */
+	public function removeDomainAuthorizationChallenge($domain)
+	{
+		try {
+			$this->delete(
+				$this->getPathForDomain(self::PATH_CACHE_AUTHORIZATION_CHALLENGE, $domain),
+			);
+		} catch (\Exception $e) {
+			throw new AcmeCliException(sprintf('Removing of domain %s authorization challenge failed', $domain), $e);
+		}
+	}
+
+	/**
      * {@inheritdoc}
      */
     public function hasDomainAuthorizationChallenge($domain)
@@ -246,6 +318,20 @@ class Repository implements RepositoryV2Interface
     }
 
     /**
+	 * {@inheritdoc}
+	 */
+	public function removeDomainDistinguishedName($domain)
+	{
+		try {
+			$this->delete(
+				$this->getPathForDomain(self::PATH_CACHE_DISTINGUISHED_NAME, $domain),
+			);
+		} catch (\Exception $e) {
+			throw new AcmeCliException(sprintf('Removing of domain %s distinguished name failed', $domain), $e);
+		}
+	}
+
+	/**
      * {@inheritdoc}
      */
     public function hasDomainDistinguishedName($domain)
@@ -300,6 +386,17 @@ class Repository implements RepositoryV2Interface
         $this->save($this->getPathForDomain(self::PATH_DOMAIN_CERT_COMBINED, $domain), $combinedPem);
     }
 
+	/**
+	 * {@inheritdoc}
+	 */
+	public function removeDomainCertificate($domain)
+	{
+		$this->delete($this->getPathForDomain(self::PATH_DOMAIN_CERT_CERT, $domain));
+		$this->delete($this->getPathForDomain(self::PATH_DOMAIN_CERT_CHAIN, $domain));
+		$this->delete($this->getPathForDomain(self::PATH_DOMAIN_CERT_FULLCHAIN, $domain));
+		$this->delete($this->getPathForDomain(self::PATH_DOMAIN_CERT_COMBINED, $domain));
+	}
+
     /**
      * {@inheritdoc}
      */
@@ -353,6 +450,20 @@ class Repository implements RepositoryV2Interface
     }
 
     /**
+	 * {@inheritdoc}
+	 */
+	public function removeCertificateOrder(array $domains)
+	{
+		try {
+			$this->delete(
+				$this->getPathForDomainList(self::PATH_CACHE_CERTIFICATE_ORDER, $domains)
+			);
+		} catch (\Exception $e) {
+			throw new AcmeCliException(sprintf('Removing of domains %s certificate order failed', implode(',',$domains)), $e);
+		}
+	}
+
+	/**
      * {@inheritdoc}
      */
     public function hasCertificateOrder(array $domains)
@@ -393,6 +504,18 @@ class Repository implements RepositoryV2Interface
 
         $this->master->setVisibility($path, $visibility);
     }
+
+	/**
+	 * {@inheritdoc}
+	 */
+	public function delete($path, $fromBackup=false)
+	{
+		if ($this->master->has($path)) {
+			$this->master->delete($path);
+		} elseif ($fromBackup && $this->backup->has($path)) {
+			$this->backup->delete($path);
+		}
+	}
 
     private function createAndBackup($path, $content)
     {

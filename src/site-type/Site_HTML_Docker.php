@@ -27,7 +27,11 @@ class Site_HTML_Docker {
 		$nginx['image']        = [ 'name' => 'easyengine/nginx:' . $img_versions['easyengine/nginx'] ];
 		$nginx['restart']      = $restart_default;
 
-		$v_host = 'VIRTUAL_HOST';
+		$v_host = 'VIRTUAL_HOST=${VIRTUAL_HOST}';
+
+		if ( ! empty( $filters['alias_domains'] ) ) {
+			$v_host .= ',' . $filters['alias_domains'];
+		}
 
 		$nginx['environment'] = [
 			'env' => [
@@ -36,6 +40,10 @@ class Site_HTML_Docker {
 				[ 'name' => 'HSTS=off' ],
 			],
 		];
+
+		if ( ! empty( $filters['alias_domains'] ) ) {
+			$nginx['environment']['env'][] = [ 'name' => 'CERT_NAME=${VIRTUAL_HOST}' ];
+		}
 
 		$ssl_policy = get_ssl_policy();
 		if ( ! empty( $filters['nohttps'] ) && $filters['nohttps'] ) {
