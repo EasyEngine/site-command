@@ -136,9 +136,7 @@ class HTML extends EE_Site_Command {
 			$comma_seprated_domains = explode( ',', $alias_domains );
 			foreach ( $comma_seprated_domains as $domain ) {
 				$trimmed_domain = trim( $domain );
-				if ( filter_var( $trimmed_domain, FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME ) ) {
-					$this->site_data['alias_domains'] .= $trimmed_domain . ',';
-				}
+				$this->site_data['alias_domains'] .= $trimmed_domain . ',';
 			}
 		}
 		$this->site_data['alias_domains'] = substr( $this->site_data['alias_domains'], 0, - 1 );
