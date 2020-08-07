@@ -147,7 +147,7 @@ function create_user_in_db( $db_host, $db_name = '', $db_user = '', $db_pass = '
 	$db_user = empty( $db_user ) ? \EE\Utils\random_password( 5 ) : $db_user;
 	$db_pass = empty( $db_pass ) ? \EE\Utils\random_password() : $db_pass;
 
-	//TODO: Create database only if it does not exist
+	// TODO: Create database only if it does not exist.
 	$create_string = sprintf( 'CREATE USER "%1$s"@"%%" IDENTIFIED BY "%2$s"; CREATE DATABASE `%3$s`; GRANT ALL PRIVILEGES ON `%3$s`.* TO "%1$s"@"%%"; FLUSH PRIVILEGES;', $db_user, $db_pass, $db_name );
 
 	if ( GLOBAL_DB === $db_host ) {
