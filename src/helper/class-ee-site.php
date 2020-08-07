@@ -240,6 +240,16 @@ abstract class EE_Site_Command {
 			\EE::exec( 'docker volume rm ' . $volume );
 		}
 
+		$db_script_path = \EE\Utils\get_temp_dir() . 'db_exec';
+
+		if ( $this->fs->exists( $db_script_path ) ) {
+			try {
+				$this->fs->remove( $db_script_path );
+			} catch ( \Exception $e ) {
+				\EE::debug( $e );
+			}
+		}
+
 		if ( ! empty( $db_data['db_host'] ) ) {
 			\EE\Site\Utils\cleanup_db( $db_data['db_host'], $db_data['db_name'] );
 			\EE\Site\Utils\cleanup_db_user( $db_data['db_host'], $db_data['db_user'] );
