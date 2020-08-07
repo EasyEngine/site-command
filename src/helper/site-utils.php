@@ -147,7 +147,7 @@ function create_user_in_db( $db_host, $db_name = '', $db_user = '', $db_pass = '
 	$db_user = empty( $db_user ) ? \EE\Utils\random_password( 5 ) : $db_user;
 	$db_pass = empty( $db_pass ) ? \EE\Utils\random_password() : $db_pass;
 
-	//TODO: Create database only if it does not exist
+	// TODO: Create database only if it does not exist.
 	$create_string = sprintf( 'CREATE USER "%1$s"@"%%" IDENTIFIED BY "%2$s"; CREATE DATABASE `%3$s`; GRANT ALL PRIVILEGES ON `%3$s`.* TO "%1$s"@"%%"; FLUSH PRIVILEGES;', $db_user, $db_pass, $db_name );
 
 	if ( GLOBAL_DB === $db_host ) {
@@ -709,4 +709,25 @@ function check_alias_in_db( $domains ) {
 	if ( $alias_error ) {
 		\EE::error( sprintf( "Site %1\$s already exists as an alias domain for site: %2\$s. Please delete it from alias domains of %2\$s if you want to create an independent site for it.", $domain_having_parent, $parent_site ) );
 	}
+}
+
+/**
+ * 'sysctl' parameters for docker-compose file.
+ *
+ * @return array of all 'sysctl' parameters.
+ */
+function sysctl_parameters() {
+	return [
+		'sysctl' => [
+			[ 'name' => 'net.ipv4.tcp_synack_retries=2' ],
+			[ 'name' => 'net.ipv4.ip_local_port_range=2000 65535' ],
+			[ 'name' => 'net.ipv4.tcp_rfc1337=1' ],
+			[ 'name' => 'net.ipv4.tcp_fin_timeout=15' ],
+			[ 'name' => 'net.ipv4.tcp_keepalive_time=300' ],
+			[ 'name' => 'net.ipv4.tcp_keepalive_probes=5' ],
+			[ 'name' => 'net.ipv4.tcp_keepalive_intvl=15' ],
+			[ 'name' => 'net.core.somaxconn=65536' ],
+			[ 'name' => 'net.ipv4.tcp_max_tw_buckets=1440000' ],
+		],
+	];
 }
