@@ -244,9 +244,9 @@ abstract class EE_Site_Command {
 
 		if ( $this->fs->exists( $db_script_path ) ) {
 			try {
-				$this->fs->remove($db_script_path);
-			} catch (\Exception $e) {
-				\EE::debug($e);
+				$this->fs->remove( $db_script_path );
+			} catch ( \Exception $e ) {
+				\EE::debug( $e );
 			}
 		}
 
