@@ -273,7 +273,7 @@ class Repository implements RepositoryV2Interface
 	{
 		try {
 			$this->delete(
-				$this->getPathForDomain(self::PATH_CACHE_AUTHORIZATION_CHALLENGE, $domain),
+				$this->getPathForDomain(self::PATH_CACHE_AUTHORIZATION_CHALLENGE, $domain)
 			);
 		} catch (\Exception $e) {
 			throw new AcmeCliException(sprintf('Removing of domain %s authorization challenge failed', $domain), $e);
