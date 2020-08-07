@@ -700,52 +700,6 @@ class Site_Letsencrypt {
 		return $distinguishedName;
 	}
 
-
-	public function status() {
-		$this->master ?? $this->master = new Filesystem( new Local( $this->conf_dir ) );
-
-		$certificateParser = new CertificateParser();
-
-		$table = new Table( $output );
-		$table->setHeaders( [ 'Domain', 'Issuer', 'Valid from', 'Valid to', 'Needs renewal?' ] );
-
-		$directories = $this->master->listContents( 'certs' );
-
-		foreach ( $directories as $directory ) {
-			if ( 'dir' !== $directory['type'] ) {
-				continue;
-			}
-
-			$parsedCertificate = $certificateParser->parse( $this->repository->loadDomainCertificate( $directory['basename'] ) );
-			if ( ! $input->getOption( 'all' ) && $parsedCertificate->isExpired() ) {
-				continue;
-			}
-			$domainString = $parsedCertificate->getSubject();
-
-			$alternativeNames = array_diff( $parsedCertificate->getSubjectAlternativeNames(), [ $parsedCertificate->getSubject() ] );
-			if ( count( $alternativeNames ) ) {
-				sort( $alternativeNames );
-				$last = array_pop( $alternativeNames );
-				foreach ( $alternativeNames as $alternativeName ) {
-					$domainString .= "\n ├── " . $alternativeName;
-				}
-				$domainString .= "\n └── " . $last;
-			}
-
-			$table->addRow(
-				[
-					$domainString,
-					$parsedCertificate->getIssuer(),
-					$parsedCertificate->getValidFrom()->format( 'Y-m-d H:i:s' ),
-					$parsedCertificate->getValidTo()->format( 'Y-m-d H:i:s' ),
-					( $parsedCertificate->getValidTo()->format( 'U' ) - time() < 604800 ) ? '<comment>Yes</comment>' : 'No',
-				]
-			);
-		}
-
-		$table->render();
-	}
-
 	/**
 	 * Cleanup created challenge files and specific rule sets for it.
 	 */
