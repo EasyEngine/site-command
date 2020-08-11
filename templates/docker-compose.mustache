@@ -37,6 +37,12 @@ services:
       - {{name}}
     {{/env}}
     {{/environment}}
+    {{#sysctls}}
+    sysctls:
+    {{#sysctl}}
+      - {{name}}
+    {{/sysctl}}
+    {{/sysctls}}
     external_links:
       - services_nginx-proxy_1:${VIRTUAL_HOST}
     {{#networks}}
