@@ -1925,6 +1925,31 @@ abstract class EE_Site_Command {
 		$this->fs->copy( $this->site_data['ssl_key'], $ssl_key_dest, true );
 		$this->fs->copy( $this->site_data['ssl_crt'], $ssl_crt_dest, true );
 	}
+	/**
+	 * Clones a website.
+	 *
+	 * ## OPTIONS
+	 *
+	 * <source>
+	 * : Name of website to be deleted.
+	 *
+	 * <destination>
+	 * : Name of website to be deleted.
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     # Delete site
+	 *     $ ee site delete example.com
+	 */
+	public function clone( $args, $assoc_args ) {
+		$source      = $args[0];
+		$destination = $args[1];
+
+		$transer_details = EE\Site\Utils\get_transfer_details( $source, $destination );
+		echo '';
+		# Copy files
+		# Copy DB
+	}
 
 	abstract public function create( $args, $assoc_args );
 

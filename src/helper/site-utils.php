@@ -731,3 +731,106 @@ function sysctl_parameters() {
 		],
 	];
 }
+
+function get_transfer_details( string $source, string $destination ) {
+	$source_details = get_site_location_info( $source );
+	$destination_details = get_site_location_info( $destination );
+
+	if( ! $source_details['sitename'] && ! $destination_details['sitename'] ) {
+		throw new \Exception( "No sitename found in source and destination site." );
+	} elseif( $source_details['ssh'] && $destination_details['ssh'] ) {
+		throw new \Exception( "Both source and destination sites cannot be remote." );
+	} elseif( ! $source_details['sitename'] ) {
+		$source_details['sitename'] = $destination_details['sitename'];
+	} elseif( ! $destination_details['sitename'] ) {
+		$destination_details['sitename'] = $source_details['sitename'];
+	}
+
+	if( 'localhost' === $source_details['host'] && 'localhost' === $destination_details['host'] && $source_details['sitename'] === $destination_details['sitename']) {
+		throw new \Exception( "Cannot copy '${source_details['sitename']}' on '${source_details['host']}' to '${destination_details['sitename']}' on '${destination_details['host']}'" );
+	}
+
+	if($source_details['ssh']){
+		ensure_ssh_success($source_details['ssh']);
+	}
+	if($destination_details['ssh']){
+		ensure_ssh_success($destination_details['ssh']);
+	}
+
+	if ( site_exists_on_host( $destination_details['ssh'] ?? 'localhost', $destination_details['sitename']) ) {
+		throw new \Exception( "Unable to clone site as destination site '${destination_details['sitename']}' already exits on '${destination_details['host']}'." );
+	}
+
+	return [
+		'source' => $source_details,
+		'destination' => $destination_details,
+	];
+}
+
+function get_site_location_info( string $location ) {
+
+	$data = [
+		'host' => null,
+		'sitename' => null,
+		'ssh' => null,
+	];
+
+	$location = trim($location);
+
+	// Remote
+	$details = get_remote_location_info( $location );
+	if ( $details ) {
+		$data['host'] = $details['host'];
+		$data['sitename'] = $details['sitename'] ?? null;
+		$data['ssh'] = $details['ssh'];
+		return $data;
+	}
+
+	// Local
+	if( $location === '.' ) {
+		$data['host'] = 'localhost';
+		return $data;
+	}
+
+	$data['host'] = 'localhost';
+	$data['sitename'] = $location;
+
+	return $data;
+}
+
+function get_remote_location_info( string $remote_location ) {
+	$matches = null;
+	preg_match( "/^(?'ssh'(?'username'\S+)@(?'host'\S+))(:(?'sitename'\S+))?/", $remote_location, $matches );
+
+	return $matches ;
+}
+
+function ensure_ssh_success( string $host ) {
+	if( ! ssh_success($host)) {
+		throw new \Exception( "Unable to SSH to '$host'");
+	}
+}
+
+function ssh_success( string $host ) {
+	$key = get_ssh_key_path();
+	return 0 === EE::launch( "ssh -i $key $host exit", false, false );
+}
+
+function get_ssh_key_path() {
+	$user_home = get_user_home_dir( get_current_user() );
+	return $user_home . '/.ssh/id_rsa';
+}
+
+function get_user_home_dir( string $user ) {
+	return EE::launch( "printf ~$user" )->stdout;
+}
+
+function ensure_site_exists_on_host( string $host, string $site ) {
+	if( ! site_exists_on_host($host,$site)) {
+		throw new \Exception( "Unable to find '$site' on '$host'");
+	}
+}
+
+function site_exists_on_host( string $host, string $site ) {
+	return 0 === EE::launch( $host === 'localhost' ? "ee site info $site" : "ssh $host ee site info $site", false, false  );
+}
