@@ -14,6 +14,11 @@ class Site_Command {
 	protected static $site_types = [];
 
 	/**
+	 * @var array $site_types_subcommands Array to hold all the registered site types and their additional subcommands.
+	 */
+	protected static $site_types_subcommands = [];
+
+	/**
 	 * @var Site_Command $instance Hold an instance of the class.
 	 */
 	private static $instance;
@@ -44,6 +49,21 @@ class Site_Command {
 			EE::warning( sprintf( '%s site-type had already been previously registered by %s. It is overridden by the new package class %s. Please update your packages to resolve this.', $name, self::$instance->site_types[ $name ], $callback ) );
 		}
 		self::$instance->site_types[ $name ] = $callback;
+	}
+
+	/**
+	 * Function to add subcommand to a site type.
+	 *
+	 * @param string $type     Name of the site type.
+	 * @param string $name     Name of the subcommand.
+	 * @param string $callback The callback function/class for that type.
+	 */
+	public static function add_subcommand( $type, $name, $callback ) {
+
+		if ( isset( self::$instance->site_types_subcommands[ $type ] ) ) {
+			self::$instance->site_types_subcommands[ $type ] = [ [ 'name' => $name, 'callback' => $callback ] ];
+		}
+		self::$instance->site_types_subcommands[ $type ][] = [ 'name' => $name, 'callback' => $callback ];
 	}
 
 	/**
@@ -149,6 +169,14 @@ class Site_Command {
 
 		$command      = EE::get_root_command();
 		$leaf_command = CommandFactory::create( 'site', $callback, $command );
+
+		if ( isset( self::$instance->site_types_subcommands[ $type ] ) ) {
+			$additional_subcommands = self::$instance->site_types_subcommands[ $type ];
+			foreach ( $additional_subcommands as $subcommand ) {
+				$new_subcommand = CommandFactory::create( 'site ' . $subcommand['name'], $subcommand['callback'], $command );
+				$leaf_command->add_subcommand( $subcommand['name'], $new_subcommand );
+			}
+		}
 		$command->add_subcommand( 'site', $leaf_command );
 
 		EE::run_command( $args, $assoc_args );
