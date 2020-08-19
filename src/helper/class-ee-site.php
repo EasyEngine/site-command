@@ -1945,8 +1945,12 @@ abstract class EE_Site_Command {
 		$source      = $args[0];
 		$destination = $args[1];
 
-		$transer_details = EE\Site\Utils\get_transfer_details( $source, $destination );
-		echo '';
+		$transfer = EE\Site\Utils\get_transfer_details( $source, $destination );
+
+		$site_create_command = EE\Site\Utils\get_site_create_command($transfer);
+		EE::log( 'Creating site ' . $transfer['destination']['sitename'] . 'with comnnad ' . $site_create_command );
+		passthru( $site_create_command );
+
 		# Copy files
 		# Copy DB
 	}

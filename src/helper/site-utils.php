@@ -732,7 +732,79 @@ function sysctl_parameters() {
 	];
 }
 
+function get_site_create_command( array $transfer ) {
+
+	$ssh = '';
+
+	if( 'localhost' !== $transfer['destination']['host'] ) {
+		$ssh = $transfer['destination']['ssh'];
+	}
+
+	$params = json_decode( EE::launch( "$ssh ee site info {$transfer['source']['sitename']} --format=json" )->stdout, true );
+
+	$command = "$ssh ee site create {$transfer['destination']['sitename']} --type=${params['site_type']}";
+
+	if ( in_array( $params['site_type'], [ 'html', 'php', 'wp'] ) ) {
+
+		if ( '/var/www/htdocs' !== $params['site_container_fs_path'] ) {
+			$path = str_replace( '/var/www/htdocs/', '', $params['site_container_fs_path'] );
+			$command .= " --public-dir=$path";
+		}
+
+		if ( ! empty( $params['site_ssl'] ) ) {
+			$command .= " --ssl=le";
+		}
+
+		if ( ! empty( $params['site_ssl_wildcard'] ) ) {
+			$command .= " --wildcard";
+		}
+//		$command .= " --alias-domains=${params['alias_domains']}";
+	}
+
+	if ( in_array( $params['site_type'], [ 'php', 'wp'] ) ) {
+
+		if ( ! empty( $params['cache_nginx_browser'] ) ) {
+			$command .= " --cache";
+		}
+
+		if ( ! empty( $params['cache_host'] ) ) {
+			$command .= " --with-local-redis";
+		}
+
+		if ( ( ! empty( $params['db_host'] ) && 'php' === $params['site_type'] ) || 'wp' === $params['site_type'] ) {
+			if ( 'php' === $params['site_type'] ) {
+				$command .= " --with-db";
+			}
+			// $command .=" --dbname=${params['db_name']} --dbuser=${params['db_user']} --dbpass=${params['db_password']} --dbhost=${params['db_host']} --dbport=${params['db_port']}";
+		}
+		$command .= " --php=${params['php_version']}";
+	}
+
+	if ( 'wp' === $params['site_type'] ) {
+		if ( ! empty( $params['proxy_cache'] ) ) {
+			$command .= " --proxy-cache=on";
+		}
+		if ( ! empty( $params['app_sub_type'] ) && 'wp' !== $params['app_sub_type'] ) {
+			$command .= " --mu=${params['app_sub_type']}";
+		}
+		if ( ! empty( $params['app_admin_username'] ) ) {
+			$command .= " --admin-user=${params['app_admin_username']}";
+		}
+		if ( ! empty( $params['app_admin_email'] ) ) {
+			$command .= " --admin-email=${params['app_admin_email']}";
+		}
+		if ( ! empty( $params['app_admin_password'] ) ) {
+			$command .= " --admin-pass=${params['app_admin_password']}";
+		}
+		// TODO: vip, proxy-cache-max-time, proxy-cache-max-size
+	}
+
+	return $command;
+
+}
+
 function get_transfer_details( string $source, string $destination ) {
+
 	$source_details = get_site_location_info( $source );
 	$destination_details = get_site_location_info( $destination );
 
@@ -752,8 +824,7 @@ function get_transfer_details( string $source, string $destination ) {
 
 	if($source_details['ssh']){
 		ensure_ssh_success($source_details['ssh']);
-	}
-	if($destination_details['ssh']){
+	} elseif($destination_details['ssh']){
 		ensure_ssh_success($destination_details['ssh']);
 	}
 
@@ -761,9 +832,18 @@ function get_transfer_details( string $source, string $destination ) {
 		throw new \Exception( "Unable to clone site as destination site '${destination_details['sitename']}' already exits on '${destination_details['host']}'." );
 	}
 
+	if( 'localhost' === $source_details['host'] && 'localhost' === $destination_details['host'] ) {
+		$transfer_type = 'local';
+	} elseif ( 'localhost' !== $source_details['host']) {
+		$transfer_type = 'remote_to_local';
+	} else {
+		$transfer_type = 'local_to_remote';
+	}
+
 	return [
 		'source' => $source_details,
 		'destination' => $destination_details,
+		'type' => $transfer_type
 	];
 }
 
