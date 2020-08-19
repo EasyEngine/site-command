@@ -732,17 +732,9 @@ function sysctl_parameters() {
 	];
 }
 
-function get_site_create_command( array $transfer ) {
+function get_site_create_command( string $ssh, string $sitename, array $params ) {
 
-	$ssh = '';
-
-	if( 'localhost' !== $transfer['destination']['host'] ) {
-		$ssh = $transfer['destination']['ssh'];
-	}
-
-	$params = json_decode( EE::launch( "$ssh ee site info {$transfer['source']['sitename']} --format=json" )->stdout, true );
-
-	$command = "$ssh ee site create {$transfer['destination']['sitename']} --type=${params['site_type']}";
+	$command = "$ssh ee site create $sitename --type=${params['site_type']}";
 
 	if ( in_array( $params['site_type'], [ 'html', 'php', 'wp'] ) ) {
 
@@ -758,7 +750,6 @@ function get_site_create_command( array $transfer ) {
 		if ( ! empty( $params['site_ssl_wildcard'] ) ) {
 			$command .= " --wildcard";
 		}
-//		$command .= " --alias-domains=${params['alias_domains']}";
 	}
 
 	if ( in_array( $params['site_type'], [ 'php', 'wp'] ) ) {
@@ -775,7 +766,6 @@ function get_site_create_command( array $transfer ) {
 			if ( 'php' === $params['site_type'] ) {
 				$command .= " --with-db";
 			}
-			// $command .=" --dbname=${params['db_name']} --dbuser=${params['db_user']} --dbpass=${params['db_password']} --dbhost=${params['db_host']} --dbport=${params['db_port']}";
 		}
 		$command .= " --php=${params['php_version']}";
 	}
@@ -832,6 +822,8 @@ function get_transfer_details( string $source, string $destination ) {
 		throw new \Exception( "Unable to clone site as destination site '${destination_details['sitename']}' already exits on '${destination_details['host']}'." );
 	}
 
+	$source_details['site_details'] = get_site_details( $source_details['ssh'], $source_details['sitename'] );
+
 	if( 'localhost' === $source_details['host'] && 'localhost' === $destination_details['host'] ) {
 		$transfer_type = 'local';
 	} elseif ( 'localhost' !== $source_details['host']) {
@@ -847,12 +839,16 @@ function get_transfer_details( string $source, string $destination ) {
 	];
 }
 
+function get_site_details( string $ssh, string $sitename ) {
+	return json_decode( EE::launch( "$ssh ee site info $sitename --format=json" )->stdout, true );
+}
+
 function get_site_location_info( string $location ) {
 
 	$data = [
-		'host' => null,
-		'sitename' => null,
-		'ssh' => null,
+		'host' => '',
+		'sitename' => '',
+		'ssh' => '',
 	];
 
 	$location = trim($location);
