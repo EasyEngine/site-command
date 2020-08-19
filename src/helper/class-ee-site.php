@@ -1639,9 +1639,7 @@ abstract class EE_Site_Command {
 	 */
 	private function renew_ssl_cert( $args, $force ) {
 
-		if ( empty( $this->site_data ) ) {
-			$this->site_data = get_site_info( $args );
-		}
+		$this->site_data = get_site_info( $args );
 
 		if ( 'inherit' === $this->site_data['site_ssl'] ) {
 			EE::error( 'No need to renew certs for site who have inherited ssl. Please renew certificate of the parent site.' );
