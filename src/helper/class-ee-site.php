@@ -571,7 +571,7 @@ abstract class EE_Site_Command {
 
 		if ( ! empty( $this->site_data['proxy_cache'] ) && 'on' === $this->site_data['proxy_cache'] ) {
 			EE::log( 'As proxy cache is enabled on this site, updating config to enable it in newly added alias domains.' );
-			$this->site_data = $site;
+			$this->site_data = get_site_info( $args, true, true, false );
 			$assoc_args      = [
 				'proxy-cache' => 'on',
 				'force'       => true,
@@ -1639,7 +1639,7 @@ abstract class EE_Site_Command {
 	 */
 	private function renew_ssl_cert( $args, $force ) {
 
-		if ( empty( $this->site_data ) ) {
+		if ( empty( $this->site_data['site_ssl'] ) ) {
 			$this->site_data = get_site_info( $args );
 		}
 

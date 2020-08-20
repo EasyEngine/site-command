@@ -507,7 +507,6 @@ class Site_Letsencrypt {
 			$certificateParser = new CertificateParser();
 			$parsedCertificate = $certificateParser->parse( $certificate );
 
-			// 2160000 = 25 days.
 			if ( $parsedCertificate->getValidTo()->format( 'U' ) - time() < 0 ) {
 				\EE::log(
 					sprintf(
@@ -539,8 +538,8 @@ class Site_Letsencrypt {
 		$certificateParser = new CertificateParser();
 		$parsedCertificate = $certificateParser->parse( $certificate );
 
-		// 2160000 = 25 days.
-		if ( $parsedCertificate->getValidTo()->format( 'U' ) - time() >= 2160000 ) {
+		// 3024000 = 35 days.
+		if ( $parsedCertificate->getValidTo()->format( 'U' ) - time() >= 3024000 ) {
 			\EE::log(
 				sprintf(
 					'Current certificate is valid until %s, renewal is not necessary.',
