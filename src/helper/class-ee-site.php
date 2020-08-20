@@ -1926,20 +1926,28 @@ abstract class EE_Site_Command {
 		$this->fs->copy( $this->site_data['ssl_crt'], $ssl_crt_dest, true );
 	}
 	/**
-	 * Clones a website.
+	 * Clones a website from source to destination.
 	 *
 	 * ## OPTIONS
 	 *
 	 * <source>
-	 * : Name of website to be deleted.
+	 * : Name of source website to be cloned. Format [user@ssh-hostname:]sitename
 	 *
 	 * <destination>
-	 * : Name of website to be deleted.
+	 * : Name of destination website to be cloned. Format [user@ssh-hostname:]sitename
 	 *
 	 * ## EXAMPLES
 	 *
-	 *     # Delete site
-	 *     $ ee site delete example.com
+	 *     # Clone site
+	 *     $ ee site clone foo.com bar.com
+	 *
+	 *     # Clone site from remote
+	 *     $ ee site clone root@foo.com:foo.com bar.com
+	 *
+	 *     # Clone site to remote
+	 *     $ ee site clone foo.com root@foo.com:bar.com
+	 *
+	 *
 	 */
 	public function clone( $args, $assoc_args ) {
 		$source      = $args[0];
@@ -1948,11 +1956,21 @@ abstract class EE_Site_Command {
 		$transfer = EE\Site\Utils\get_transfer_details( $source, $destination );
 
 		$site_create_command = EE\Site\Utils\get_site_create_command( $transfer['destination']['ssh'], $transfer['destination']['sitename'], $transfer['source']['site_details'] );
-		EE::debug( 'Creating site "' . $transfer['destination']['sitename'] . '" on "' . $transfer['destination']['host'] . '" with comnnad "' . $site_create_command . '"');
-//		passthru( $site_create_command );
 
-		# Copy files
-		# Copy DB
+		EE::log( 'Creating site' );
+		EE::debug( 'Creating site "' . $transfer['destination']['sitename'] . '" on "' . $transfer['destination']['host'] . '" with comnnad "' . $site_create_command . '"');
+
+		EE::exec( $site_create_command );
+
+		$transfer['destination']['site_details'] = EE\Site\Utils\get_site_details( $transfer['destination']['ssh'], $transfer['destination']['sitename'] );
+
+		EE::log( 'Syncing files' );
+		EE\Site\Utils\copy_site_files( $transfer );
+
+		EE::log( 'Syncing database' );
+		EE\Site\Utils\copy_site_db( $transfer );
+
+		EE::success( 'Site cloned successfully' );
 	}
 
 	abstract public function create( $args, $assoc_args );

@@ -732,9 +732,83 @@ function sysctl_parameters() {
 	];
 }
 
-function get_site_create_command( string $ssh, string $sitename, array $params ) {
+function copy_site_db( array $transfer ) {
 
-	$command = "$ssh ee site create $sitename --type=${params['site_type']}";
+	$site_type = $transfer['source']['site_details']['site_type'];
+	$db_host = $transfer['source']['site_details']['db_host'];
+
+	if ( 'wp' === $site_type || 'php' === $site_type && ! empty( $db_host )  ) {
+		$source_site_name = $transfer['source']['site_details']['site_url'];
+		$destination_site_name = $transfer['destination']['site_details']['site_url'];
+
+		EE::log( 'Exporting database from source' );
+
+		$filename = $source_site_name . '-' . EE\Utils\random_password() . '.sql';
+		$export_command = sshify_command( $transfer['source'], 'ee shell ' . $source_site_name . ' --command=\'wp db export ../' . $filename . '\'');
+		EE::exec( $export_command );
+
+		EE::log( 'Copying database to destination' );
+
+		$source_fs_path = trailingslashit( $transfer['source']['site_details']['site_fs_path'] ) . 'app/' . $filename ;
+		$destination_fs_path = trailingslashit( $transfer['destination']['site_details']['site_fs_path'] ) . 'app/' . $filename ;
+
+		$source_fs_path_rsync = rsyncify_path( $transfer['source'], $source_fs_path );
+		$destination_fs_path_rsync = rsyncify_path( $transfer['destination'],  $destination_fs_path );
+
+		$copy_db_command = rsync_command( $source_fs_path_rsync, $destination_fs_path_rsync ) ;
+		EE::exec( $copy_db_command );
+
+		EE::log( 'Importing database in destination' );
+
+		$import_command = sshify_command( $transfer['destination'],'ee shell ' . $destination_site_name . ' --command=\'wp db import ../' . $filename . '\'');
+		EE::exec( $import_command );
+
+		EE::log( 'Executing search-replace' );
+
+		$search_replace_command = sshify_command( $transfer['destination'],'ee shell ' . $destination_site_name . ' --command=\'wp search_replace ' . $source_site_name . ' ' .$destination_site_name . '\'' );
+		EE::exec( $search_replace_command );
+
+		$rm_db_src_command = sshify_command( $transfer['source'], 'rm ' . $source_fs_path );
+		$rm_db_dest_command = sshify_command( $transfer['destination'], 'rm ' . $destination_fs_path );
+
+		EE::log( 'Cleanup export file from source and destination' );
+
+		EE::exec( $rm_db_src_command );
+		EE::exec( $rm_db_dest_command );
+	}
+}
+
+function copy_site_files( array $transfer ) {
+
+	$public_dir_src = str_replace( '/var/www/htdocs/', '', trailingslashit( $transfer['source']['site_details']['site_container_fs_path'] ) );
+	$public_dir_src = $public_dir_src ? trailingslashit( $public_dir_src ) : $public_dir_src;
+	$rsync_src = rsyncify_path( $transfer['source'], $transfer['source']['site_details']['site_fs_path'] . '/app/htdocs/' . $public_dir_src );
+
+	$public_dir_dest = str_replace( '/var/www/htdocs/', '', trailingslashit( $transfer['destination']['site_details']['site_container_fs_path'] ) );
+	$public_dir_dest = $public_dir_dest ? trailingslashit( $public_dir_dest ) : $public_dir_dest;
+	$rsync_dest = rsyncify_path( $transfer['destination'], $transfer['destination']['site_details']['site_fs_path'] . '/app/htdocs/' . $public_dir_dest );
+
+	$rsync_command = rsync_command( $rsync_src, $rsync_dest );
+
+	EE::log( $rsync_command );
+}
+
+function rsync_command( $source, $destination ) {
+	$ssh_command = 'ssh -i ' . get_ssh_key_path();
+	return 'rsync -avzhP --delete-after --ignore-errors -e "' . $ssh_command . '" ' . $source . ' ' . $destination ;
+}
+
+function sshify_command( $location, $command ) {
+	$key = get_ssh_key_path();
+	return $location['ssh'] ? 'ssh -i' . $key . ' ' . $location['ssh'] . ' ' . $command : $command ;
+}
+
+function rsyncify_path( $location, $path ) {
+	return $location['ssh'] ? $location['ssh'] . ':' . $path : $path ;
+}
+
+function get_site_create_command( array $transfer_destination, array $params ) {
+	$command = sshify_command( $transfer_destination, "ee site create {$transfer_destination['sitename']} --type=${params['site_type']}" );
 
 	if ( in_array( $params['site_type'], [ 'html', 'php', 'wp'] ) ) {
 
@@ -812,6 +886,8 @@ function get_transfer_details( string $source, string $destination ) {
 		throw new \Exception( "Cannot copy '${source_details['sitename']}' on '${source_details['host']}' to '${destination_details['sitename']}' on '${destination_details['host']}'" );
 	}
 
+	EE::log( 'Checking access to both sites' );
+
 	if($source_details['ssh']){
 		ensure_ssh_success($source_details['ssh']);
 	} elseif($destination_details['ssh']){
@@ -822,7 +898,7 @@ function get_transfer_details( string $source, string $destination ) {
 		throw new \Exception( "Unable to clone site as destination site '${destination_details['sitename']}' already exits on '${destination_details['host']}'." );
 	}
 
-	$source_details['site_details'] = get_site_details( $source_details['ssh'], $source_details['sitename'] );
+	$source_details['site_details'] = get_site_details( $source_details );
 
 	if( 'localhost' === $source_details['host'] && 'localhost' === $destination_details['host'] ) {
 		$transfer_type = 'local';
@@ -839,8 +915,8 @@ function get_transfer_details( string $source, string $destination ) {
 	];
 }
 
-function get_site_details( string $ssh, string $sitename ) {
-	return json_decode( EE::launch( "$ssh ee site info $sitename --format=json" )->stdout, true );
+function get_site_details( array $location ) {
+	return json_decode( EE::launch( sshify_command( $location, "ee site info {$location['sitename']} --format=json" ) )->stdout, true );
 }
 
 function get_site_location_info( string $location ) {
@@ -898,7 +974,14 @@ function get_ssh_key_path() {
 }
 
 function get_user_home_dir( string $user ) {
-	return EE::launch( "printf ~$user" )->stdout;
+	static $path;
+
+	if ( $path ) {
+		return $path;
+	}
+
+	$path = EE::launch( "printf ~$user" )->stdout;
+	return $path;
 }
 
 function ensure_site_exists_on_host( string $host, string $site ) {
