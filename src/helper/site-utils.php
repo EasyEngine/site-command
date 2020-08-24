@@ -744,8 +744,11 @@ function copy_site_db( array $transfer ) {
 		EE::log( 'Exporting database from source' );
 
 		$filename = $source_site_name . '-' . EE\Utils\random_password() . '.sql';
-		$export_command = sshify_command( $transfer['source'], 'ee shell ' . $source_site_name . ' --command=\'wp db export ../' . $filename . '\'');
-		EE::exec( $export_command );
+		$export_command = sshify_command( $transfer['source']['ssh'], 'ee shell --skip-tty ' . $source_site_name . ' --command=\'wp db export ../' . $filename . '\'');
+
+		if ( ! \EE::exec( $export_command ) ) {
+			throw new \Exception( 'Unable to export database on source. Please check for file system permissions and disk space.' );
+		}
 
 		EE::log( 'Copying database to destination' );
 
@@ -756,20 +759,41 @@ function copy_site_db( array $transfer ) {
 		$destination_fs_path_rsync = rsyncify_path( $transfer['destination'],  $destination_fs_path );
 
 		$copy_db_command = rsync_command( $source_fs_path_rsync, $destination_fs_path_rsync ) ;
-		EE::exec( $copy_db_command );
+
+		if ( ! EE::exec( $copy_db_command ) ) {
+			throw new \Exception( 'Unable to copy database to destination. Please check for file system permissions and disk space.' );
+		}
 
 		EE::log( 'Importing database in destination' );
 
-		$import_command = sshify_command( $transfer['destination'],'ee shell ' . $destination_site_name . ' --command=\'wp db import ../' . $filename . '\'');
-		EE::exec( $import_command );
+		$import_command = sshify_command( $transfer['destination']['ssh'],'ee shell --skip-tty ' . $destination_site_name . ' --command=\'wp db import ../' . $filename . '\'');
+
+		if ( ! EE::exec( $import_command ) ) {
+			throw new \Exception( 'Unable to import database on destination. Please check for file system permissions and disk space.' );
+		}
 
 		EE::log( 'Executing search-replace' );
 
-		$search_replace_command = sshify_command( $transfer['destination'],'ee shell ' . $destination_site_name . ' --command=\'wp search_replace ' . $source_site_name . ' ' .$destination_site_name . '\'' );
-		EE::exec( $search_replace_command );
+		$search_replace_command = sshify_command( $transfer['destination']['ssh'],'ee shell ' . $destination_site_name . ' --command=\'wp search-replace ' . $source_site_name . ' ' .$destination_site_name . ' --network --all-tables\'' );
 
-		$rm_db_src_command = sshify_command( $transfer['source'], 'rm ' . $source_fs_path );
-		$rm_db_dest_command = sshify_command( $transfer['destination'], 'rm ' . $destination_fs_path );
+		if ( ! EE::exec( $search_replace_command ) ) {
+			throw new \Exception( 'Unable to execute search-replace on database at destination.' );
+		}
+
+		if ( $transfer['source']['site_details']['site_ssl'] !== $transfer['destination']['site_details']['site_ssl'] ) {
+			$source_site_name_http = empty ( $transfer['source']['site_details']['site_ssl'] ) ? 'http://' . $destination_site_name : 'https://' . $destination_site_name;
+			$destination_site_name_http = empty ( $transfer['destination']['site_details']['site_ssl'] ) ? 'http://' . $destination_site_name : 'https://' . $destination_site_name;
+
+			$http_https_search_replace_command = sshify_command( $transfer['destination']['ssh'],'ee shell ' . $destination_site_name . ' --command=\'wp search-replace ' . $source_site_name_http . ' ' . $destination_site_name_http . ' --network --all-tables\'' );
+
+			if ( ! EE::exec( $http_https_search_replace_command ) ) {
+				throw new \Exception( 'Unable to execute http-https search-replace on database at destination.' );
+			}
+		}
+
+
+		$rm_db_src_command = sshify_command( $transfer['source']['ssh'], 'rm ' . $source_fs_path );
+		$rm_db_dest_command = sshify_command( $transfer['destination']['ssh'], 'rm ' . $destination_fs_path );
 
 		EE::log( 'Cleanup export file from source and destination' );
 
@@ -790,17 +814,19 @@ function copy_site_files( array $transfer ) {
 
 	$rsync_command = rsync_command( $rsync_src, $rsync_dest );
 
-	EE::log( $rsync_command );
+	if ( ! EE::exec( $rsync_command ) ) {
+		throw new \Exception( 'Unable to sync files.' );
+	}
 }
 
-function rsync_command( $source, $destination ) {
+function rsync_command( string $source, string $destination ) {
 	$ssh_command = 'ssh -i ' . get_ssh_key_path();
 	return 'rsync -avzhP --delete-after --ignore-errors -e "' . $ssh_command . '" ' . $source . ' ' . $destination ;
 }
 
-function sshify_command( $location, $command ) {
+function sshify_command( string $ssh, string $command ) {
 	$key = get_ssh_key_path();
-	return $location['ssh'] ? 'ssh -i' . $key . ' ' . $location['ssh'] . ' ' . $command : $command ;
+	return $ssh ? 'ssh -i ' . $key . ' ' . $ssh . ' "' . $command . '"' : $command ;
 }
 
 function rsyncify_path( $location, $path ) {
@@ -808,7 +834,7 @@ function rsyncify_path( $location, $path ) {
 }
 
 function get_site_create_command( array $transfer_destination, array $params ) {
-	$command = sshify_command( $transfer_destination, "ee site create {$transfer_destination['sitename']} --type=${params['site_type']}" );
+	$command = sshify_command( $transfer_destination['ssh'], "ee site create {$transfer_destination['sitename']} --type=${params['site_type']}" );
 
 	if ( in_array( $params['site_type'], [ 'html', 'php', 'wp'] ) ) {
 
@@ -916,7 +942,12 @@ function get_transfer_details( string $source, string $destination ) {
 }
 
 function get_site_details( array $location ) {
-	return json_decode( EE::launch( sshify_command( $location, "ee site info {$location['sitename']} --format=json" ) )->stdout, true );
+	$output = EE::launch( sshify_command( $location['ssh'], "ee site info {$location['sitename']} --format=json" ) );
+	$details = json_decode( $output->stdout, true );
+	if ( empty( $details ) ) {
+		throw new \Exception( 'Unable to get site info for site' . $location['sitename'] . '. The output of command is: ' . $output->stdout . $output->stderr );
+	}
+	return $details;
 }
 
 function get_site_location_info( string $location ) {
@@ -952,7 +983,7 @@ function get_site_location_info( string $location ) {
 
 function get_remote_location_info( string $remote_location ) {
 	$matches = null;
-	preg_match( "/^(?'ssh'(?'username'\S+)@(?'host'\S+))(:(?'sitename'\S+))?/", $remote_location, $matches );
+	preg_match( "/^(?'ssh'(?'username'\S+)@(?'host'[^:]+))(:(?'sitename'\S+))?/", $remote_location, $matches );
 
 	return $matches ;
 }
@@ -990,6 +1021,6 @@ function ensure_site_exists_on_host( string $host, string $site ) {
 	}
 }
 
-function site_exists_on_host( string $host, string $site ) {
-	return 0 === EE::launch( $host === 'localhost' ? "ee site info $site" : "ssh $host ee site info $site", false, false  );
+function site_exists_on_host( string $ssh, string $site ) {
+	return 0 === EE::launch( sshify_command( $ssh, "ee site info $site" ) , false, false  );
 }

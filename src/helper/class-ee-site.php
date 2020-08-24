@@ -1938,7 +1938,7 @@ abstract class EE_Site_Command {
 	 *
 	 * ## EXAMPLES
 	 *
-	 *     # Clone site
+`	 *     # Clone site on same host
 	 *     $ ee site clone foo.com bar.com
 	 *
 	 *     # Clone site from remote
@@ -1955,14 +1955,18 @@ abstract class EE_Site_Command {
 
 		$transfer = EE\Site\Utils\get_transfer_details( $source, $destination );
 
-		$site_create_command = EE\Site\Utils\get_site_create_command( $transfer['destination']['ssh'], $transfer['destination']['sitename'], $transfer['source']['site_details'] );
+		$site_create_command = EE\Site\Utils\get_site_create_command( $transfer['destination'], $transfer['source']['site_details'] );
 
 		EE::log( 'Creating site' );
-		EE::debug( 'Creating site "' . $transfer['destination']['sitename'] . '" on "' . $transfer['destination']['host'] . '" with comnnad "' . $site_create_command . '"');
+		EE::debug( 'Creating site "' . $transfer['destination']['sitename'] . '" on "' . $transfer['destination']['host'] . '" with command "' . $site_create_command . '"');
 
-		EE::exec( $site_create_command );
+		$site_create_output = EE::launch( $site_create_command );
 
-		$transfer['destination']['site_details'] = EE\Site\Utils\get_site_details( $transfer['destination']['ssh'], $transfer['destination']['sitename'] );
+		if ( $site_create_output->return_code ) {
+			EE::error( 'Cannot create site ' . $transfer['destination']['sitename'] . '. Please check logs for more info or rerun the command with --debug flag.' );
+		}
+
+		$transfer['destination']['site_details'] = EE\Site\Utils\get_site_details( $transfer['destination'] );
 
 		EE::log( 'Syncing files' );
 		EE\Site\Utils\copy_site_files( $transfer );
