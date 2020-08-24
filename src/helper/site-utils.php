@@ -780,7 +780,7 @@ function copy_site_db( array $transfer ) {
 			throw new \Exception( 'Unable to execute search-replace on database at destination.' );
 		}
 
-		if ( $transfer['source']['site_details']['site_ssl'] !== $transfer['destination']['site_details']['site_ssl'] ) {
+		if ( empty ( $transfer['source']['site_details']['site_ssl'] ) !== empty( $transfer['destination']['site_details']['site_ssl'] ) ) {
 			$source_site_name_http = empty ( $transfer['source']['site_details']['site_ssl'] ) ? 'http://' . $destination_site_name : 'https://' . $destination_site_name;
 			$destination_site_name_http = empty ( $transfer['destination']['site_details']['site_ssl'] ) ? 'http://' . $destination_site_name : 'https://' . $destination_site_name;
 
@@ -991,6 +991,28 @@ function get_remote_location_info( string $remote_location ) {
 function ensure_ssh_success( string $host ) {
 	if( ! ssh_success($host)) {
 		throw new \Exception( "Unable to SSH to '$host'");
+	}
+}
+
+function ee_version_check( string $source_ssh, string $destination_ssh ) {
+	$source_command = sshify_command( $source_ssh, 'ee cli version' );
+	$destination_command = sshify_command( $destination_ssh, 'ee cli version' );
+
+	$source_result = EE::launch( $source_command );
+	$destination_result = EE::launch( $destination_command );
+
+	$source_matches = null;
+	$destination_matches = null;
+
+	preg_match( "/^EE (?'version'\S+)/", $source_result->stdout, $source_matches );
+	preg_match( "/^EE (?'version'\S+)/", $destination_result->stdout, $destination_matches );
+
+	if ( version_compare( $source_matches['version'], '4.1.3' ) < 0 ) {
+		throw new \Exception( 'EasyEngine version at source \'' . $source_matches['version'] . '\' is less than minimum required version \'4.1.3\' for cloning site.' );
+	}
+
+	if ( version_compare( $destination_matches['version'], '4.1.3' ) < 0 ) {
+		throw new \Exception( 'EasyEngine version at destination \'' . $destination_matches['version'] . '\' is less than minimum required version \'4.1.3\' for cloning site.' );
 	}
 }
 

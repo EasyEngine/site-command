@@ -1954,7 +1954,7 @@ abstract class EE_Site_Command {
 		$destination = $args[1];
 
 		$transfer = EE\Site\Utils\get_transfer_details( $source, $destination );
-
+		EE\Site\Utils\ee_version_check( $transfer['source']['ssh'], $transfer['destination']['ssh'] );
 		$site_create_command = EE\Site\Utils\get_site_create_command( $transfer['destination'], $transfer['source']['site_details'] );
 
 		EE::log( 'Creating site' );
