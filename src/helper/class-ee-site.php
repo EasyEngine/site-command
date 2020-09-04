@@ -6,6 +6,9 @@ use EE;
 use EE\Model\Site;
 use EE\Model\Option;
 use Symfony\Component\Filesystem\Filesystem;
+use function EE\Site\Cloner\Utils\copy_site_db;
+use function EE\Site\Cloner\Utils\copy_site_files;
+use function EE\Site\Cloner\Utils\get_transfer_details;
 use function EE\Site\Utils\get_domains_of_site;
 use function EE\Site\Utils\get_preferred_ssl_challenge;
 use function EE\Site\Utils\update_site_db_entry;
@@ -1950,29 +1953,20 @@ abstract class EE_Site_Command {
 	 *
 	 */
 	public function clone( $args, $assoc_args ) {
-		$source      = $args[0];
-		$destination = $args[1];
-
-		$transfer = EE\Site\Utils\get_transfer_details( $source, $destination );
-		EE\Site\Utils\ee_version_check( $transfer['source']['ssh'], $transfer['destination']['ssh'] );
-		$site_create_command = EE\Site\Utils\get_site_create_command( $transfer['destination'], $transfer['source']['site_details'] );
+		list( $source, $destination ) = get_transfer_details( $args[0], $args[1] );
 
 		EE::log( 'Creating site' );
-		EE::debug( 'Creating site "' . $transfer['destination']['sitename'] . '" on "' . $transfer['destination']['host'] . '" with command "' . $site_create_command . '"');
+		EE::debug( 'Creating site "' . $destination->name . '" on "' . $destination->host );
 
-		$site_create_output = EE::launch( $site_create_command );
-
-		if ( $site_create_output->return_code ) {
-			EE::error( 'Cannot create site ' . $transfer['destination']['sitename'] . '. Please check logs for more info or rerun the command with --debug flag.' );
+		if ( $destination->create_site( $source->site_details )->return_code ) {
+			EE::error( 'Cannot create site ' . $destination->name . '. Please check logs for more info or rerun the command with --debug flag.' );
 		}
 
-		$transfer['destination']['site_details'] = EE\Site\Utils\get_site_details( $transfer['destination'] );
-
 		EE::log( 'Syncing files' );
-		EE\Site\Utils\copy_site_files( $transfer );
+		copy_site_files( $source, $destination );
 
 		EE::log( 'Syncing database' );
-		EE\Site\Utils\copy_site_db( $transfer );
+		copy_site_db( $source, $destination );
 
 		EE::success( 'Site cloned successfully' );
 	}

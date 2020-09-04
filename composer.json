@@ -15,6 +15,7 @@
         "files": [
             "src/helper/hooks.php",
             "src/helper/site-utils.php",
+            "src/clone/clone-utils.php",
             "site-command.php"
         ]
     },
