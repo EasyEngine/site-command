@@ -74,8 +74,16 @@ function copy_site_db( Site $source, Site $destination ) {
 	}
 }
 
+function copy_site_certs( Site $source, Site $destination ) {
+	$rsync_command = rsync_command( $source->get_rsync_path( '/opt/easyengine/services/nginx-proxy/certs/' . $source->name . '.{key,crt}' ) , $destination->get_rsync_path( '/tmp/' ) );
+
+	if ( ! EE::exec( $rsync_command ) || $destination->execute( 'ls -1 /tmp/' . $destination->name . '.* | wc -l' )->stdout !== "2\n" ) {
+		throw new \Exception( 'Unable to sync certs.' );
+	}
+}
+
 function copy_site_files( Site $source, Site $destination ) {
-	$rsync_command = rsync_command( $source->get_public_dir(), $destination->get_public_dir() );
+	$rsync_command = rsync_command( $source->get_site_root_dir(), $destination->get_site_root_dir() );
 
 	if ( ! EE::exec( $rsync_command ) ) {
 		throw new \Exception( 'Unable to sync files.' );

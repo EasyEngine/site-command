@@ -60,11 +60,8 @@ class Site {
 		return $this->ssh_string ? $this->ssh_string . ':' . $path : $path;
 	}
 
-	public function get_public_dir() : string {
-		$public_dir = str_replace( '/var/www/htdocs/', '', trailingslashit( $this->site_details['site_container_fs_path'] ) );
-		$public_dir = $public_dir ? trailingslashit( $public_dir ) : $public_dir;
-
-		return $this->get_rsync_path( $public_dir );
+	public function get_site_root_dir() : string {
+		return $this->get_rsync_path( $this->site_details['site_fs_path'] . '/app/htdocs/' );
 	}
 
 	public function validate_ee_version() : void {
@@ -80,7 +77,40 @@ class Site {
 		}
 	}
 
-	private function get_site_create_command( array $site_details ) : string {
+	private function get_ssl_args( Site $source_site ) : string {
+		$site_details = $source_site->site_details;
+		$ssl_args='';
+		$add_wildcard=false;
+
+		if ( $this->name === $source_site->name ) {
+			if ( $site_details['site_ssl'] === 'le' || $site_details['site_ssl'] === 'custom' ) {
+				EE\Site\Cloner\Utils\copy_site_certs( $source_site, $this );
+				$ssl_args .= ' --ssl=custom --ssl-key=\'' . '/tmp/' . $source_site->name . '.key\' --ssl-crt=\'/tmp/' . $source_site->name . '.crt\'';
+			} elseif ( $site_details['site_ssl'] === 'inherit' ) {
+				EE::warning( 'Unable to enable SSL for ' . $this->name . ' as the source site was created with --ssl=custom. You can enable SSL with \'ee site update\' once site is cloned.' );
+			} else {
+				$ssl_args .= ' --ssl=' . $site_details['site_ssl'];
+				$add_wildcard=true;
+			}
+		} else {
+			if ( $site_details['site_ssl'] === 'custom' || $site_details['site_ssl'] === 'inherit' ) {
+				EE::warning( 'Unable to enable SSL for ' . $this->name . ' as the source site was created with --ssl=custom or --ssl=inherited. You can enable SSL with \'ee site update\' once site is cloned.' );
+			} else {
+				$ssl_args .= ' --ssl=' . $site_details['site_ssl'];
+				$add_wildcard=true;
+			}
+		}
+
+		if ( $add_wildcard ) {
+			if ( $site_details['site_ssl_wildcard'] ) {
+				$ssl_args .= ' --wildcard';
+			}
+		}
+		return $ssl_args;
+	}
+
+	private function get_site_create_command( Site $source_site ) : string {
+		$site_details = $source_site->site_details;
 		$command = 'ee site create ' . $this->name . ' --type=' . $site_details['site_type'] ;
 
 		if ( in_array( $site_details['site_type'], [ 'html', 'php', 'wp'] ) ) {
@@ -88,12 +118,7 @@ class Site {
 				$path = str_replace( '/var/www/htdocs/', '', $site_details['site_container_fs_path'] );
 				$command .= " --public-dir=$path";
 			}
-			if ( ! empty( $site_details['site_ssl'] ) ) {
-				$command .= " --ssl=le";
-			}
-			if ( ! empty( $site_details['site_ssl_wildcard'] ) ) {
-				$command .= " --wildcard";
-			}
+			$command .= $this->get_ssl_args( $source_site );
 		}
 
 		if ( in_array( $site_details['site_type'], [ 'php', 'wp'] ) ) {
@@ -125,15 +150,15 @@ class Site {
 				$command .= " --admin-email=${site_details['app_admin_email']}";
 			}
 			if ( ! empty( $site_details['app_admin_password'] ) ) {
-				$command .= " --admin-pass=${site_details['app_admin_password']}";
+//				$command .= " --admin-pass=${site_details['app_admin_password']}";
 			}
 			// TODO: vip, proxy-cache-max-time, proxy-cache-max-size
 		}
 		return $command;
 	}
 
-	public function create_site( array $site_details ) : EE\ProcessRun {
-		$new_site = $this->execute( $this->get_site_create_command( $site_details ) );
+	public function create_site( Site $source_site ) : EE\ProcessRun {
+		$new_site = $this->execute( $this->get_site_create_command( $source_site ) );
 		$this->set_site_details();
 		return $new_site;
 	}
