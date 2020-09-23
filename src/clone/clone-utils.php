@@ -83,16 +83,18 @@ function copy_site_certs( Site $source, Site $destination ) {
 }
 
 function copy_site_files( Site $source, Site $destination ) {
-	$rsync_command = rsync_command( $source->get_site_root_dir(), $destination->get_site_root_dir() );
+	$rsync_command = rsync_command( $source->get_site_root_dir(), $destination->get_site_root_dir(), [ '--exclude \'/wp-config.php\'' ] );
 
 	if ( ! EE::exec( $rsync_command ) ) {
 		throw new \Exception( 'Unable to sync files.' );
 	}
 }
 
-function rsync_command( string $source, string $destination ) {
-	$ssh_command = 'ssh -i ' . get_ssh_key_path();
-	return 'rsync -avzhP --delete-after --ignore-errors -e "' . $ssh_command . '" ' . $source . ' ' . $destination ;
+function rsync_command( string $source, string $destination, array $options=[] ) {
+	$ssh_command = 'ssh -t -i ' . get_ssh_key_path();
+	$extra_options = implode( ' ', $options );
+
+	return 'rsync -azh --delete-after --ignore-errors ' . $extra_options . ' -e "' . $ssh_command . '" ' . $source . ' ' . $destination ;
 }
 
 function get_transfer_details( string $source, string $destination ) : array {

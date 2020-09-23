@@ -1939,9 +1939,29 @@ abstract class EE_Site_Command {
 	 * <destination>
 	 * : Name of destination website to be cloned. Format [user@ssh-hostname:]sitename
 	 *
+	 * [--ssl]
+	 * : Enables ssl on site.
+	 * ---
+	 * options:
+	 *      - le
+	 *      - off
+	 *      - self
+	 *      - inherit
+	 *      - custom
+	 * ---
+	 *
+	 * [--ssl-key=<ssl-key-path>]
+	 * : Path to the SSL key file.
+	 *
+	 * [--ssl-crt=<ssl-crt-path>]
+	 * : Path ro the SSL crt file.
+	 *
+	 * [--wildcard]
+	 * : Gets wildcard SSL.
+	 *
 	 * ## EXAMPLES
 	 *
-`	 *     # Clone site on same host
+	 *     # Clone site on same host
 	 *     $ ee site clone foo.com bar.com
 	 *
 	 *     # Clone site from remote
@@ -1958,7 +1978,7 @@ abstract class EE_Site_Command {
 		EE::log( 'Creating site' );
 		EE::debug( 'Creating site "' . $destination->name . '" on "' . $destination->host );
 
-		if ( $destination->create_site( $source->site_details )->return_code ) {
+		if ( $destination->create_site( $source, $assoc_args )->return_code ) {
 			EE::error( 'Cannot create site ' . $destination->name . '. Please check logs for more info or rerun the command with --debug flag.' );
 		}
 

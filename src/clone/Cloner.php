@@ -5,7 +5,7 @@ namespace EE\Site\Cloner;
 use Composer\Semver\Comparator;
 use EE;
 use function EE\Site\Cloner\Utils\get_ssh_key_path;
-use function EE\Utils\trailingslashit;
+use function EE\Site\Cloner\Utils\rsync_command;
 
 class Site {
 	public $name, $host, $user, $ssh_string, $site_details;
@@ -53,7 +53,7 @@ class Site {
 
 	private function get_ssh_command( string $command ) : string {
 		$key = get_ssh_key_path();
-		return $this->ssh_string ? 'ssh -i ' . $key . ' ' . $this->ssh_string . ' "' . $command . '"' : $command ;
+		return $this->ssh_string ? 'ssh -t -i ' . $key . ' ' . $this->ssh_string . ' "' . $command . '"' : $command ;
 	}
 
 	public function get_rsync_path( string $path ) : string {
@@ -77,10 +77,39 @@ class Site {
 		}
 	}
 
-	private function get_ssl_args( Site $source_site ) : string {
+	private function get_ssl_args( Site $source_site, $assoc_args ) : string {
 		$site_details = $source_site->site_details;
 		$ssl_args='';
 		$add_wildcard=false;
+
+		if ( $assoc_args['ssl'] ?? false ) {
+			if ( $assoc_args['ssl'] !== 'off' ) {
+				$ssl_args .= ' --ssl=' . $assoc_args['ssl'];
+				if ( $assoc_args['ssl'] === 'custom' ) {
+					if ( ! ( $assoc_args['ssl-key'] ?? false && $assoc_args['ssl-crt'] ?? false ) ) {
+						EE::error( 'You need to specify --ssl-crt and --ssl-key with --ssl=custom' );
+					} if ( ! is_file ( $assoc_args['ssl-crt'] ) ) {
+						EE::error( 'Unable to find file specified in --ssl-crt at \'' . $assoc_args['ssl-crt'] . '\'' );
+					} if ( ! is_file ( $assoc_args['ssl-key'] ) ) {
+						EE::error( 'Unable to find file specified in --ssl-key at \'' . $assoc_args['ssl-key'] . '\'' );
+					}
+
+					$rsync_command_crt = rsync_command( $assoc_args['ssl-crt'], $this->get_rsync_path( '/tmp/' ) );
+					$rsync_command_key = rsync_command( $assoc_args['ssl-key'], $this->get_rsync_path( '/tmp/' ) );
+
+					if ( ! ( EE::exec( $rsync_command_key ) && EE::exec( $rsync_command_crt ) ) ) {
+						throw new \Exception( 'Unable to sync certs.' );
+					}
+
+					$ssl_args .= ' --ssl-crt=\'' . '/tmp/' . basename( $assoc_args['ssl-crt'] ) . '\'';
+					$ssl_args .= ' --ssl-key=\'' . '/tmp/' . basename( $assoc_args['ssl-key'] ) . '\'';
+				}
+				if ( $assoc_args['wildcard'] ?? false ) {
+					$ssl_args .= ' --wildcard';
+				}
+			}
+			return $ssl_args;
+		}
 
 		if ( $this->name === $source_site->name ) {
 			if ( $site_details['site_ssl'] === 'le' || $site_details['site_ssl'] === 'custom' ) {
@@ -109,7 +138,7 @@ class Site {
 		return $ssl_args;
 	}
 
-	private function get_site_create_command( Site $source_site ) : string {
+	private function get_site_create_command( Site $source_site, $assoc_args ) : string {
 		$site_details = $source_site->site_details;
 		$command = 'ee site create ' . $this->name . ' --type=' . $site_details['site_type'] ;
 
@@ -118,7 +147,7 @@ class Site {
 				$path = str_replace( '/var/www/htdocs/', '', $site_details['site_container_fs_path'] );
 				$command .= " --public-dir=$path";
 			}
-			$command .= $this->get_ssl_args( $source_site );
+			$command .= $this->get_ssl_args( $source_site, $assoc_args );
 		}
 
 		if ( in_array( $site_details['site_type'], [ 'php', 'wp'] ) ) {
@@ -150,15 +179,16 @@ class Site {
 				$command .= " --admin-email=${site_details['app_admin_email']}";
 			}
 			if ( ! empty( $site_details['app_admin_password'] ) ) {
-//				$command .= " --admin-pass=${site_details['app_admin_password']}";
+				$command .= " --admin-pass=${site_details['app_admin_password']}";
 			}
 			// TODO: vip, proxy-cache-max-time, proxy-cache-max-size
 		}
 		return $command;
 	}
 
-	public function create_site( Site $source_site ) : EE\ProcessRun {
-		$new_site = $this->execute( $this->get_site_create_command( $source_site ) );
+	public function create_site( Site $source_site, $assoc_args ) : EE\ProcessRun {
+		$this->ensure_site_nonexistent();
+		$new_site = $this->execute( $this->get_site_create_command( $source_site, $assoc_args ) );
 		$this->set_site_details();
 		return $new_site;
 	}
@@ -180,6 +210,14 @@ class Site {
 	public function ensure_ssh_success() : void {
 		if( ! $this->ssh_success()) {
 			throw new \Exception( 'Unable to SSH to ' . $this->host );
+		}
+	}
+
+	public function ensure_site_nonexistent() : void {
+		$output = $this->execute('ee site list | grep -q ' . $this->name );
+
+		if ( ! $output->return_code ) {
+			throw new \Exception( 'Site \''. $this->name . '\' already exits on \'' . $this->host . '\'' );
 		}
 	}
 
