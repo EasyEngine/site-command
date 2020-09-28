@@ -179,7 +179,7 @@ class Site {
 				$command .= " --admin-email=${site_details['app_admin_email']}";
 			}
 			if ( ! empty( $site_details['app_admin_password'] ) ) {
-				$command .= " --admin-pass=${site_details['app_admin_password']}";
+//				$command .= " --admin-pass=${site_details['app_admin_password']}";
 			}
 			// TODO: vip, proxy-cache-max-time, proxy-cache-max-size
 		}
@@ -187,19 +187,25 @@ class Site {
 	}
 
 	public function create_site( Site $source_site, $assoc_args ) : EE\ProcessRun {
-		$this->ensure_site_nonexistent();
+		$this->ensure_site_not_exists();
 		$new_site = $this->execute( $this->get_site_create_command( $source_site, $assoc_args ) );
 		$this->set_site_details();
 		return $new_site;
 	}
 
-	public function site_exists_on_host() : bool {
+	public function site_exists() : bool {
 		return 0 === $this->execute( 'ee site info ' . $this->name )->return_code;
 	}
 
-	public function ensure_site_exists_on_host() : void {
-		if( ! $this->site_exists_on_host() ) {
+	public function ensure_site_exists() : void {
+		if( ! $this->site_exists() ) {
 			throw new \Exception( 'Unable to find \'' . $this->name . '\' on \'' . $this->host . '\'');
+		}
+	}
+
+	public function ensure_site_not_exists() : void {
+		if( $this->site_exists() ) {
+			throw new \Exception( 'Site  \'' . $this->name . '\' already exists on \'' . $this->host . '\'');
 		}
 	}
 
@@ -210,14 +216,6 @@ class Site {
 	public function ensure_ssh_success() : void {
 		if( ! $this->ssh_success()) {
 			throw new \Exception( 'Unable to SSH to ' . $this->host );
-		}
-	}
-
-	public function ensure_site_nonexistent() : void {
-		$output = $this->execute('ee site list | grep -q ' . $this->name );
-
-		if ( ! $output->return_code ) {
-			throw new \Exception( 'Site \''. $this->name . '\' already exits on \'' . $this->host . '\'' );
 		}
 	}
 

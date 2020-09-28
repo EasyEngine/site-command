@@ -6,6 +6,7 @@ use EE;
 use EE\Model\Site;
 use EE\Model\Option;
 use Symfony\Component\Filesystem\Filesystem;
+use function EE\Site\Cloner\Utils\check_site_access;
 use function EE\Site\Cloner\Utils\copy_site_db;
 use function EE\Site\Cloner\Utils\copy_site_files;
 use function EE\Site\Cloner\Utils\get_transfer_details;
@@ -1939,6 +1940,18 @@ abstract class EE_Site_Command {
 	 * <destination>
 	 * : Name of destination website to be cloned. Format [user@ssh-hostname:]sitename
 	 *
+	 * [--files]
+	 * : Sync only files.
+	 *
+	 * [--db]
+	 * : Sync only database.
+	 *
+	 * [--uploads]
+	 * : Sync only uploads.
+	 *
+	 * [--overwrite]
+	 * : Overwrite existing site.
+	 *
 	 * [--ssl]
 	 * : Enables ssl on site.
 	 * ---
@@ -1967,6 +1980,9 @@ abstract class EE_Site_Command {
 	 *     # Clone site from remote
 	 *     $ ee site clone root@foo.com:foo.com bar.com
 	 *
+	 *     # Clone site from remote
+	 *     $ ee site clone root@foo.com:foo.com .
+	 *
 	 *     # Clone site to remote
 	 *     $ ee site clone foo.com root@foo.com:bar.com
 	 *
@@ -1975,19 +1991,34 @@ abstract class EE_Site_Command {
 	public function clone( $args, $assoc_args ) {
 		list( $source, $destination ) = get_transfer_details( $args[0], $args[1] );
 
-		EE::log( 'Creating site' );
-		EE::debug( 'Creating site "' . $destination->name . '" on "' . $destination->host );
+		check_site_access( $source, $destination, $assoc_args );
 
-		if ( $destination->create_site( $source, $assoc_args )->return_code ) {
+		EE::log( 'Creating site' );
+		EE::debug( 'Creating site "' . $destination->name . '" on "' . $destination->host . '"' );
+
+		$operations = [
+			'create_site' => ! get_flag_value( $assoc_args, 'overwrite' ),
+			'sync' => get_flag_value( $assoc_args, 'files' ) ? 'files' :
+				get_flag_value( $assoc_args, 'uploads' ) ? 'uploads' :
+					get_flag_value( $assoc_args, 'db' ) ? 'db' : 'all'
+		];
+
+		if ( $operations['create_site'] && $destination->create_site( $source, $assoc_args )->return_code ) {
 			EE::error( 'Cannot create site ' . $destination->name . '. Please check logs for more info or rerun the command with --debug flag.' );
+		} else {
+			$destination->ensure_site_exists();
+			$destination->set_site_details();
 		}
 
-		EE::log( 'Syncing files' );
-		copy_site_files( $source, $destination );
+		if ( $operations['sync'] === 'files' || $operations['sync'] === 'uploads' || $operations['sync'] === 'all' ) {
+			EE::log( 'Syncing files' );
+			copy_site_files( $source, $destination, $operations['sync'] );
+		}
 
-		EE::log( 'Syncing database' );
-		copy_site_db( $source, $destination );
-
+		if ( $operations['sync'] === 'db' || $operations['sync'] === 'all' ) {
+			EE::log('Syncing database');
+			copy_site_db( $source, $destination );
+		}
 		EE::success( 'Site cloned successfully' );
 	}
 

@@ -4,6 +4,7 @@ namespace EE\Site\Cloner\Utils;
 
 use EE;
 use EE\Site\Cloner\Site;
+use function EE\Utils\get_flag_value;
 use function EE\Utils\random_password;
 use function EE\Utils\trailingslashit;
 
@@ -82,8 +83,26 @@ function copy_site_certs( Site $source, Site $destination ) {
 	}
 }
 
-function copy_site_files( Site $source, Site $destination ) {
-	$rsync_command = rsync_command( $source->get_site_root_dir(), $destination->get_site_root_dir(), [ '--exclude \'/wp-config.php\'' ] );
+function copy_site_files( Site $source, Site $destination, string $sync_type ) {
+	$exclude = '--exclude \'/wp-config.php\'';
+	$source_public_path = str_replace( '/var/www/htdocs', '', $source->site_details['site_container_fs_path'] );
+	$uploads_path = $source_public_path . '/wp-content/uploads';
+	$uploads_path_share = '/shared/wp-content/uploads';
+
+	if ( $sync_type === 'all' ) {
+		$source_dir = $source->get_site_root_dir();
+		$destination_dir =  $destination->get_site_root_dir();
+	} elseif ( $sync_type === 'code' ) {
+		$exclude .= ' --exclude \''.  $uploads_path .'\'';
+		$exclude .= ' --exclude \''.  $uploads_path_share .'\'';
+	} elseif ( $sync_type === 'uploads' ) {
+		$source_dir = $source->get_site_root_dir() . $uploads_path;
+		$destination_dir =  $destination->get_site_root_dir() . $uploads_path;
+	} else {
+		EE::error( 'Unknown sync_type: ' . $sync_type );
+	}
+
+	$rsync_command = rsync_command( $source_dir, $destination_dir, [ $exclude ] );
 
 	if ( ! EE::exec( $rsync_command ) ) {
 		throw new \Exception( 'Unable to sync files.' );
@@ -95,6 +114,23 @@ function rsync_command( string $source, string $destination, array $options=[] )
 	$extra_options = implode( ' ', $options );
 
 	return 'rsync -azh --delete-after --ignore-errors ' . $extra_options . ' -e "' . $ssh_command . '" ' . $source . ' ' . $destination ;
+}
+
+function check_site_access( Site $source_site, Site $destination_site, $assoc_args ) {
+	EE::log( 'Checking access to both sites' );
+
+	$source_site->ensure_ssh_success();
+	$source_site->validate_ee_version();
+
+	$destination_site->ensure_ssh_success();
+	$destination_site->validate_ee_version();
+
+	$source_site->set_site_details();
+
+	if( get_flag_value( $assoc_args, 'overwrite' ) ) {
+		$destination_site->set_site_details();
+	}
+
 }
 
 function get_transfer_details( string $source, string $destination ) : array {
@@ -115,16 +151,6 @@ function get_transfer_details( string $source, string $destination ) : array {
 	if( 'localhost' === $source_site->host && 'localhost' === $destination_site->host && $source_site->name === $destination_site->name) {
 		throw new \Exception( 'Cannot copy \'' . $source_site->name . '\' on \'' . $source_site->host . '\' to \'' . $destination_site->name . '\' on \'' . $destination_site->host . '\'' );
 	}
-
-	EE::log( 'Checking access to both sites' );
-
-	$source_site->ensure_ssh_success();
-	$source_site->validate_ee_version();
-
-	$destination_site->ensure_ssh_success();
-	$destination_site->validate_ee_version();
-
-	$source_site->set_site_details();
 
 	return [ $source_site, $destination_site ];
 }
