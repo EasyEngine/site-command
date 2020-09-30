@@ -5,6 +5,7 @@ namespace EE\Site\Utils;
 use EE;
 use EE\Model\Site;
 use Symfony\Component\Filesystem\Filesystem;
+use function EE\Utils\docker_compose_with_custom;
 use function EE\Utils\get_flag_value;
 use function EE\Utils\get_config_value;
 use function EE\Utils\sanitize_file_folder_name;
@@ -456,7 +457,7 @@ function restart_site_containers( $site_fs_path, $containers ) {
 
 	chdir( $site_fs_path );
 	$all_containers = is_array( $containers ) ? implode( ' ', $containers ) : $containers;
-	EE::exec( "docker-compose restart $all_containers" );
+	EE::exec( docker_compose_with_custom() . " restart $all_containers" );
 }
 
 /**
@@ -469,8 +470,8 @@ function stop_site_containers( $site_fs_path, $containers ) {
 
 	chdir( $site_fs_path );
 	$all_containers = is_array( $containers ) ? implode( ' ', $containers ) : $containers;
-	EE::exec( "docker-compose stop $all_containers" );
-	EE::exec( "docker-compose rm -f $all_containers" );
+	EE::exec( docker_compose_with_custom() . " stop $all_containers" );
+	EE::exec( docker_compose_with_custom() . " rm -f $all_containers" );
 }
 
 /**
@@ -487,7 +488,7 @@ function run_compose_command( $action, $container, $action_to_display = null, $s
 	$display_service = $service_to_display ? $service_to_display : $container;
 
 	EE::log( ucfirst( $display_action ) . 'ing ' . $display_service );
-	EE::exec( "docker-compose $action $container", true, true );
+	EE::exec( docker_compose_with_custom() . " $action $container", true, true );
 }
 
 /**
