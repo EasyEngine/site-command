@@ -518,14 +518,14 @@ function set_postfix_files( $site_url, $site_service_dir ) {
 function configure_postfix( $site_url, $site_fs_path ) {
 
 	chdir( $site_fs_path );
-	EE::exec( 'docker-compose exec postfix postconf -e \'relayhost =\'' );
-	EE::exec( 'docker-compose exec postfix postconf -e \'smtpd_recipient_restrictions = permit_mynetworks\'' );
+	EE::exec( docker_compose_with_custom() . ' exec postfix postconf -e \'relayhost =\'' );
+	EE::exec( docker_compose_with_custom() . ' exec postfix postconf -e \'smtpd_recipient_restrictions = permit_mynetworks\'' );
 	$launch      = EE::launch( sprintf( 'docker inspect -f \'{{ with (index .IPAM.Config 0) }}{{ .Subnet }}{{ end }}\' %s', $site_url ) );
 	$subnet_cidr = trim( $launch->stdout );
-	EE::exec( sprintf( 'docker-compose exec postfix postconf -e \'mynetworks = %s 127.0.0.0/8\'', $subnet_cidr ) );
-	EE::exec( sprintf( 'docker-compose exec postfix postconf -e \'myhostname = %s\'', $site_url ) );
-	EE::exec( 'docker-compose exec postfix postconf -e \'syslog_name = $myhostname\'' );
-	EE::exec( 'docker-compose restart postfix' );
+	EE::exec( sprintf( docker_compose_with_custom() . ' exec postfix postconf -e \'mynetworks = %s 127.0.0.0/8\'', $subnet_cidr ) );
+	EE::exec( sprintf( docker_compose_with_custom() . ' exec postfix postconf -e \'myhostname = %s\'', $site_url ) );
+	EE::exec( docker_compose_with_custom() . ' exec postfix postconf -e \'syslog_name = $myhostname\'' );
+	EE::exec( docker_compose_with_custom() . ' restart postfix' );
 }
 
 /**
