@@ -187,6 +187,9 @@ class Site {
 	}
 
 	public function create_site( Site $source_site, $assoc_args ) : EE\ProcessRun {
+		EE::log( 'Creating site' );
+		EE::debug( 'Creating site "' . $this->name . '" on "' . $this->host . '"' );
+
 		$this->ensure_site_not_exists();
 		$new_site = $this->execute( $this->get_site_create_command( $source_site, $assoc_args ) );
 		$this->set_site_details();

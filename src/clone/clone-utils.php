@@ -89,15 +89,16 @@ function copy_site_files( Site $source, Site $destination, string $sync_type ) {
 	$uploads_path = $source_public_path . '/wp-content/uploads';
 	$uploads_path_share = '/shared/wp-content/uploads';
 
+	$source_dir = $source->get_site_root_dir();
+	$destination_dir =  $destination->get_site_root_dir();
+
 	if ( $sync_type === 'all' ) {
-		$source_dir = $source->get_site_root_dir();
-		$destination_dir =  $destination->get_site_root_dir();
-	} elseif ( $sync_type === 'code' ) {
+	} elseif ( $sync_type === 'files' ) {
 		$exclude .= ' --exclude \''.  $uploads_path .'\'';
 		$exclude .= ' --exclude \''.  $uploads_path_share .'\'';
 	} elseif ( $sync_type === 'uploads' ) {
-		$source_dir = $source->get_site_root_dir() . $uploads_path;
-		$destination_dir =  $destination->get_site_root_dir() . $uploads_path;
+		$source_dir .=  $uploads_path;
+		$destination_dir .= $uploads_path;
 	} else {
 		EE::error( 'Unknown sync_type: ' . $sync_type );
 	}

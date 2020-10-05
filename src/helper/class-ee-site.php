@@ -1993,14 +1993,19 @@ abstract class EE_Site_Command {
 
 		check_site_access( $source, $destination, $assoc_args );
 
-		EE::log( 'Creating site' );
-		EE::debug( 'Creating site "' . $destination->name . '" on "' . $destination->host . '"' );
+		if ( get_flag_value( $assoc_args, 'files' ) ) {
+			$sync = 'files';
+		} elseif ( get_flag_value( $assoc_args, 'uploads' ) ) {
+			$sync = 'uploads';
+		} elseif ( get_flag_value( $assoc_args, 'db' ) ) {
+			$sync = 'db';
+		} else {
+			$sync = 'all';
+		}
 
 		$operations = [
 			'create_site' => ! get_flag_value( $assoc_args, 'overwrite' ),
-			'sync' => get_flag_value( $assoc_args, 'files' ) ? 'files' :
-				get_flag_value( $assoc_args, 'uploads' ) ? 'uploads' :
-					get_flag_value( $assoc_args, 'db' ) ? 'db' : 'all'
+			'sync' =>  $sync
 		];
 
 		if ( $operations['create_site'] && $destination->create_site( $source, $assoc_args )->return_code ) {
