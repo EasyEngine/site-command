@@ -5,7 +5,6 @@ namespace EE\Site\Utils;
 use EE;
 use EE\Model\Site;
 use Symfony\Component\Filesystem\Filesystem;
-use function EE\Utils\docker_compose_with_custom;
 use function EE\Utils\get_flag_value;
 use function EE\Utils\get_config_value;
 use function EE\Utils\sanitize_file_folder_name;
@@ -457,7 +456,7 @@ function restart_site_containers( $site_fs_path, $containers ) {
 
 	chdir( $site_fs_path );
 	$all_containers = is_array( $containers ) ? implode( ' ', $containers ) : $containers;
-	EE::exec( docker_compose_with_custom() . " restart $all_containers" );
+	EE::exec( \EE_DOCKER::docker_compose_with_custom() . " restart $all_containers" );
 }
 
 /**
@@ -470,8 +469,8 @@ function stop_site_containers( $site_fs_path, $containers ) {
 
 	chdir( $site_fs_path );
 	$all_containers = is_array( $containers ) ? implode( ' ', $containers ) : $containers;
-	EE::exec( docker_compose_with_custom() . " stop $all_containers" );
-	EE::exec( docker_compose_with_custom() . " rm -f $all_containers" );
+	EE::exec( \EE_DOCKER::docker_compose_with_custom() . " stop $all_containers" );
+	EE::exec( \EE_DOCKER::docker_compose_with_custom() . " rm -f $all_containers" );
 }
 
 /**
@@ -488,7 +487,7 @@ function run_compose_command( $action, $container, $action_to_display = null, $s
 	$display_service = $service_to_display ? $service_to_display : $container;
 
 	EE::log( ucfirst( $display_action ) . 'ing ' . $display_service );
-	EE::exec( docker_compose_with_custom() . " $action $container", true, true );
+	EE::exec( \EE_DOCKER::docker_compose_with_custom() . " $action $container", true, true );
 }
 
 /**
@@ -518,14 +517,14 @@ function set_postfix_files( $site_url, $site_service_dir ) {
 function configure_postfix( $site_url, $site_fs_path ) {
 
 	chdir( $site_fs_path );
-	EE::exec( docker_compose_with_custom() . ' exec postfix postconf -e \'relayhost =\'' );
-	EE::exec( docker_compose_with_custom() . ' exec postfix postconf -e \'smtpd_recipient_restrictions = permit_mynetworks\'' );
+	EE::exec( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e \'relayhost =\'' );
+	EE::exec( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e \'smtpd_recipient_restrictions = permit_mynetworks\'' );
 	$launch      = EE::launch( sprintf( 'docker inspect -f \'{{ with (index .IPAM.Config 0) }}{{ .Subnet }}{{ end }}\' %s', $site_url ) );
 	$subnet_cidr = trim( $launch->stdout );
-	EE::exec( sprintf( docker_compose_with_custom() . ' exec postfix postconf -e \'mynetworks = %s 127.0.0.0/8\'', $subnet_cidr ) );
-	EE::exec( sprintf( docker_compose_with_custom() . ' exec postfix postconf -e \'myhostname = %s\'', $site_url ) );
-	EE::exec( docker_compose_with_custom() . ' exec postfix postconf -e \'syslog_name = $myhostname\'' );
-	EE::exec( docker_compose_with_custom() . ' restart postfix' );
+	EE::exec( sprintf( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e \'mynetworks = %s 127.0.0.0/8\'', $subnet_cidr ) );
+	EE::exec( sprintf( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e \'myhostname = %s\'', $site_url ) );
+	EE::exec( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e \'syslog_name = $myhostname\'' );
+	EE::exec( \EE_DOCKER::docker_compose_with_custom() . ' restart postfix' );
 }
 
 /**

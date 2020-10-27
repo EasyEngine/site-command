@@ -9,7 +9,6 @@ use Symfony\Component\Filesystem\Filesystem;
 use function EE\Site\Utils\get_domains_of_site;
 use function EE\Site\Utils\get_preferred_ssl_challenge;
 use function EE\Site\Utils\update_site_db_entry;
-use function EE\Utils\docker_compose_with_custom;
 use function EE\Utils\download;
 use function EE\Utils\extract_zip;
 use function EE\Utils\get_flag_value;
@@ -1063,7 +1062,7 @@ abstract class EE_Site_Command {
 
 		foreach ( $containers as $container ) {
 			if ( 'nginx' === $container ) {
-				if ( EE::exec( docker_compose_with_custom() . " exec $container nginx -t", true, true ) ) {
+				if ( EE::exec( \EE_DOCKER::docker_compose_with_custom() . " exec $container nginx -t", true, true ) ) {
 					\EE\Site\Utils\run_compose_command( 'restart', $container );
 				} else {
 					\EE\Utils\delem_log( 'site restart stop due to Nginx test failure' );
