@@ -276,7 +276,7 @@ class HTML extends EE_Site_Command {
 
 			// Assign www-data user ownership.
 			chdir( $this->site_data['site_fs_path'] );
-			EE::exec( sprintf( 'docker-compose exec --user="root" nginx bash -c "chown -R www-data: %s"', $this->site_data['site_container_fs_path'] ) );
+			EE::exec( sprintf( \EE_DOCKER::docker_compose_with_custom() . ' exec --user="root" nginx bash -c "chown -R www-data: %s"', $this->site_data['site_container_fs_path'] ) );
 
 			\EE::success( 'Configuration files copied.' );
 		} catch ( \Exception $e ) {

@@ -1062,7 +1062,7 @@ abstract class EE_Site_Command {
 
 		foreach ( $containers as $container ) {
 			if ( 'nginx' === $container ) {
-				if ( EE::exec( "docker-compose exec $container nginx -t", true, true ) ) {
+				if ( EE::exec( \EE_DOCKER::docker_compose_with_custom() . " exec $container nginx -t", true, true ) ) {
 					\EE\Site\Utils\run_compose_command( 'restart', $container );
 				} else {
 					\EE\Utils\delem_log( 'site restart stop due to Nginx test failure' );
