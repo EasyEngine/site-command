@@ -517,7 +517,11 @@ function set_postfix_files( $site_url, $site_service_dir ) {
 function configure_postfix( $site_url, $site_fs_path ) {
 
 	chdir( $site_fs_path );
-	EE::exec( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e \'relayhost =\'' );
+
+	EE::exec( \EE_DOCKER::docker_compose_with_custom() . " exec php sh -c 'echo \"host postfix\ntls off\nfrom no-reply@$site_url\" > /etc/msmtprc'" );
+	$relay_host = EE::launch(  \EE_DOCKER::docker_compose_with_custom() . ' exec postfix sh -c \'echo $RELAY_HOST\'' )->stdout;
+	$relay_host = trim( $relay_host, "\n\r" );
+	EE::exec( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e \'relayhost = ' . $relay_host . '\'' );
 	EE::exec( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e \'smtpd_recipient_restrictions = permit_mynetworks\'' );
 	$launch      = EE::launch( sprintf( 'docker inspect -f \'{{ with (index .IPAM.Config 0) }}{{ .Subnet }}{{ end }}\' %s', $site_url ) );
 	$subnet_cidr = trim( $launch->stdout );
@@ -593,8 +597,8 @@ function get_public_dir( $assoc_args ) {
 /**
  * Get final source directory for site webroot.
  *
- * @param $original_src_dir  Default source directory.
- * @param $container_fs_path public directory set by user if any.
+ * @param string $original_src_dir  source directory.
+ * @param string $container_fs_path public directory set by user if any.
  *
  * @return string final webroot for site.
  */
