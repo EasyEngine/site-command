@@ -719,7 +719,7 @@ function check_alias_in_db( $domains ) {
 function sysctl_parameters() {
 
 	// Intentionally made not strict. It could also be in form of string inside config.
-	if ( true == \EE::get_runner()->config['sysctl'] ) {
+	if ( isset( \EE::get_runner()->config['sysctl'] ) && true == \EE::get_runner()->config['sysctl'] ) {
 
 		return [
 			'sysctl' => [
