@@ -34,9 +34,9 @@ class PostfixMsmtrpcFix extends Base {
 			return;
 		}
 
-		foreach( $this->sites as $site ) {
+		foreach ( $this->sites as $site ) {
 			mkdir( $site->site_fs_path . '/config/php/misc' );
-			touch( $site->site_fs_path . '/config/php/misc/msmtprc');
+			touch( $site->site_fs_path . '/config/php/misc/msmtprc' );
 
 			chdir( $site->site_fs_path );
 			EE::exec( \EE_DOCKER::docker_compose_with_custom() . " exec --user=root php sh -c 'rm /etc/msmtprc'" );
