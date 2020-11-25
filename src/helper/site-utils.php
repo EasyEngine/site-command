@@ -593,8 +593,8 @@ function get_public_dir( $assoc_args ) {
 /**
  * Get final source directory for site webroot.
  *
- * @param $original_src_dir  Default source directory.
- * @param $container_fs_path public directory set by user if any.
+ * @param string $original_src_dir  source directory.
+ * @param string $container_fs_path public directory set by user if any.
  *
  * @return string final webroot for site.
  */
