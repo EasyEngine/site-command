@@ -593,8 +593,8 @@ function get_public_dir( $assoc_args ) {
 /**
  * Get final source directory for site webroot.
  *
- * @param $original_src_dir  Default source directory.
- * @param $container_fs_path public directory set by user if any.
+ * @param string $original_src_dir  source directory.
+ * @param string $container_fs_path public directory set by user if any.
  *
  * @return string final webroot for site.
  */
@@ -719,7 +719,7 @@ function check_alias_in_db( $domains ) {
 function sysctl_parameters() {
 
 	// Intentionally made not strict. It could also be in form of string inside config.
-	if ( true == \EE::get_runner()->config['sysctl'] ) {
+	if ( isset( \EE::get_runner()->config['sysctl'] ) && true == \EE::get_runner()->config['sysctl'] ) {
 
 		return [
 			'sysctl' => [
