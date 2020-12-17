@@ -12,7 +12,7 @@ class Site_HTML_Docker {
 	 * Generate docker-compose.yml according to requirement.
 	 *
 	 * @param array $filters Array to determine the docker-compose.yml generation.
-	 ** @param array $volumes Array containing volume info passable to \EE_DOCKER::get_mounting_volume_array().
+	 * @param array $volumes Array containing volume info passable to \EE_DOCKER::get_mounting_volume_array().
 	 *
 	 * @return String docker-compose.yml content string.
 	 */

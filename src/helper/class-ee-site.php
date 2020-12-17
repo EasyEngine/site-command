@@ -541,7 +541,7 @@ abstract class EE_Site_Command {
 
 		$client = new Site_Letsencrypt();
 
-		$old_certs = $client->loadDomainCertificates($all_domains);
+		$old_certs = $client->loadDomainCertificates( $all_domains );
 
 		if ( $is_ssl ) {
 			// Update SSL.
@@ -752,12 +752,12 @@ abstract class EE_Site_Command {
 		EE::log( 'Starting php version update for: ' . $this->site_data->site_url );
 
 		try {
-			$old_php_version                 = $this->site_data->php_version;
-			$this->site_data->php_version    = $php_version;
-			$no_https                        = $this->site_data->site_ssl ? false : true;
-			$site                            = $this->site_data;
-			$array_data                      = ( array ) $this->site_data;
-			$this->site_data                 = reset( $array_data );
+			$old_php_version              = $this->site_data->php_version;
+			$this->site_data->php_version = $php_version;
+			$no_https                     = $this->site_data->site_ssl ? false : true;
+			$site                         = $this->site_data;
+			$array_data                   = ( array ) $this->site_data;
+			$this->site_data              = reset( $array_data );
 
 			EE::log( 'Taking backup of old php config.' );
 			$site_backup_dir     = $this->site_data['site_fs_path'] . '/.backup';
@@ -819,16 +819,19 @@ abstract class EE_Site_Command {
 		if ( $msmtp ) {
 			$custom_ini_data = array_map( function ( $custom_ini_data ) {
 				$sendmail_path = 'sendmail_path = /usr/bin/msmtp -t';
+
 				return stristr( $custom_ini_data, 'sendmail_path' ) ? "$sendmail_path\n" : $custom_ini_data;
 			}, $custom_ini_data );
 		} else {
 			$custom_ini_data = array_map( function ( $custom_ini_data ) {
 				$sendmail_path = 'sendmail_path = /usr/sbin/sendmail -t -i -f ee4@easyengine.io';
+
 				return stristr( $custom_ini_data, 'sendmail_path' ) ? "$sendmail_path\n" : $custom_ini_data;
 			}, $custom_ini_data );
 		}
 		file_put_contents( $custom_ini_path, implode( '', $custom_ini_data ) );
 	}
+
 	/**
 	 * Function to update ssl of a site.
 	 */
