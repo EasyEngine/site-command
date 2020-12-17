@@ -519,7 +519,13 @@ function configure_postfix( $site_url, $site_fs_path ) {
 
 	chdir( $site_fs_path );
 
-	EE::exec( \EE_DOCKER::docker_compose_with_custom() . " exec php sh -c 'echo \"host postfix\ntls off\nfrom no-reply@$site_url\" > /etc/msmtprc'" );
+	$default_from = EE::launch( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix sh -c \'echo $REPLY_EMAIL\'' )->stdout;
+
+	if ( ! trim( $default_from ) ) {
+		$default_from = "no-reply@$site_url";
+	}
+
+	EE::exec( \EE_DOCKER::docker_compose_with_custom() . " exec php sh -c 'echo \"host postfix\ntls off\nfrom $default_from\" > /etc/msmtprc'" );
 	$relay_host = EE::launch( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix sh -c \'echo $RELAY_HOST\'' )->stdout;
 	$relay_host = trim( $relay_host, "\n\r" );
 	EE::exec( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e \'relayhost = ' . $relay_host . '\'' );
