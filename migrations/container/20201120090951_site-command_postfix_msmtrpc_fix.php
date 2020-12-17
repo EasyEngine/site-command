@@ -35,16 +35,20 @@ class PostfixMsmtrpcFix extends Base {
 		}
 
 		foreach ( $this->sites as $site ) {
-			mkdir( $site->site_fs_path . '/config/php/misc' );
-			touch( $site->site_fs_path . '/config/php/misc/msmtprc' );
 
-			chdir( $site->site_fs_path );
-			EE::exec( \EE_DOCKER::docker_compose_with_custom() . " exec --user=root php sh -c 'rm /etc/msmtprc'" );
-			EE::exec( \EE_DOCKER::docker_compose_with_custom() . " exec --user=root php sh -c 'ln -s /usr/local/etc/misc/msmtprc /etc/msmtprc'" );
-			EE::exec( \EE_DOCKER::docker_compose_with_custom() . " exec --user=root php sh -c 'chown -R www-data:www-data /usr/local/etc/misc'" );
-			EE::exec( \EE_DOCKER::docker_compose_with_custom() . " exec --user=root php sh -c 'chown -R www-data:www-data /etc/msmtprc'" );
+			if ( $site->site_type !== 'html' ) {
+				mkdir( $site->site_fs_path . '/config/php/misc' );
+				touch( $site->site_fs_path . '/config/php/misc/msmtprc' );
 
-			EE\Site\Utils\configure_postfix( $site->site_url, $site->site_fs_path );
+				chdir( $site->site_fs_path );
+				EE::exec( \EE_DOCKER::docker_compose_with_custom() . " exec --user=root php sh -c 'rm /etc/msmtprc'" );
+				EE::exec( \EE_DOCKER::docker_compose_with_custom() . " exec --user=root php sh -c 'ln -s /usr/local/etc/misc/msmtprc /etc/msmtprc'" );
+				EE::exec( \EE_DOCKER::docker_compose_with_custom() . " exec --user=root php sh -c 'chown -R www-data:www-data /usr/local/etc/misc'" );
+				EE::exec( \EE_DOCKER::docker_compose_with_custom() . " exec --user=root php sh -c 'chown -R www-data:www-data /etc/msmtprc'" );
+
+				EE\Site\Utils\configure_postfix( $site->site_url, $site->site_fs_path );
+
+			}
 		}
 
 	}
