@@ -6,6 +6,7 @@ namespace EE\Site\Type;
 
 use EE;
 use EE\Model\Site;
+use EE\Model\ConfigHash;
 use Symfony\Component\Filesystem\Filesystem;
 use function EE\Utils\mustache_render;
 use function EE\Utils\get_value_if_flag_isset;
@@ -402,6 +403,10 @@ class HTML extends EE_Site_Command {
 		try {
 			if ( $site ) {
 				\EE::log( 'Site entry created.' );
+
+				// Create entries for sites' configuration files.
+				ConfigHash::create_site_config_hash( $this->site_data['site_fs_path'], $this->site_data['site_url'] );
+
 			} else {
 				throw new \Exception( 'Error creating site entry in database.' );
 			}
