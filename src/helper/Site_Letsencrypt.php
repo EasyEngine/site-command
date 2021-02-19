@@ -306,7 +306,7 @@ class Site_Letsencrypt {
 
 			try {
 				$this->client->revokeCertificate( $certificate, $revocationReason );
-				$domain = gettype( $domain ) === 'string' ? $domain : get_class( $domain ) === 'AcmePhp\Ssl\Certificate' ? array_search( $domain, $domains ) : '';
+				$domain = ( gettype( $domain ) === 'string' ? $domain : get_class( $domain ) === 'AcmePhp\Ssl\Certificate' ) ? array_search( $domain, $domains ) : '';
 				\EE::debug( 'Certificate for ' . $domain . ' revoked successfully' );
 			} catch ( CertificateRevocationException $e ) {
 				\EE::debug( $e->getMessage() );
