@@ -52,6 +52,32 @@ abstract class EE_Site_Command {
 	 */
 	private $le_mail;
 
+
+	/**
+	 * @var string $le_country Country be used for letsencrypt registration and certificate generation.
+	 */
+	private $le_country;
+
+	/**
+	 * @var string $le_state State be used for letsencrypt registration and certificate generation.
+	 */
+	private $le_state;
+
+	/**
+	 * @var string $le_locality Locality Name be used for letsencrypt registration and certificate generation.
+	 */
+	private $le_locality;
+	
+	/**
+	 * @var string $le_orgname Organization Name be used for letsencrypt registration and certificate generation.
+	 */
+	private $le_orgname;
+	
+	/**
+	 * @var string $le_orgunit Organizational Unit Name be used for letsencrypt registration and certificate generation.
+	 */
+	private $le_orgunit;
+
 	/**
 	 * @var array $site_data Associative array containing essential site related information.
 	 */
@@ -1500,13 +1526,23 @@ abstract class EE_Site_Command {
 		$this->site_data['site_ssl_wildcard'] = $wildcard;
 		$client                               = new Site_Letsencrypt();
 		$this->le_mail                        = \EE::get_runner()->config['le-mail'] ?? \EE::input( 'Enter your mail id: ' );
+		$this->le_country                     = \EE::get_runner()->config['le-country'] ?? \EE::input( 'Enter your country: ' );
+		$this->le_state                       = \EE::get_runner()->config['le-state'] ?? \EE::input( 'Enter your state: ' );
+		$this->le_locality                    = \EE::get_runner()->config['le-locality'] ?? \EE::input( 'Enter your city: ' );
+		$this->le_orgname                     = \EE::get_runner()->config['le-orgname'] ?? \EE::input( 'Enter your Organisation name: ' );
+		$this->le_orgunit                     = \EE::get_runner()->config['le-orgunit'] ?? \EE::input( 'Enter your Organisation unit: ' );
+
 		\EE::get_runner()->ensure_present_in_config( 'le-mail', $this->le_mail );
+		\EE::get_runner()->ensure_present_in_config( 'le-country', $this->le_country );
+		\EE::get_runner()->ensure_present_in_config( 'le-state', $this->le_state );
+		\EE::get_runner()->ensure_present_in_config( 'le-locality', $this->le_locality );
+		\EE::get_runner()->ensure_present_in_config( 'le-orgname', $this->le_orgname );
+		\EE::get_runner()->ensure_present_in_config( 'le-orgunit', $this->le_orgunit );
 		if ( ! $client->register( $this->le_mail ) ) {
 			$this->site_data['site_ssl'] = null;
 
 			return;
 		}
-
 		$domains = $this->get_cert_domains( $site_url, $wildcard, $www_or_non_www );
 		$domains = array_unique( array_merge( $domains, $alias_domains ) );
 
@@ -1631,6 +1667,26 @@ abstract class EE_Site_Command {
 			$this->le_mail = \EE::get_config( 'le-mail' ) ?? \EE::input( 'Enter your mail id: ' );
 		}
 
+		if ( ! isset( $this->le_country ) ) {
+			$this->le_country = \EE::get_config( 'le-country' ) ?? \EE::input( 'Enter your country: ' );
+		}
+
+		if ( ! isset( $this->le_state ) ) {
+			$this->le_state = \EE::get_config( 'le-state' ) ?? \EE::input( 'Enter your state: ' );
+		}
+
+		if ( ! isset( $this->le_locality ) ) {
+			$this->le_locality = \EE::get_config( 'le-locality' ) ?? \EE::input( 'Enter your city: ' );
+		}
+
+		if ( ! isset( $this->le_orgname ) ) {
+			$this->le_orgname = \EE::get_config( 'le-orgname' ) ?? \EE::input( 'Enter your Organisation name: ' );
+		}
+
+		if ( ! isset( $this->le_orgunit ) ) {
+			$this->le_orgunit = \EE::get_config( 'le-orgunit' ) ?? \EE::input( 'Enter your Organisation unit: ' );
+		}
+
 		$force         = \EE\Utils\get_flag_value( $assoc_args, 'force' );
 		$alias_domains = empty( $this->site_data['alias_domains'] ) ? [] : explode( ',', $this->site_data['alias_domains'] );
 		$domains       = $this->get_cert_domains( $this->site_data['site_url'], $this->site_data['site_ssl_wildcard'], $www_or_non_www );
@@ -1706,6 +1762,23 @@ abstract class EE_Site_Command {
 		if ( ! isset( $this->le_mail ) ) {
 			$this->le_mail = EE::get_config( 'le-mail' ) ?? EE::input( 'Enter your mail id: ' );
 		}
+		if ( ! isset( $this->le_country ) ) {
+			$this->le_country = EE::get_config( 'le-country' ) ?? EE::input( 'Enter your country: ' );
+		}
+		if ( ! isset( $this->le_state ) ) {
+			$this->le_state = EE::get_config( 'le-state' ) ?? EE::input( 'Enter your state: ' );
+		}
+		if ( ! isset( $this->le_locality ) ) {
+			$this->le_locality = EE::get_config( 'le-locality' ) ?? EE::input( 'Enter your city: ' );
+		}
+		if ( ! isset( $this->le_orgname ) ) {
+			$this->le_orgname = EE::get_config( 'le-orgname' ) ?? EE::input( 'Enter your Organisation name: ' );
+		}
+		if ( ! isset( $this->le_orgunit ) ) {
+			$this->le_orgunit = EE::get_config( 'le-orgunit' ) ?? EE::input( 'Enter your Organisation unit: ' );
+		}
+
+		
 
 		$force = get_flag_value( $assoc_args, 'force', false );
 		$all   = get_flag_value( $assoc_args, 'all', false );

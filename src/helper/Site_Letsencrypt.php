@@ -680,14 +680,18 @@ class Site_Letsencrypt {
 			);
 		} else {
 			// Ask DistinguishedName
+			$countryName = ( ! empty( \EE\Utils\get_config_value( 'le-country' ) ) ) ? \EE\Utils\get_config_value( 'le-country' ) : 'US';
+			$StateOrProvinceName = ( ! empty( \EE\Utils\get_config_value( 'le-state' ) ) ) ? \EE\Utils\get_config_value( 'le-state' ) : 'CA';
+			$LocalityName = ( ! empty( \EE\Utils\get_config_value( 'le-locality' ) ) ) ? \EE\Utils\get_config_value( 'le-locality' ) : 'Mountain View';
+			$OrganizationName = ( ! empty( \EE\Utils\get_config_value( 'le-orgname' ) ) ) ? \EE\Utils\get_config_value( 'le-orgname' ) : 'Let\'s Encrypt';
+			$OrganizationalUnitName = ( ! empty( \EE\Utils\get_config_value( 'le-orgunit' ) ) ) ? \EE\Utils\get_config_value( 'le-orgunit' ) : 'Let\'s Encrypt Authority X3';
 			$distinguishedName = new DistinguishedName(
 				$domain,
-				// TODO: Ask and fill these values properly
-				'US',
-				'CA',
-				'Mountain View',
-				'Let\'s Encrypt',
-				'Let\'s Encrypt Authority X3',
+				$countryName,
+				$StateOrProvinceName,
+				$LocalityName,
+				$OrganizationName,
+				$OrganizationalUnitName,
 				$email,
 				$alternativeNames
 			);
