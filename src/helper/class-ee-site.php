@@ -206,6 +206,32 @@ abstract class EE_Site_Command {
 	}
 
 	/**
+	 * Delete websites.
+	 *
+	 * ## OPTIONS
+	 *
+	 * @param sites array
+	 * : Name of websites to be deleted.
+	 *
+	 * [--yes]
+	 * : Do not prompt for confirmation.
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     # Delete sites
+	 *     $ ee site delete example1.com  example2.com  example3.com --yes
+	 *
+	 */
+	public function multidelete( $args, $assoc_args ) {
+		$sites_to_delete = $args;
+		if( ! empty( $sites_to_delete ) ) {
+			foreach ( $sites_to_delete as $site ) {
+				$this->delete( [$site], $assoc_args );
+			}
+		}
+	}
+
+	/**
 	 * Function to delete the given site.
 	 *
 	 * @param int $level           Level of deletion.
