@@ -11,7 +11,7 @@ class Site_Command {
 	/**
 	 * @var array $site_types Array to hold all the registered site types and their callback classes.
 	 */
-	protected static $site_types = [];
+	protected $site_types = [];
 
 	/**
 	 * @var Site_Command $instance Hold an instance of the class.
@@ -39,7 +39,9 @@ class Site_Command {
 	 * @param string $callback The callback function/class for that type.
 	 */
 	public static function add_site_type( $name, $callback ) {
-
+		if ( !isset( self::$instance ) )
+			self::$instance = self::instance();
+		
 		if ( isset( self::$instance->site_types[ $name ] ) ) {
 			EE::warning( sprintf( '%s site-type had already been previously registered by %s. It is overridden by the new package class %s. Please update your packages to resolve this.', $name, self::$instance->site_types[ $name ], $callback ) );
 		}
