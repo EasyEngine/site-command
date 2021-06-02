@@ -456,7 +456,7 @@ function restart_site_containers( $site_fs_path, $containers ) {
 
 	chdir( $site_fs_path );
 	$all_containers = is_array( $containers ) ? implode( ' ', $containers ) : $containers;
-	EE::exec( "docker-compose restart $all_containers" );
+	EE::exec( \EE_DOCKER::docker_compose_with_custom() . " restart $all_containers" );
 }
 
 /**
@@ -469,8 +469,8 @@ function stop_site_containers( $site_fs_path, $containers ) {
 
 	chdir( $site_fs_path );
 	$all_containers = is_array( $containers ) ? implode( ' ', $containers ) : $containers;
-	EE::exec( "docker-compose stop $all_containers" );
-	EE::exec( "docker-compose rm -f $all_containers" );
+	EE::exec( \EE_DOCKER::docker_compose_with_custom() . " stop $all_containers" );
+	EE::exec( \EE_DOCKER::docker_compose_with_custom() . " rm -f $all_containers" );
 }
 
 /**
@@ -487,7 +487,7 @@ function run_compose_command( $action, $container, $action_to_display = null, $s
 	$display_service = $service_to_display ? $service_to_display : $container;
 
 	EE::log( ucfirst( $display_action ) . 'ing ' . $display_service );
-	EE::exec( "docker-compose $action $container", true, true );
+	EE::exec( \EE_DOCKER::docker_compose_with_custom() . " $action $container", true, true );
 }
 
 /**
@@ -517,14 +517,14 @@ function set_postfix_files( $site_url, $site_service_dir ) {
 function configure_postfix( $site_url, $site_fs_path ) {
 
 	chdir( $site_fs_path );
-	EE::exec( 'docker-compose exec postfix postconf -e \'relayhost =\'' );
-	EE::exec( 'docker-compose exec postfix postconf -e \'smtpd_recipient_restrictions = permit_mynetworks\'' );
+	EE::exec( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e \'relayhost =\'' );
+	EE::exec( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e \'smtpd_recipient_restrictions = permit_mynetworks\'' );
 	$launch      = EE::launch( sprintf( 'docker inspect -f \'{{ with (index .IPAM.Config 0) }}{{ .Subnet }}{{ end }}\' %s', $site_url ) );
 	$subnet_cidr = trim( $launch->stdout );
-	EE::exec( sprintf( 'docker-compose exec postfix postconf -e \'mynetworks = %s 127.0.0.0/8\'', $subnet_cidr ) );
-	EE::exec( sprintf( 'docker-compose exec postfix postconf -e \'myhostname = %s\'', $site_url ) );
-	EE::exec( 'docker-compose exec postfix postconf -e \'syslog_name = $myhostname\'' );
-	EE::exec( 'docker-compose restart postfix' );
+	EE::exec( sprintf( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e \'mynetworks = %s 127.0.0.0/8\'', $subnet_cidr ) );
+	EE::exec( sprintf( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e \'myhostname = %s\'', $site_url ) );
+	EE::exec( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e \'syslog_name = $myhostname\'' );
+	EE::exec( \EE_DOCKER::docker_compose_with_custom() . ' restart postfix' );
 }
 
 /**
@@ -593,8 +593,8 @@ function get_public_dir( $assoc_args ) {
 /**
  * Get final source directory for site webroot.
  *
- * @param $original_src_dir  Default source directory.
- * @param $container_fs_path public directory set by user if any.
+ * @param string $original_src_dir  source directory.
+ * @param string $container_fs_path public directory set by user if any.
  *
  * @return string final webroot for site.
  */
@@ -717,17 +717,24 @@ function check_alias_in_db( $domains ) {
  * @return array of all 'sysctl' parameters.
  */
 function sysctl_parameters() {
-	return [
-		'sysctl' => [
-			[ 'name' => 'net.ipv4.tcp_synack_retries=2' ],
-			[ 'name' => 'net.ipv4.ip_local_port_range=2000 65535' ],
-			[ 'name' => 'net.ipv4.tcp_rfc1337=1' ],
-			[ 'name' => 'net.ipv4.tcp_fin_timeout=15' ],
-			[ 'name' => 'net.ipv4.tcp_keepalive_time=300' ],
-			[ 'name' => 'net.ipv4.tcp_keepalive_probes=5' ],
-			[ 'name' => 'net.ipv4.tcp_keepalive_intvl=15' ],
-			[ 'name' => 'net.core.somaxconn=65536' ],
-			[ 'name' => 'net.ipv4.tcp_max_tw_buckets=1440000' ],
-		],
-	];
+
+	// Intentionally made not strict. It could also be in form of string inside config.
+	if ( isset( \EE::get_runner()->config['sysctl'] ) && true == \EE::get_runner()->config['sysctl'] ) {
+
+		return [
+			'sysctl' => [
+				[ 'name' => 'net.ipv4.tcp_synack_retries=2' ],
+				[ 'name' => 'net.ipv4.ip_local_port_range=2000 65535' ],
+				[ 'name' => 'net.ipv4.tcp_rfc1337=1' ],
+				[ 'name' => 'net.ipv4.tcp_fin_timeout=15' ],
+				[ 'name' => 'net.ipv4.tcp_keepalive_time=300' ],
+				[ 'name' => 'net.ipv4.tcp_keepalive_probes=5' ],
+				[ 'name' => 'net.ipv4.tcp_keepalive_intvl=15' ],
+				[ 'name' => 'net.core.somaxconn=65536' ],
+				[ 'name' => 'net.ipv4.tcp_max_tw_buckets=1440000' ],
+			],
+		];
+	}
+
+	return [];
 }
