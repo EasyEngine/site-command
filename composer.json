@@ -10,21 +10,18 @@
     "autoload": {
         "psr-4": {
             "": "src/",
+            "EE\\Model\\": "src/db/",
+            "EE\\Site\\Type\\": "src/site-type/",
             "AcmePhp\\Cli\\": "AcmePhp/Cli"
         },
         "files": [
-            "src/helper/hooks.php",
-            "src/helper/site-utils.php",
             "site-command.php",
+            "src/helper/site-utils.php",
             "src/helper/class-ee-site.php",
             "src/helper/SimpleDnsCloudflareSolver.php",
             "src/helper/Site_Self_Signed.php",
             "src/helper/Site_Letsencrypt.php",
-            "src/helper/Shutdown_Handler.php",
-            "src/db/Site.php",
-            "src/db/Site-Meta.php",
-            "src/site-type/Site_HTML_Docker.php",
-            "src/site-type/html.php"
+            "src/helper/Shutdown_Handler.php"
         ]
     },
     "extra": {
