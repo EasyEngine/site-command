@@ -15,17 +15,21 @@ if ( ! defined( 'GLOBAL_BACKEND_NETWORK' ) ) {
 	define( 'GLOBAL_BACKEND_NETWORK', 'ee-global-backend-network' );
 }
 
+if ( ! defined( 'EE_ROOT_DIR' ) ) {
+	define( 'EE_ROOT_DIR', '/opt/easyengine' );
+}
+
 if ( ! class_exists( 'EE' ) ) {
 	return;
 }
 
-$sites_path = EE_ROOT_DIR . '/sites';
+$sites_path = EE_ROOT_DIR . '/sites/';
 
 if ( ! is_dir( $sites_path ) ) {
 	mkdir( $sites_path );
 }
 
-define( 'WEBROOT', \EE\Utils\trailingslashit( $sites_path ) );
+define( 'WEBROOT', $sites_path );
 
 $autoload = dirname( __FILE__ ) . '/vendor/autoload.php';
 if ( file_exists( $autoload ) ) {
