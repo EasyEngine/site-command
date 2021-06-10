@@ -16,6 +16,7 @@
         },
         "files": [
             "site-command.php",
+            "src/helper/hooks.php",
             "src/helper/site-utils.php",
             "src/helper/class-ee-site.php",
             "src/helper/SimpleDnsCloudflareSolver.php",
