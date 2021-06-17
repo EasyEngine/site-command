@@ -984,6 +984,22 @@ abstract class EE_Site_Command {
 		\EE\Utils\delem_log( 'site enable end' );
 	}
 
+
+	/**
+	 * Re-create sites docker-compose file and update the containers containers.
+	 * Syntactic sugar of `ee site enable --refresh`. 
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     # Refresh site services
+	 *     $ ee site refresh <site-name>
+	 */
+	public function refresh( $args, $assoc_args ) {
+
+		$this->site_data = get_site_info( $args );
+		$this->enable( [ $this->site_data['site_url'] ], [ 'refresh' => 'true' ] );
+	}
+
 	/**
 	 * Disables a website. It will stop and remove the docker containers of the website if they are running.
 	 *
