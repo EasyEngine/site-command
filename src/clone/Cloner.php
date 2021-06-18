@@ -5,7 +5,7 @@ namespace EE\Site\Cloner;
 use Composer\Semver\Comparator;
 use EE;
 use function EE\Site\Cloner\Utils\get_ssh_key_path;
-use function EE\Utils\trailingslashit;
+use function EE\Site\Cloner\Utils\rsync_command;
 
 class Site {
 	public $name, $host, $user, $ssh_string, $site_details;
@@ -53,18 +53,15 @@ class Site {
 
 	private function get_ssh_command( string $command ) : string {
 		$key = get_ssh_key_path();
-		return $this->ssh_string ? 'ssh -i ' . $key . ' ' . $this->ssh_string . ' "' . $command . '"' : $command ;
+		return $this->ssh_string ? 'ssh -t -i ' . $key . ' ' . $this->ssh_string . ' "' . $command . '"' : $command ;
 	}
 
 	public function get_rsync_path( string $path ) : string {
 		return $this->ssh_string ? $this->ssh_string . ':' . $path : $path;
 	}
 
-	public function get_public_dir() : string {
-		$public_dir = str_replace( '/var/www/htdocs/', '', trailingslashit( $this->site_details['site_container_fs_path'] ) );
-		$public_dir = $public_dir ? trailingslashit( $public_dir ) : $public_dir;
-
-		return $this->get_rsync_path( $public_dir );
+	public function get_site_root_dir() : string {
+		return $this->get_rsync_path( $this->site_details['site_fs_path'] . '/app/htdocs/' );
 	}
 
 	public function validate_ee_version() : void {
@@ -80,7 +77,69 @@ class Site {
 		}
 	}
 
-	private function get_site_create_command( array $site_details ) : string {
+	private function get_ssl_args( Site $source_site, $assoc_args ) : string {
+		$site_details = $source_site->site_details;
+		$ssl_args='';
+		$add_wildcard=false;
+
+		if ( $assoc_args['ssl'] ?? false ) {
+			if ( $assoc_args['ssl'] !== 'off' ) {
+				$ssl_args .= ' --ssl=' . $assoc_args['ssl'];
+				if ( $assoc_args['ssl'] === 'custom' ) {
+					if ( ! ( $assoc_args['ssl-key'] ?? false && $assoc_args['ssl-crt'] ?? false ) ) {
+						EE::error( 'You need to specify --ssl-crt and --ssl-key with --ssl=custom' );
+					} if ( ! is_file ( $assoc_args['ssl-crt'] ) ) {
+						EE::error( 'Unable to find file specified in --ssl-crt at \'' . $assoc_args['ssl-crt'] . '\'' );
+					} if ( ! is_file ( $assoc_args['ssl-key'] ) ) {
+						EE::error( 'Unable to find file specified in --ssl-key at \'' . $assoc_args['ssl-key'] . '\'' );
+					}
+
+					$rsync_command_crt = rsync_command( $assoc_args['ssl-crt'], $this->get_rsync_path( '/tmp/' ) );
+					$rsync_command_key = rsync_command( $assoc_args['ssl-key'], $this->get_rsync_path( '/tmp/' ) );
+
+					if ( ! ( EE::exec( $rsync_command_key ) && EE::exec( $rsync_command_crt ) ) ) {
+						throw new \Exception( 'Unable to sync certs.' );
+					}
+
+					$ssl_args .= ' --ssl-crt=\'' . '/tmp/' . basename( $assoc_args['ssl-crt'] ) . '\'';
+					$ssl_args .= ' --ssl-key=\'' . '/tmp/' . basename( $assoc_args['ssl-key'] ) . '\'';
+				}
+				if ( $assoc_args['wildcard'] ?? false ) {
+					$ssl_args .= ' --wildcard';
+				}
+			}
+			return $ssl_args;
+		}
+
+		if ( $this->name === $source_site->name ) {
+			if ( $site_details['site_ssl'] === 'le' || $site_details['site_ssl'] === 'custom' ) {
+				EE\Site\Cloner\Utils\copy_site_certs( $source_site, $this );
+				$ssl_args .= ' --ssl=custom --ssl-key=\'' . '/tmp/' . $source_site->name . '.key\' --ssl-crt=\'/tmp/' . $source_site->name . '.crt\'';
+			} elseif ( $site_details['site_ssl'] === 'inherit' ) {
+				EE::warning( 'Unable to enable SSL for ' . $this->name . ' as the source site was created with --ssl=custom. You can enable SSL with \'ee site update\' once site is cloned.' );
+			} else {
+				$ssl_args .= ' --ssl=' . $site_details['site_ssl'];
+				$add_wildcard=true;
+			}
+		} else {
+			if ( $site_details['site_ssl'] === 'custom' || $site_details['site_ssl'] === 'inherit' ) {
+				EE::warning( 'Unable to enable SSL for ' . $this->name . ' as the source site was created with --ssl=custom or --ssl=inherited. You can enable SSL with \'ee site update\' once site is cloned.' );
+			} else {
+				$ssl_args .= ' --ssl=' . $site_details['site_ssl'];
+				$add_wildcard=true;
+			}
+		}
+
+		if ( $add_wildcard ) {
+			if ( $site_details['site_ssl_wildcard'] ) {
+				$ssl_args .= ' --wildcard';
+			}
+		}
+		return $ssl_args;
+	}
+
+	private function get_site_create_command( Site $source_site, $assoc_args ) : string {
+		$site_details = $source_site->site_details;
 		$command = 'ee site create ' . $this->name . ' --type=' . $site_details['site_type'] ;
 
 		if ( in_array( $site_details['site_type'], [ 'html', 'php', 'wp'] ) ) {
@@ -88,12 +147,7 @@ class Site {
 				$path = str_replace( '/var/www/htdocs/', '', $site_details['site_container_fs_path'] );
 				$command .= " --public-dir=$path";
 			}
-			if ( ! empty( $site_details['site_ssl'] ) ) {
-				$command .= " --ssl=le";
-			}
-			if ( ! empty( $site_details['site_ssl_wildcard'] ) ) {
-				$command .= " --wildcard";
-			}
+			$command .= $this->get_ssl_args( $source_site, $assoc_args );
 		}
 
 		if ( in_array( $site_details['site_type'], [ 'php', 'wp'] ) ) {
@@ -125,26 +179,36 @@ class Site {
 				$command .= " --admin-email=${site_details['app_admin_email']}";
 			}
 			if ( ! empty( $site_details['app_admin_password'] ) ) {
-				$command .= " --admin-pass=${site_details['app_admin_password']}";
+//				$command .= " --admin-pass=${site_details['app_admin_password']}";
 			}
 			// TODO: vip, proxy-cache-max-time, proxy-cache-max-size
 		}
 		return $command;
 	}
 
-	public function create_site( array $site_details ) : EE\ProcessRun {
-		$new_site = $this->execute( $this->get_site_create_command( $site_details ) );
+	public function create_site( Site $source_site, $assoc_args ) : EE\ProcessRun {
+		EE::log( 'Creating site' );
+		EE::debug( 'Creating site "' . $this->name . '" on "' . $this->host . '"' );
+
+		$this->ensure_site_not_exists();
+		$new_site = $this->execute( $this->get_site_create_command( $source_site, $assoc_args ) );
 		$this->set_site_details();
 		return $new_site;
 	}
 
-	public function site_exists_on_host() : bool {
+	public function site_exists() : bool {
 		return 0 === $this->execute( 'ee site info ' . $this->name )->return_code;
 	}
 
-	public function ensure_site_exists_on_host() : void {
-		if( ! $this->site_exists_on_host() ) {
+	public function ensure_site_exists() : void {
+		if( ! $this->site_exists() ) {
 			throw new \Exception( 'Unable to find \'' . $this->name . '\' on \'' . $this->host . '\'');
+		}
+	}
+
+	public function ensure_site_not_exists() : void {
+		if( $this->site_exists() ) {
+			throw new \Exception( 'Site  \'' . $this->name . '\' already exists on \'' . $this->host . '\'');
 		}
 	}
 
