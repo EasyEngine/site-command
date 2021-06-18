@@ -92,14 +92,13 @@ function copy_site_files( Site $source, Site $destination, string $sync_type ) {
 	$source_dir = $source->get_site_root_dir();
 	$destination_dir =  $destination->get_site_root_dir();
 
-	if ( $sync_type === 'all' ) {
-	} elseif ( $sync_type === 'files' ) {
+	if ( $sync_type === 'files' ) {
 		$exclude .= ' --exclude \''.  $uploads_path .'\'';
 		$exclude .= ' --exclude \''.  $uploads_path_share .'\'';
 	} elseif ( $sync_type === 'uploads' ) {
 		$source_dir .=  $uploads_path;
 		$destination_dir .= $uploads_path;
-	} else {
+	} elseif ( $sync_type !== 'all' ) {
 		EE::error( 'Unknown sync_type: ' . $sync_type );
 	}
 

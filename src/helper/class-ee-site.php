@@ -991,7 +991,7 @@ abstract class EE_Site_Command {
 
 	/**
 	 * Re-create sites docker-compose file and update the containers containers.
-	 * Syntactic sugar of `ee site enable --refresh`. 
+	 * Syntactic sugar of `ee site enable --refresh`.
 	 *
 	 * ## EXAMPLES
 	 *
@@ -1983,7 +1983,7 @@ abstract class EE_Site_Command {
 	 * : Path to the SSL key file.
 	 *
 	 * [--ssl-crt=<ssl-crt-path>]
-	 * : Path ro the SSL crt file.
+	 * : Path to the SSL crt file.
 	 *
 	 * [--wildcard]
 	 * : Gets wildcard SSL.
