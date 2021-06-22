@@ -2,6 +2,7 @@
 
 namespace EE\Site\Type;
 
+use AcmePhp\Cli\Exception\AcmeCliException;
 use AcmePhp\Cli\Repository\Repository;
 use AcmePhp\Cli\Serializer\PemEncoder;
 use AcmePhp\Cli\Serializer\PemNormalizer;
@@ -14,6 +15,10 @@ use AcmePhp\Core\Challenge\Http\HttpValidator;
 use AcmePhp\Core\Challenge\Http\SimpleHttpSolver;
 use AcmePhp\Core\Challenge\WaitingValidator;
 use AcmePhp\Core\Exception\Protocol\ChallengeNotSupportedException;
+use AcmePhp\Core\Exception\Protocol\CertificateRevocationException;
+use AcmePhp\Core\Protocol\AuthorizationChallenge;
+use AcmePhp\Core\Protocol\ResourcesDirectory;
+use AcmePhp\Core\Protocol\RevocationReason;
 use AcmePhp\Core\Http\Base64SafeEncoder;
 use AcmePhp\Core\Http\SecureHttpClient;
 use AcmePhp\Core\Http\ServerErrorHandler;
@@ -35,6 +40,57 @@ use Symfony\Component\Serializer\Normalizer\GetSetMethodNormalizer;
 use Symfony\Component\Serializer\Serializer;
 use function EE\Site\Utils\reload_global_nginx_proxy;
 use function EE\Utils\get_config_value;
+
+//TODO: Try to get this code merged in upstream
+class EEAcmeClient extends AcmeClient {
+
+	/**
+	 * @var string
+	 */
+	private $account;
+
+	/**
+	 * Retrieve the resource account.
+	 *
+	 * @return string
+	 */
+	private function getResourceAccount()
+	{
+		if (!$this->account) {
+			$payload = [
+				'onlyReturnExisting' => true,
+			];
+
+			$this->requestResource('POST', ResourcesDirectory::NEW_ACCOUNT, $payload);
+			$this->account = $this->getHttpClient()->getLastLocation();
+		}
+
+		return $this->account;
+	}
+
+	public function revokeAuthorizationChallenge(AuthorizationChallenge $challenge)
+	{
+		$payload = [
+			'identifiers' => [[
+						'type' => 'dns',
+						'value' => $challenge->getDomain(),
+				]]
+		];
+
+		$client = $this->getHttpClient();
+		$resourceUrl = $this->getResourceUrl(ResourcesDirectory::NEW_ORDER);
+		$response = $client->request('POST', $resourceUrl, $client->signKidPayload($resourceUrl, $this->getResourceAccount(), $payload));
+		if (!isset($response['authorizations']) || !$response['authorizations']) {
+			throw new ChallengeNotSupportedException();
+		}
+
+		$orderEndpoint = $client->getLastLocation();
+		foreach ($response['authorizations'] as $authorizationEndpoint) {
+			$authorizationsResponse = $client->request('POST', $authorizationEndpoint, $client->signKidPayload($authorizationEndpoint, $this->getResourceAccount(), [ 'status' => 'deactivated' ]));
+		}
+		return;
+	}
+}
 
 
 class Site_Letsencrypt {
@@ -78,7 +134,7 @@ class Site_Letsencrypt {
 		$secureHttpClient = $this->getSecureHttpClient();
 		$csrSigner        = new CertificateRequestSigner();
 
-		$this->client = new AcmeClient( $secureHttpClient, 'https://acme-v02.api.letsencrypt.org/directory', $csrSigner );
+		$this->client = new EEAcmeClient( $secureHttpClient, 'https://acme-v02.api.letsencrypt.org/directory', $csrSigner );
 
 	}
 
@@ -158,6 +214,10 @@ class Site_Letsencrypt {
 		foreach ( $order->getAuthorizationsChallenges() as $domainKey => $authorizationChallenges ) {
 			$authorizationChallenge = null;
 			foreach ( $authorizationChallenges as $candidate ) {
+				if ( 'valid' === $candidate->getStatus() ) {
+					\EE::debug( 'Authorization challenge already solved. Challenge: ' . print_r( $candidate, true ) );
+					continue 2;
+				}
 				if ( $solver->supports( $candidate ) ) {
 					$authorizationChallenge = $candidate;
 					\EE::debug( 'Authorization challenge supported by solver. Solver: ' . $solverName . ' Challenge: ' . $candidate->getType() );
@@ -165,6 +225,7 @@ class Site_Letsencrypt {
 				}
 				// Should not get here as we are handling it.
 				\EE::debug( 'Authorization challenge not supported by solver. Solver: ' . $solverName . ' Challenge: ' . $candidate->getType() );
+				\EE::debug( print_r( $candidate, true ) );
 			}
 			if ( null === $authorizationChallenge ) {
 				throw new ChallengeNotSupportedException();
@@ -200,6 +261,77 @@ class Site_Letsencrypt {
 		$this->repository->storeCertificateOrder( $domains, $order );
 
 		return true;
+	}
+
+	public function revokeAuthorizationChallenges( array $domains ) {
+		foreach ( $domains as $domain ) {
+			if ( $this->repository->hasDomainAuthorizationChallenge( $domain ) ) {
+				$challenge = $this->repository->loadDomainAuthorizationChallenge( $domain );
+
+				try {
+					$this->client->revokeAuthorizationChallenge( $challenge );
+					$this->repository->removeDomainAuthorizationChallenge( $domain );
+					\EE::debug( 'Domain Authorization Challenge for ' . $domain . ' revoked successfully' );
+				} catch ( CertificateRevocationException | AcmeCliException $e ) {
+					\EE::debug( $e->getMessage() );
+				}
+			} else {
+				\EE::debug( 'Domain Authorization Challenge for ' . $domain . ' not found locally' );
+			}
+		}
+	}
+
+	public function revokeCertificates( array $domains ) {
+		$reasonCode = null; // ok to be null. LE expects 0 as default reason.
+
+		try {
+			$revocationReason = isset( $reasonCode[0] ) ? new RevocationReason( $reasonCode[0] ) : RevocationReason::createDefaultReason();
+		} catch ( \InvalidArgumentException $e ) {
+			\EE::error( 'Reason code must be one of: ' . PHP_EOL . implode( PHP_EOL, RevocationReason::getFormattedReasons() ) );
+		}
+
+		foreach ( $domains as $domain ) {
+			if ( gettype( $domain ) === 'string' ) {
+				if ( $this->repository->hasDomainCertificate( $domain ) ) {
+					$certificate = $this->repository->loadDomainCertificate( $domain );
+				} else {
+					\EE::debug( 'Certificate for ' . $domain . ' not found locally' );
+					continue;
+				}
+			} elseif ( get_class( $domain ) === 'AcmePhp\Ssl\Certificate' ) {
+				$certificate = $domain;
+			} else {
+				\EE::error( 'Unknown type of certificate ' . get_class( $domain ) );
+			}
+
+			try {
+				$this->client->revokeCertificate( $certificate, $revocationReason );
+				$domain = gettype( $domain ) === 'string' ? $domain : get_class( $domain ) === 'AcmePhp\Ssl\Certificate' ? array_search( $domain, $domains ) : '';
+				\EE::debug( 'Certificate for ' . $domain . ' revoked successfully' );
+			} catch ( CertificateRevocationException $e ) {
+				\EE::debug( $e->getMessage() );
+			}
+		}
+	}
+
+	public function removeDomain( array $domains ) {
+		try {
+			$this->repository->removeDomain( $domains );
+		} catch ( AcmeCliException $e ) {
+			\EE::debug( $e->getMessage() );
+		}
+	}
+
+	public function loadDomainCertificates( array $domains ) {
+		$certificates = [];
+
+		foreach ( $domains as $domain ) {
+			if ( $this->repository->hasDomainCertificate( $domain ) ) {
+				$certificates[ $domain ] = $this->repository->loadDomainCertificate( $domain );
+			}
+		}
+
+		return $certificates;
 	}
 
 	public function check( Array $domains, $wildcard = false, $preferred_challenge = '' ) {
@@ -367,23 +499,26 @@ class Site_Letsencrypt {
 	 */
 	public function isAlreadyExpired( $domain ) {
 
-		// Check expiration date to avoid too much renewal
-		\EE::log( "Loading current certificate for $domain" );
+		try {
+			// Check expiration date to avoid too much renewal
+			\EE::log( "Loading current certificate for $domain" );
 
-		$certificate       = $this->repository->loadDomainCertificate( $domain );
-		$certificateParser = new CertificateParser();
-		$parsedCertificate = $certificateParser->parse( $certificate );
+			$certificate       = $this->repository->loadDomainCertificate( $domain );
+			$certificateParser = new CertificateParser();
+			$parsedCertificate = $certificateParser->parse( $certificate );
 
-		// 2160000 = 25 days.
-		if ( $parsedCertificate->getValidTo()->format( 'U' ) - time() < 0 ) {
-			\EE::log(
-				sprintf(
-					'Current certificate is alerady expired on %s, renewal is necessary.',
-					$parsedCertificate->getValidTo()->format( 'Y-m-d H:i:s' )
-				)
-			);
+			if ( $parsedCertificate->getValidTo()->format( 'U' ) - time() < 0 ) {
+				\EE::log(
+					sprintf(
+						'Current certificate is alerady expired on %s, renewal is necessary.',
+						$parsedCertificate->getValidTo()->format( 'Y-m-d H:i:s' )
+					)
+				);
 
-			return true;
+				return true;
+			}
+		} catch ( \Exception $e ) {
+			\EE::warning( $e->getMessage() );
 		}
 
 		return false;
@@ -403,8 +538,8 @@ class Site_Letsencrypt {
 		$certificateParser = new CertificateParser();
 		$parsedCertificate = $certificateParser->parse( $certificate );
 
-		// 2160000 = 25 days.
-		if ( $parsedCertificate->getValidTo()->format( 'U' ) - time() >= 2160000 ) {
+		// 3024000 = 35 days.
+		if ( $parsedCertificate->getValidTo()->format( 'U' ) - time() >= 3024000 ) {
 			\EE::log(
 				sprintf(
 					'Current certificate is valid until %s, renewal is not necessary.',
@@ -562,52 +697,6 @@ class Site_Letsencrypt {
 		$this->repository->storeDomainDistinguishedName( $domain, $distinguishedName );
 
 		return $distinguishedName;
-	}
-
-
-	public function status() {
-		$this->master ?? $this->master = new Filesystem( new Local( $this->conf_dir ) );
-
-		$certificateParser = new CertificateParser();
-
-		$table = new Table( $output );
-		$table->setHeaders( [ 'Domain', 'Issuer', 'Valid from', 'Valid to', 'Needs renewal?' ] );
-
-		$directories = $this->master->listContents( 'certs' );
-
-		foreach ( $directories as $directory ) {
-			if ( 'dir' !== $directory['type'] ) {
-				continue;
-			}
-
-			$parsedCertificate = $certificateParser->parse( $this->repository->loadDomainCertificate( $directory['basename'] ) );
-			if ( ! $input->getOption( 'all' ) && $parsedCertificate->isExpired() ) {
-				continue;
-			}
-			$domainString = $parsedCertificate->getSubject();
-
-			$alternativeNames = array_diff( $parsedCertificate->getSubjectAlternativeNames(), [ $parsedCertificate->getSubject() ] );
-			if ( count( $alternativeNames ) ) {
-				sort( $alternativeNames );
-				$last = array_pop( $alternativeNames );
-				foreach ( $alternativeNames as $alternativeName ) {
-					$domainString .= "\n ├── " . $alternativeName;
-				}
-				$domainString .= "\n └── " . $last;
-			}
-
-			$table->addRow(
-				[
-					$domainString,
-					$parsedCertificate->getIssuer(),
-					$parsedCertificate->getValidFrom()->format( 'Y-m-d H:i:s' ),
-					$parsedCertificate->getValidTo()->format( 'Y-m-d H:i:s' ),
-					( $parsedCertificate->getValidTo()->format( 'U' ) - time() < 604800 ) ? '<comment>Yes</comment>' : 'No',
-				]
-			);
-		}
-
-		$table->render();
 	}
 
 	/**

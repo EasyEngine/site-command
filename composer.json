@@ -10,12 +10,19 @@
     "autoload": {
         "psr-4": {
             "": "src/",
+            "EE\\Model\\": "src/db/",
+            "EE\\Site\\Type\\": "src/site-type/",
             "AcmePhp\\Cli\\": "AcmePhp/Cli"
         },
         "files": [
+            "site-command.php",
             "src/helper/hooks.php",
             "src/helper/site-utils.php",
-            "site-command.php"
+            "src/helper/class-ee-site.php",
+            "src/helper/SimpleDnsCloudflareSolver.php",
+            "src/helper/Site_Self_Signed.php",
+            "src/helper/Site_Letsencrypt.php",
+            "src/helper/Shutdown_Handler.php"
         ]
     },
     "extra": {
@@ -40,7 +47,7 @@
         ]
     },
     "require": {
-        "acmephp/core": "1.0.0",
+        "acmephp/core": "1.2.0",
         "ext-openssl": "*",
         "guzzlehttp/guzzle": "6.3.3",
         "league/flysystem": "1.0.49",

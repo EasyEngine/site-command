@@ -114,6 +114,24 @@ function get_site_info( $args, $site_enabled_check = true, $exit_if_not_found = 
 }
 
 /**
+ * Populate basic site info from db.
+ *
+ * @param array $domains       Array of all domains.
+ *
+ * @return string $preferred_challenge Type of challenge preffered.
+ */
+function get_preferred_ssl_challenge(array $domains) {
+
+	foreach ( $domains as $domain ) {
+		if ( preg_match( '/^\*/', $domain ) ) {
+			return 'dns';
+		}
+	}
+
+	return get_config_value( 'preferred_ssl_challenge', '' );
+}
+
+/**
  * Create user in remote or global db.
  *
  * @param string $db_host Database Hostname.
@@ -129,7 +147,8 @@ function create_user_in_db( $db_host, $db_name = '', $db_user = '', $db_pass = '
 	$db_user = empty( $db_user ) ? \EE\Utils\random_password( 5 ) : $db_user;
 	$db_pass = empty( $db_pass ) ? \EE\Utils\random_password() : $db_pass;
 
-	$create_string = sprintf( "CREATE USER '%1\$s'@'%%' IDENTIFIED BY '%2\$s'; CREATE DATABASE %3\$s; GRANT ALL PRIVILEGES ON %3\$s.* TO '%1\$s'@'%%'; FLUSH PRIVILEGES;", $db_user, $db_pass, $db_name );
+	// TODO: Create database only if it does not exist.
+	$create_string = sprintf( 'CREATE USER "%1$s"@"%%" IDENTIFIED BY "%2$s"; CREATE DATABASE `%3$s`; GRANT ALL PRIVILEGES ON `%3$s`.* TO "%1$s"@"%%"; FLUSH PRIVILEGES;', $db_user, $db_pass, $db_name );
 
 	if ( GLOBAL_DB === $db_host ) {
 
@@ -148,7 +167,7 @@ function create_user_in_db( $db_host, $db_name = '', $db_user = '', $db_pass = '
 		}
 
 		$db_script_path = \EE\Utils\get_temp_dir() . 'db_exec';
-		file_put_contents( $db_script_path, sprintf( 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e"%s"', $create_string ) );
+		file_put_contents( $db_script_path, sprintf( 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e\'%s\'', $create_string ) );
 
 		EE::exec( sprintf( 'docker cp %s %s:/db_exec', $db_script_path, GLOBAL_DB_CONTAINER ) );
 		if ( ! EE::exec( sprintf( 'docker exec %s sh db_exec', GLOBAL_DB_CONTAINER ) ) ) {
@@ -175,11 +194,11 @@ function create_user_in_db( $db_host, $db_name = '', $db_user = '', $db_pass = '
  */
 function cleanup_db( $db_host, $db_name, $db_user = '', $db_pass = '' ) {
 
-	$cleanup_string = sprintf( 'DROP DATABASE %s;', $db_name );
+	$cleanup_string = sprintf( 'DROP DATABASE `%s`;', $db_name );
 
 	if ( GLOBAL_DB === $db_host ) {
 		$db_script_path = \EE\Utils\get_temp_dir() . 'db_exec';
-		file_put_contents( $db_script_path, sprintf( 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e"%s"', $cleanup_string ) );
+		file_put_contents( $db_script_path, sprintf( 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e\'%s\'', $cleanup_string ) );
 
 		EE::exec( sprintf( 'docker cp %s %s:/db_exec', $db_script_path, GLOBAL_DB_CONTAINER ) );
 		EE::exec( sprintf( 'docker exec %s sh db_exec', GLOBAL_DB_CONTAINER ) );
@@ -437,7 +456,7 @@ function restart_site_containers( $site_fs_path, $containers ) {
 
 	chdir( $site_fs_path );
 	$all_containers = is_array( $containers ) ? implode( ' ', $containers ) : $containers;
-	EE::exec( "docker-compose restart $all_containers" );
+	EE::exec( \EE_DOCKER::docker_compose_with_custom() . " restart $all_containers" );
 }
 
 /**
@@ -450,8 +469,8 @@ function stop_site_containers( $site_fs_path, $containers ) {
 
 	chdir( $site_fs_path );
 	$all_containers = is_array( $containers ) ? implode( ' ', $containers ) : $containers;
-	EE::exec( "docker-compose stop $all_containers" );
-	EE::exec( "docker-compose rm -f $all_containers" );
+	EE::exec( \EE_DOCKER::docker_compose_with_custom() . " stop $all_containers" );
+	EE::exec( \EE_DOCKER::docker_compose_with_custom() . " rm -f $all_containers" );
 }
 
 /**
@@ -468,7 +487,7 @@ function run_compose_command( $action, $container, $action_to_display = null, $s
 	$display_service = $service_to_display ? $service_to_display : $container;
 
 	EE::log( ucfirst( $display_action ) . 'ing ' . $display_service );
-	EE::exec( "docker-compose $action $container", true, true );
+	EE::exec( \EE_DOCKER::docker_compose_with_custom() . " $action $container", true, true );
 }
 
 /**
@@ -498,14 +517,14 @@ function set_postfix_files( $site_url, $site_service_dir ) {
 function configure_postfix( $site_url, $site_fs_path ) {
 
 	chdir( $site_fs_path );
-	EE::exec( 'docker-compose exec postfix postconf -e \'relayhost =\'' );
-	EE::exec( 'docker-compose exec postfix postconf -e \'smtpd_recipient_restrictions = permit_mynetworks\'' );
+	EE::exec( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e \'relayhost =\'' );
+	EE::exec( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e \'smtpd_recipient_restrictions = permit_mynetworks\'' );
 	$launch      = EE::launch( sprintf( 'docker inspect -f \'{{ with (index .IPAM.Config 0) }}{{ .Subnet }}{{ end }}\' %s', $site_url ) );
 	$subnet_cidr = trim( $launch->stdout );
-	EE::exec( sprintf( 'docker-compose exec postfix postconf -e \'mynetworks = %s 127.0.0.0/8\'', $subnet_cidr ) );
-	EE::exec( sprintf( 'docker-compose exec postfix postconf -e \'myhostname = %s\'', $site_url ) );
-	EE::exec( 'docker-compose exec postfix postconf -e \'syslog_name = $myhostname\'' );
-	EE::exec( 'docker-compose restart postfix' );
+	EE::exec( sprintf( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e \'mynetworks = %s 127.0.0.0/8\'', $subnet_cidr ) );
+	EE::exec( sprintf( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e \'myhostname = %s\'', $site_url ) );
+	EE::exec( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e \'syslog_name = $myhostname\'' );
+	EE::exec( \EE_DOCKER::docker_compose_with_custom() . ' restart postfix' );
 }
 
 /**
@@ -574,8 +593,8 @@ function get_public_dir( $assoc_args ) {
 /**
  * Get final source directory for site webroot.
  *
- * @param $original_src_dir  Default source directory.
- * @param $container_fs_path public directory set by user if any.
+ * @param string $original_src_dir  source directory.
+ * @param string $container_fs_path public directory set by user if any.
  *
  * @return string final webroot for site.
  */
@@ -617,9 +636,40 @@ function get_all_alias_domains() {
 }
 
 /**
+ * Update information of site in EE database
+ *
+ * @param string $site_url URL os site.
+ * @param array $data      Data to update.
+ *
+ * @return string final webroot for site.
+ */
+function update_site_db_entry( string $site_url, array $data ) {
+	$site_id = Site::update( [ 'site_url' => $site_url ], $data );
+
+	if ( ! $site_id ) {
+		throw new \Exception( 'Unable to update values in EE database.' );
+	}
+}
+
+/**
+ * Get all domains of site.
+ *
+ * @param string $site_url alias domain whose parent needs to be found.
+ *
+ * @return string parent site.
+ */
+function get_domains_of_site( string $site_url ): array {
+	$alias_domains = Site::find( $site_url )->alias_domains;
+	$all_domains   = explode( ',', $alias_domains );
+	array_push( $all_domains, $site_url );
+
+	return array_unique( $all_domains );
+}
+
+/**
  * Get parent site of an alias domain.
  *
- * @param string $alias  alias domain whose parent needs to be found.
+ * @param string $alias alias domain whose parent needs to be found.
  *
  * @return string parent site.
  */
@@ -631,10 +681,60 @@ function get_parent_of_alias( $alias ) {
 	}
 
 	$output = EE::db()
-				->table( 'sites' )
-				->select( ...[ 'site_url' ] )
-				->where( 'alias_domains', 'like', '%' . $alias . '%' )
-				->first();
+	            ->table( 'sites' )
+	            ->select( ...[ 'site_url' ] )
+	            ->where( 'alias_domains', 'like', '%' . $alias . '%' )
+	            ->first();
 
 	return reset( $output );
+}
+
+/**
+ * Check if given array of domains exist as alias for some site in db or not.
+ *
+ * @param array $domains array of domains to be checked.
+ */
+function check_alias_in_db( $domains ) {
+
+	$alias_error = false;
+	foreach ( $domains as $domain_check ) {
+		if ( $alias_error ) {
+			break;
+		}
+		$parent_site          = get_parent_of_alias( trim( $domain_check ) );
+		$alias_error          = ! empty( $parent_site );
+		$domain_having_parent = $alias_error ? $domain_check : '';
+	}
+
+	if ( $alias_error ) {
+		\EE::error( sprintf( "Site %1\$s already exists as an alias domain for site: %2\$s. Please delete it from alias domains of %2\$s if you want to create an independent site for it.", $domain_having_parent, $parent_site ) );
+	}
+}
+
+/**
+ * 'sysctl' parameters for docker-compose file.
+ *
+ * @return array of all 'sysctl' parameters.
+ */
+function sysctl_parameters() {
+
+	// Intentionally made not strict. It could also be in form of string inside config.
+	if ( isset( \EE::get_runner()->config['sysctl'] ) && true == \EE::get_runner()->config['sysctl'] ) {
+
+		return [
+			'sysctl' => [
+				[ 'name' => 'net.ipv4.tcp_synack_retries=2' ],
+				[ 'name' => 'net.ipv4.ip_local_port_range=2000 65535' ],
+				[ 'name' => 'net.ipv4.tcp_rfc1337=1' ],
+				[ 'name' => 'net.ipv4.tcp_fin_timeout=15' ],
+				[ 'name' => 'net.ipv4.tcp_keepalive_time=300' ],
+				[ 'name' => 'net.ipv4.tcp_keepalive_probes=5' ],
+				[ 'name' => 'net.ipv4.tcp_keepalive_intvl=15' ],
+				[ 'name' => 'net.core.somaxconn=65536' ],
+				[ 'name' => 'net.ipv4.tcp_max_tw_buckets=1440000' ],
+			],
+		];
+	}
+
+	return [];
 }
