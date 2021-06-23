@@ -362,7 +362,7 @@ abstract class EE_Site_Command {
 	 * : Enable wildcard SSL on site.
 	 *
 	 * [--php=<php-version>]
-	 * : PHP version for site. Currently only supports PHP 5.6, 7.0, 7.2, 7.3, 7.4 and latest.
+	 * : PHP version for site. Currently only supports PHP 5.6, 7.0, 7.2, 7.3, 7.4, 8.0 and latest.
 	 * ---
 	 * options:
 	 *  - 5.6
@@ -370,6 +370,7 @@ abstract class EE_Site_Command {
 	 *  - 7.2
 	 *  - 7.3
 	 *  - 7.4
+	 *  - 8.0
 	 *  - latest
 	 * ---
 	 *
@@ -408,7 +409,7 @@ abstract class EE_Site_Command {
 	 *     $ ee site update example.com --ssl=self
 	 *
 	 *     # Update PHP version of site.
-	 *     $ ee site update example.com --php=7.4
+	 *     $ ee site update example.com --php=8.0
 	 *
 	 *     # Update proxy cache of site.
 	 *     $ ee site update example.com --proxy-cache=on
@@ -987,7 +988,7 @@ abstract class EE_Site_Command {
 
 	/**
 	 * Re-create sites docker-compose file and update the containers containers.
-	 * Syntactic sugar of `ee site enable --refresh`. 
+	 * Syntactic sugar of `ee site enable --refresh`.
 	 *
 	 * ## EXAMPLES
 	 *
