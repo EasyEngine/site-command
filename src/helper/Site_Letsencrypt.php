@@ -397,7 +397,7 @@ class Site_Letsencrypt {
 					$site_name = $domains[0];
 					$site_name = str_replace( '*.', '', $site_name );
 
-					\EE::log( "Re-run `ee site ssl $site_name` after fixing the issue." );
+					\EE::log( "Re-run `ee site ssl-verify $site_name` after fixing the issue." );
 					throw $e;
 				}
 				$authorizationChallengeToCleanup[] = $authorizationChallenge;
