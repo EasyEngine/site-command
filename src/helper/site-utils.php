@@ -738,3 +738,12 @@ function sysctl_parameters() {
 
 	return [];
 }
+
+function remove_etc_hosts_entry( $site_url ) {
+	$hosts_file = file_get_contents('/etc/hosts');
+
+	$site_url_escaped = preg_replace( '/\./', '\.', $site_url );
+	$hosts_file_new   = preg_replace("/127\.0\.0\.1\s+$site_url_escaped\n/",'',$hosts_file);
+
+	file_put_contents('/etc/hosts', $hosts_file_new );
+}
