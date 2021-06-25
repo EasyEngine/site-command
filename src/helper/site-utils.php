@@ -739,6 +739,12 @@ function sysctl_parameters() {
 	return [];
 }
 
+/**
+ * Removes entry of the site from /etc/hosts
+ *
+ * @param string $site_url site name.
+ *
+ */
 function remove_etc_hosts_entry( $site_url ) {
 	$hosts_file = file_get_contents('/etc/hosts');
 

@@ -267,7 +267,6 @@ abstract class EE_Site_Command {
 
 		\EE\Site\Utils\remove_etc_hosts_entry( $site_url );
 
-
 		$config_file_path = EE_ROOT_DIR . '/services/nginx-proxy/conf.d/' . $site_url . '-redirect.conf';
 
 		if ( $this->fs->exists( $config_file_path ) ) {
@@ -1527,7 +1526,7 @@ abstract class EE_Site_Command {
 	 *
 	 * [--force]
 	 * : Force renewal.
-	 * 
+	 *
 	 * @subcommand ssl-verify
 	 * @alias ssl
 	 */
