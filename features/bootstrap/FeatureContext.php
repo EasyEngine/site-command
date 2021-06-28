@@ -41,6 +41,7 @@ foreach ( $iterator as $filename ) {
 }
 $runner = \EE::get_runner();
 $runner->init_logger();
+$runner->init_config();
 /* End. Loading required files to enable EE::launch() in tests. */
 
 use Behat\Behat\Context\Context;
@@ -380,7 +381,7 @@ class FeatureContext implements Context
 	public function thereShouldBeContainersWithLabel($expected_running_containers, PyStringNode $pyStringNode)
 	{
 		$labels = $pyStringNode->getStrings();
-		$label_string = implode($labels, ' -f label=');
+		$label_string = implode(' -f label=',$labels);
 
 		$result = EE::launch( "docker ps -qf label=$label_string | wc -l", false, true );
 		$running_containers = (int) trim($result->stdout);

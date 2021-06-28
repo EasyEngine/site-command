@@ -265,6 +265,8 @@ abstract class EE_Site_Command {
 			\EE::log( "[$site_url] site root removed." );
 		}
 
+		\EE\Site\Utils\remove_etc_hosts_entry( $site_url );
+
 		$config_file_path = EE_ROOT_DIR . '/services/nginx-proxy/conf.d/' . $site_url . '-redirect.conf';
 
 		if ( $this->fs->exists( $config_file_path ) ) {
@@ -362,7 +364,7 @@ abstract class EE_Site_Command {
 	 * : Enable wildcard SSL on site.
 	 *
 	 * [--php=<php-version>]
-	 * : PHP version for site. Currently only supports PHP 5.6, 7.0, 7.2, 7.3, 7.4 and latest.
+	 * : PHP version for site. Currently only supports PHP 5.6, 7.0, 7.2, 7.3, 7.4, 8.0 and latest.
 	 * ---
 	 * options:
 	 *  - 5.6
@@ -370,6 +372,7 @@ abstract class EE_Site_Command {
 	 *  - 7.2
 	 *  - 7.3
 	 *  - 7.4
+	 *  - 8.0
 	 *  - latest
 	 * ---
 	 *
@@ -408,7 +411,7 @@ abstract class EE_Site_Command {
 	 *     $ ee site update example.com --ssl=self
 	 *
 	 *     # Update PHP version of site.
-	 *     $ ee site update example.com --php=7.4
+	 *     $ ee site update example.com --php=8.0
 	 *
 	 *     # Update proxy cache of site.
 	 *     $ ee site update example.com --proxy-cache=on
@@ -987,7 +990,7 @@ abstract class EE_Site_Command {
 
 	/**
 	 * Re-create sites docker-compose file and update the containers containers.
-	 * Syntactic sugar of `ee site enable --refresh`. 
+	 * Syntactic sugar of `ee site enable --refresh`.
 	 *
 	 * ## EXAMPLES
 	 *
@@ -1429,13 +1432,13 @@ abstract class EE_Site_Command {
 		}
 		$api_key_absent = empty( get_config_value( 'cloudflare-api-key' ) );
 		if ( $is_solver_dns && $api_key_absent ) {
-			echo \cli\Colors::colorize( '%YIMPORTANT:%n Run `ee site ssl ' . $site_url . '` once the DNS changes have propagated to complete the certification generation and installation.', null );
+			echo \cli\Colors::colorize( '%YIMPORTANT:%n Run `ee site ssl-verify ' . $site_url . '` once the DNS changes have propagated to complete the certification generation and installation.', null );
 		} else {
 			if ( ! $api_key_absent && $is_solver_dns ) {
 				EE::log( 'Waiting for DNS entry propagation.' );
 				sleep( 10 );
 			}
-			$this->ssl( [], [ 'force' => $force ], $www_or_non_www );
+			$this->ssl_verify( [], [ 'force' => $force ], $www_or_non_www );
 		}
 	}
 
@@ -1523,8 +1526,11 @@ abstract class EE_Site_Command {
 	 *
 	 * [--force]
 	 * : Force renewal.
+	 *
+	 * @subcommand ssl-verify
+	 * @alias ssl
 	 */
-	public function ssl( $args = [], $assoc_args = [], $www_or_non_www = false ) {
+	public function ssl_verify( $args = [], $assoc_args = [], $www_or_non_www = false ) {
 
 		EE::log( 'Starting SSL verification.' );
 
@@ -1564,7 +1570,7 @@ abstract class EE_Site_Command {
 			$warning = ( $is_solver_dns && $api_key_present ) ? "The dns entries have not yet propogated. Manually check: \nhost -t TXT _acme-challenge." . $this->site_data['site_url'] . "\nBefore retrying `ee site ssl " . $this->site_data['site_url'] . "`" : 'Failed to verify SSL: ' . $e->getMessage();
 
 			EE::warning( $warning );
-			EE::warning( sprintf( 'Check logs and retry `ee site ssl %s` once the issue is resolved.', $this->site_data['site_url'] ) );
+			EE::warning( sprintf( 'Check logs and retry `ee site ssl-verify %s` once the issue is resolved.', $this->site_data['site_url'] ) );
 
 			return;
 		}

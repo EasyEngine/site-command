@@ -306,7 +306,7 @@ class Site_Letsencrypt {
 
 			try {
 				$this->client->revokeCertificate( $certificate, $revocationReason );
-				$domain = gettype( $domain ) === 'string' ? $domain : get_class( $domain ) === 'AcmePhp\Ssl\Certificate' ? array_search( $domain, $domains ) : '';
+				$domain = ( gettype( $domain ) === 'string' ? $domain : get_class( $domain ) ) === 'AcmePhp\Ssl\Certificate' ? array_search( $domain, $domains ) : '';
 				\EE::debug( 'Certificate for ' . $domain . ' revoked successfully' );
 			} catch ( CertificateRevocationException $e ) {
 				\EE::debug( $e->getMessage() );
@@ -397,7 +397,7 @@ class Site_Letsencrypt {
 					$site_name = $domains[0];
 					$site_name = str_replace( '*.', '', $site_name );
 
-					\EE::log( "Re-run `ee site ssl $site_name` after fixing the issue." );
+					\EE::log( "Re-run `ee site ssl-verify $site_name` after fixing the issue." );
 					throw $e;
 				}
 				$authorizationChallengeToCleanup[] = $authorizationChallenge;
