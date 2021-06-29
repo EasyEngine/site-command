@@ -22,13 +22,14 @@ class AddExtConfig8_0 extends Base {
 			$this->skip_this_migration = true;
 		}
 	}
+
 	public function remove_extension( $config_file_tmp, $config_site_path ) {
 		if ( $this->fs->exists( $config_file_tmp ) ) {
-			$this->fs->remove( $config_file_tmp ) ;
+			$this->fs->remove( $config_file_tmp );
 		}
 
 		if ( $this->fs->exists( $config_site_path ) ) {
-			$this->fs->remove( $config_site_path ) ;
+			$this->fs->remove( $config_site_path );
 		}
 	}
 
@@ -44,7 +45,7 @@ class AddExtConfig8_0 extends Base {
 			'EE\Migration\SiteContainers::backup_restore',
 			[ $this, 'remove_extension'],
 			[ $config_file_tmp, $config_site_path ],
-			[ $config_file_tmp, $config_site_path ],
+			[ $config_file_tmp, $config_site_path ]
 		);
 
 		if ( ! self::$rsp->execute() ) {
