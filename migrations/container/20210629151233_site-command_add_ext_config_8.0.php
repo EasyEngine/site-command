@@ -4,7 +4,6 @@ namespace EE\Migration;
 
 use EE;
 use EE\Migration\Base;
-use EE\Migration\SiteContainers;
 use EE\RevertableStepProcessor;
 use EE\Model\Site;
 
@@ -150,6 +149,38 @@ class AddExtConfig8_0 extends Base {
 			EE::debug( 'Skipping add-ext-config-8.0 update migration as it is not needed.' );
 
 			return;
+		}
+
+		foreach ( $this->sites as $site ) {
+
+			if ( ! in_array( $site->site_type, [ 'php', 'wp' ], true ) ) {
+				continue;
+			}
+
+			if ( in_array( $site->php_version, [ '5.6', '7.0', '7.2' ] ) ) {
+				continue;
+			}
+
+			EE::debug( "Reverting add-ext-config updates for: $site->site_url" );
+
+			$configs = [
+				$site->site_fs_path . '/config/php/php/conf.d/docker-php-ext-timezonedb.ini',
+				$site->site_fs_path . '/config/php/php/conf.d/docker-php-ext-apcu.ini',
+				$site->site_fs_path . '/config/php/php/conf.d/docker-php-ext-calendar.ini',
+				$site->site_fs_path . '/config/php/php/conf.d/docker-php-ext-pcntl.ini',
+				$site->site_fs_path . '/config/php/php/conf.d/docker-php-ext-shmop.ini',
+				$site->site_fs_path . '/config/php/php/conf.d/docker-php-ext-sockets.ini',
+				$site->site_fs_path . '/config/php/php/conf.d/docker-php-ext-sysvsem.ini',
+				$site->site_fs_path . '/config/php/php/conf.d/docker-php-ext-sysvshm.ini',
+				$site->site_fs_path . '/config/php/php/conf.d/gmagick.ini',
+			];
+
+			foreach ( $configs as $config ) {
+
+				if ( $this->fs->exists( $config ) ) {
+					$this->fs->remove( $config );
+				}
+			}
 		}
 	}
 }
