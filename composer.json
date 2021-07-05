@@ -51,9 +51,9 @@
         "acmephp/core": "1.2.0",
         "ext-openssl": "*",
         "guzzlehttp/guzzle": "6.3.3",
-        "league/flysystem": "1.0.49",
+        "league/flysystem": "1.1.4",
         "symfony/serializer": "3.4.20",
-        "webmozart/assert": "1.3.0",
+        "webmozart/assert": "1.10.0",
         "cloudflare/sdk": "1.1.1"
     }
 }
