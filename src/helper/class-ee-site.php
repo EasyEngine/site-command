@@ -6,6 +6,10 @@ use EE;
 use EE\Model\Site;
 use EE\Model\Option;
 use Symfony\Component\Filesystem\Filesystem;
+use function EE\Site\Cloner\Utils\check_site_access;
+use function EE\Site\Cloner\Utils\copy_site_db;
+use function EE\Site\Cloner\Utils\copy_site_files;
+use function EE\Site\Cloner\Utils\get_transfer_details;
 use function EE\Site\Utils\get_domains_of_site;
 use function EE\Site\Utils\get_preferred_ssl_challenge;
 use function EE\Site\Utils\update_site_db_entry;
@@ -1946,6 +1950,103 @@ abstract class EE_Site_Command {
 
 		$this->fs->copy( $this->site_data['ssl_key'], $ssl_key_dest, true );
 		$this->fs->copy( $this->site_data['ssl_crt'], $ssl_crt_dest, true );
+	}
+	/**
+	 * Clones a website from source to destination.
+	 *
+	 * ## OPTIONS
+	 *
+	 * <source>
+	 * : Name of source website to be cloned. Format [user@ssh-hostname:]sitename
+	 *
+	 * <destination>
+	 * : Name of destination website to be cloned. Format [user@ssh-hostname:]sitename
+	 *
+	 * [--files]
+	 * : Sync only files.
+	 *
+	 * [--db]
+	 * : Sync only database.
+	 *
+	 * [--uploads]
+	 * : Sync only uploads.
+	 *
+	 * [--overwrite]
+	 * : Overwrite existing site.
+	 *
+	 * [--ssl]
+	 * : Enables ssl on site.
+	 * ---
+	 * options:
+	 *      - le
+	 *      - off
+	 *      - self
+	 *      - inherit
+	 *      - custom
+	 * ---
+	 *
+	 * [--ssl-key=<ssl-key-path>]
+	 * : Path to the SSL key file.
+	 *
+	 * [--ssl-crt=<ssl-crt-path>]
+	 * : Path to the SSL crt file.
+	 *
+	 * [--wildcard]
+	 * : Gets wildcard SSL.
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     # Clone site on same host
+	 *     $ ee site clone foo.com bar.com
+	 *
+	 *     # Clone site from remote
+	 *     $ ee site clone root@foo.com:foo.com bar.com
+	 *
+	 *     # Clone site from remote
+	 *     $ ee site clone root@foo.com:foo.com .
+	 *
+	 *     # Clone site to remote
+	 *     $ ee site clone foo.com root@foo.com:bar.com
+	 *
+	 *
+	 */
+	public function clone( $args, $assoc_args ) {
+		list( $source, $destination ) = get_transfer_details( $args[0], $args[1] );
+
+		check_site_access( $source, $destination, $assoc_args );
+
+		if ( get_flag_value( $assoc_args, 'files' ) ) {
+			$sync = 'files';
+		} elseif ( get_flag_value( $assoc_args, 'uploads' ) ) {
+			$sync = 'uploads';
+		} elseif ( get_flag_value( $assoc_args, 'db' ) ) {
+			$sync = 'db';
+		} else {
+			$sync = 'all';
+		}
+
+		$operations = [
+			'create_site' => ! get_flag_value( $assoc_args, 'overwrite' ),
+			'sync' =>  $sync
+		];
+
+		if ( $operations['create_site'] && $destination->create_site( $source, $assoc_args )->return_code ) {
+			EE::error( 'Cannot create site ' . $destination->name . '. Please check logs for more info or rerun the command with --debug flag.' );
+		} else {
+			$destination->ensure_site_exists();
+			$destination->set_site_details();
+		}
+
+		if ( $operations['sync'] === 'files' || $operations['sync'] === 'uploads' || $operations['sync'] === 'all' ) {
+			EE::log( 'Syncing files' );
+			copy_site_files( $source, $destination, $operations['sync'] );
+		}
+
+		if ( $operations['sync'] === 'db' || $operations['sync'] === 'all' ) {
+			EE::log('Syncing database');
+			copy_site_db( $source, $destination );
+		}
+		EE::success( 'Site cloned successfully' );
 	}
 
 	abstract public function create( $args, $assoc_args );
