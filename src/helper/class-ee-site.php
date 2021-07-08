@@ -357,8 +357,16 @@ abstract class EE_Site_Command {
 	 * [<site-name>]
 	 * : Name of the site.
 	 *
-	 * [--ssl=<ssl>]
+	 * [--ssl[=<ssl>]]
 	 * : Enable ssl on site
+	 * ---
+	 * options:
+	 *   - le
+	 *   - self
+	 *   - inherit
+	 *   - custom
+	 *   - "off"
+	 * ---
 	 *
 	 * [--wildcard]
 	 * : Enable wildcard SSL on site.
@@ -837,18 +845,34 @@ abstract class EE_Site_Command {
 	 */
 	protected function update_ssl( $assoc_args ) {
 
-		$ssl            = get_flag_value( $assoc_args, 'ssl', false );
+		$ssl            = EE\Utils\get_value_if_flag_isset( $assoc_args, 'ssl', 'le' );
 		$wildcard       = get_flag_value( $assoc_args, 'wildcard', false );
-		$show_error     = $this->site_data->site_ssl ? true : false;
-		$wildcard_error = ( ! $this->site_data->site_ssl_wildcard && $wildcard ) ? true : false;
 
-		$error = $wildcard_error ? 'Update from normal ssl to wildcard is not supported yet.' : 'Site ' . $this->site_data->site_url . ' already contains SSL.';
-
-		if ( $show_error ) {
-			EE::error( $error );
+		if ( $ssl === 'off' ) {
+			$ssl = false;
 		}
 
-		EE::log( 'Starting ssl update for: ' . $this->site_data->site_url );
+		if ( ! $this->site_data->site_ssl_wildcard && $wildcard ) {
+			EE::error( 'Update from normal SSL to wildcard SSL is not supported yet.' );
+		}
+
+		if ( $this->site_data->site_ssl_wildcard && ! $wildcard ) {
+			EE::error( 'Update from wildcard SSL to normal SSL is not supported yet.' );
+		}
+
+		if ( $this->site_data->site_ssl && $ssl ) {
+			EE::error( 'SSL is already enabled on ' . $this->site_data->site_url );
+		}
+
+		if ( ! $this->site_data->site_ssl && ! $ssl ) {
+			EE::error( 'SSL is already disabled on ' . $this->site_data->site_url );
+		}
+
+		if ( ! $ssl && $wildcard ) {
+			EE::error( 'You cannot use --wildcard flag with --ssl=off' );
+		}
+
+		EE::log( 'Starting SSL update for: ' . $this->site_data->site_url );
 		try {
 			$this->site_data->site_ssl          = $ssl;
 			$this->site_data->site_ssl_wildcard = $wildcard ? 1 : 0;
@@ -857,14 +881,40 @@ abstract class EE_Site_Command {
 			$array_data                  = ( array ) $this->site_data;
 			$this->site_data             = reset( $array_data );
 			$this->site_data['site_ssl'] = $ssl;
-			$this->www_ssl_wrapper( [ 'nginx' ] );
+
+			if( $ssl ) {
+				$this->www_ssl_wrapper( [ 'nginx' ] );
+			} else {
+				$this->disable_ssl();
+			}
+
 			$site->site_ssl = $ssl;
 		} catch ( \Exception $e ) {
 			EE::error( $e->getMessage() );
 		}
+
 		$site->save();
-		EE::success( 'Enabled ssl for ' . $this->site_data['site_url'] );
+
+		if ( $ssl ) {
+			EE::success( 'Enabled SSL for ' . $this->site_data['site_url'] );
+		} else {
+			EE::success( 'Disabled SSL for ' . $this->site_data['site_url'] );
+		}
+
 		delem_log( 'site ssl update end' );
+	}
+
+	/**
+	 * Disables SSL on a site.
+	 *
+	 * @throws \Exception
+	 */
+	private function disable_ssl() {
+
+		$this->dump_docker_compose_yml([ 'nohttps' => 'nohttps' ]);
+
+		\EE\Site\Utils\start_site_containers( $this->site_data['site_fs_path'], ['nginx'] );
+		\EE\Site\Utils\reload_global_nginx_proxy();
 	}
 
 	/**
