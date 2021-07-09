@@ -911,7 +911,7 @@ abstract class EE_Site_Command {
 	 */
 	private function disable_ssl() {
 
-		$this->dump_docker_compose_yml([ 'nohttps' => 'nohttps' ]);
+		$this->dump_docker_compose_yml([ 'nohttps' => true ]);
 
 		\EE\Site\Utils\start_site_containers( $this->site_data['site_fs_path'], ['nginx'] );
 		\EE\Site\Utils\reload_global_nginx_proxy();
