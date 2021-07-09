@@ -358,7 +358,7 @@ abstract class EE_Site_Command {
 	 * : Name of the site.
 	 *
 	 * [--ssl[=<ssl>]]
-	 * : Enable ssl on site
+	 * : Update ssl on site
 	 * ---
 	 * options:
 	 *   - le
