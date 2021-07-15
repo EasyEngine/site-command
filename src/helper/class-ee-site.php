@@ -363,6 +363,17 @@ abstract class EE_Site_Command {
 	 * [--wildcard]
 	 * : Enable wildcard SSL on site.
 	 *
+	 * [--cache[=<cache>]]
+	 * : Enable / Disable cache on site.
+	 * ---
+	 * options:
+	 *  - "on"
+	 *  - "off"
+	 * ---
+	 *
+	 * [--with-local-redis]
+	 * : Enable cache with local redis container.
+	 *
 	 * [--php=<php-version>]
 	 * : PHP version for site. Currently only supports PHP 5.6, 7.0, 7.2, 7.3, 7.4, 8.0 and latest.
 	 * ---
@@ -431,6 +442,7 @@ abstract class EE_Site_Command {
 		$args            = auto_site_name( $args, 'site', __FUNCTION__ );
 		$this->site_data = get_site_info( $args, true, true, false );
 		$ssl             = get_flag_value( $assoc_args, 'ssl', false );
+		$cache           = get_flag_value( $assoc_args, 'cache', false );
 		$php             = get_flag_value( $assoc_args, 'php', false );
 		$proxy_cache     = get_flag_value( $assoc_args, 'proxy-cache', false );
 		$add_domains     = get_flag_value( $assoc_args, 'add-alias-domains', false );
@@ -438,6 +450,10 @@ abstract class EE_Site_Command {
 
 		if ( $ssl ) {
 			$this->update_ssl( $assoc_args );
+		}
+
+		if ( $cache ) {
+			$this->update_cache( $assoc_args );
 		}
 
 		if ( $php ) {
@@ -453,6 +469,36 @@ abstract class EE_Site_Command {
 		}
 	}
 
+	/**
+	 * Update cache of a site
+	 *
+	 * @param array|bool $assoc_args Associate arguments passed to update command
+	 */
+	protected function update_cache( $assoc_args ) {
+
+		$cache = get_flag_value( $assoc_args, 'cache', false );
+		$local_cache = get_flag_value( $assoc_args, 'with-local-redis', false );
+		$already_local_cache = $this->site_data->cache_host === 'redis';
+
+		if ( $cache === 'on' ) {
+			$cache = true;
+		} elseif( $cache === 'off') {
+			$cache = false;
+		}
+
+		if ( $cache && $this->site_data->cache_host && $local_cache === $already_local_cache ) {
+			$local_cache_message = $local_cache ? ' with local cache' : '';
+			EE::error( 'Cache is already enabled on ' . $this->site_data['site_url'] . $local_cache_message );
+		} elseif ( ! $cache && ! $this->site_data->cache_host ) {
+			EE::error( 'Cache is already disabled on ' . $this->site_data['site_url'] );
+		}
+
+		$action = $cache ? 'Enabling' : 'Disabling' ;
+		$local_cache_message = $local_cache ? ' with local cache' : '';
+
+		EE::log( $action . ' cache on ' . $this->site_data->site_url . $local_cache_message );
+
+	}
 
 	/**
 	 * Function to update alias domains of a site.
