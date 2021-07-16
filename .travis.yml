@@ -1,14 +1,14 @@
 sudo: required
 
+dist: xenial
 language: php
-php: 7.1
+php: 7.2
 
 env:
   global:
     - TEST_COMMAND=$(echo $TRAVIS_REPO_SLUG | cut -d/ -f 2) # Get command name to be tested
 
 before_script:
-  - sudo curl -L https://github.com/docker/compose/releases/download/1.22.0/docker-compose-$(uname -s)-$(uname -m) -o /usr/local/bin/docker-compose
   - |
     # Remove Xdebug for a huge performance increase:
     if [ -f ~/.phpenv/versions/$(phpenv version-name)/etc/conf.d/xdebug.ini ]; then
@@ -16,8 +16,8 @@ before_script:
     else
       echo "xdebug.ini does not exist"
     fi
+  - sudo ./ci/test-env-install.sh
   - ./ci/prepare.sh
-  - ./ci/add-test-certs.sh
 
 script:
   - cd "$TRAVIS_BUILD_DIR/../easyengine"

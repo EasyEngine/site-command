@@ -40,10 +40,10 @@ class Site_Command {
 	 */
 	public static function add_site_type( $name, $callback ) {
 
-		if ( isset( self::$instance->site_types[ $name ] ) ) {
+		if ( isset( self::instance()->site_types[ $name ] ) ) {
 			EE::warning( sprintf( '%s site-type had already been previously registered by %s. It is overridden by the new package class %s. Please update your packages to resolve this.', $name, self::$instance->site_types[ $name ], $callback ) );
 		}
-		self::$instance->site_types[ $name ] = $callback;
+		self::instance()::$site_types[ $name ] = $callback;
 	}
 
 	/**
@@ -52,7 +52,7 @@ class Site_Command {
 	 * @return array associative array of site-types and their callbacks.
 	 */
 	public static function get_site_types() {
-		return self::$instance->site_types;
+		return self::instance()::$site_types;
 	}
 
 	/**
@@ -101,6 +101,37 @@ class Site_Command {
 					unset( $assoc_args['type'] );
 				}
 			}
+		} elseif ( in_array( reset( $args ), [ 'ssl-renew' ], true ) && array_key_exists( 'all', $assoc_args ) ) {
+			$sites = Site::all();
+			unset( $assoc_args['all'] );
+			foreach ( $sites as $site ) {
+				$type     = $site->site_type;
+				$args     = [ 'site', 'ssl-renew', $site->site_url ];
+				$callback = $site_types[ $type ];
+
+				if ( 'le' !== $site->site_ssl || ! $site->site_enabled || 'inherit' === $site->site_ssl ) {
+					continue;
+				}
+
+				$api_key_absent        = empty( EE\Utils\get_config_value( 'cloudflare-api-key' ) );
+				$skip_wildcard_warning = false;
+
+				if ( $site->site_ssl_wildcard && $api_key_absent ) {
+					EE::warning( "Wildcard site found: $site->site_url, skipping it as api keys not found. Please renew this site manually using command `ee site ssl-renew $site->site_url`" );
+					if ( ! $skip_wildcard_warning ) {
+						EE::warning( "As this is a wildcard certificate, it cannot be automatically renewed.\nPlease run `ee site ssl-renew $site->site_url` to renew the certificate, or add cloudflare api key in EasyEngine config. Ref: https://rt.cx/eecf" );
+						$skip_wildcard_warning = true;
+					}
+					continue;
+				}
+
+				$command      = EE::get_root_command();
+				$leaf_command = CommandFactory::create( 'site', $callback, $command );
+				$command->add_subcommand( 'site', $leaf_command );
+
+				EE::run_command( $args, $assoc_args );
+			}
+			die;
 		} else {
 			$type = $this->determine_type( $type, $args );
 		}
@@ -178,7 +209,7 @@ class Site_Command {
 	private function convert_old_args_to_new_args( $args, $assoc_args ) {
 
 		if (
-			( ! in_array( reset( $args ), [ 'create', 'update' ], true ) &&
+			( ! in_array( reset( $args ), [ 'create' ], true ) &&
 			  ! empty( $args ) ) ||
 			! empty( $assoc_args['type'] )
 		) {
