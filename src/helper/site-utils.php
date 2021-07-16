@@ -10,6 +10,7 @@ use function EE\Utils\get_config_value;
 use function EE\Utils\sanitize_file_folder_name;
 use function EE\Utils\remove_trailing_slash;
 use function EE\Utils\trailingslashit;
+use EE\Model\Option;
 
 /**
  * Get the site-name from the path from where ee is running if it is a valid site path.
@@ -754,4 +755,19 @@ function remove_etc_hosts_entry( $site_url ) {
 	$hosts_file_new   = preg_replace( "/127\.0\.0\.1\s+$site_url_escaped\n/", '', $hosts_file );
 
 	$fs->dumpFile( '/etc/hosts', $hosts_file_new );
+}
+
+function get_subnet_ip() {
+
+	$site_ip_count = ! empty( Option::get( 'ip_val_count' ) ) ? Option::get( 'ip_val_count' ) : 0;
+
+	$site_ip_count++;
+
+	Option::set( 'ip_val_count', $site_ip_count );
+
+	return sprintf(
+		'172.18.%s.0/24',
+		$site_ip_count
+	);
+
 }
