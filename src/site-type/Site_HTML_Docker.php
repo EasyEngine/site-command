@@ -79,8 +79,6 @@ class Site_HTML_Docker {
 
 		$base[] = $nginx;
 
-		$ip = get_subnet_ip();
-
 		$binding = [
 			'services' => $base,
 			'network'  => [
@@ -90,7 +88,7 @@ class Site_HTML_Docker {
 						[ 'name' => 'io.easyengine.site=${VIRTUAL_HOST}' ],
 					],
 				],
-				'subnet_ip' => $ip,
+				'subnet_ip' => $filters['subnet_ip'],
 			]
 		];
 

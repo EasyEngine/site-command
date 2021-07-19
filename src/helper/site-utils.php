@@ -759,15 +759,21 @@ function remove_etc_hosts_entry( $site_url ) {
 
 function get_subnet_ip() {
 
-	$site_ip_count = ! empty( Option::get( 'ip_val_count' ) ) ? Option::get( 'ip_val_count' ) : 0;
+	$ip_second_octet = ! empty( Option::get( 'ip_second_octet' ) ) ? Option::get( 'ip_second_octet' ) : 2 ;
+	$ip_third_octet = ! empty( Option::get( 'ip_third_octet' ) ) ? Option::get( 'ip_third_octet' ) : 0 ;
 
-	$site_ip_count++;
+	if ( $ip_third_octet === 255 ) {
+		$ip_third_octet = 0;
+		$ip_second_octet++;
+	}
 
-	Option::set( 'ip_val_count', $site_ip_count );
+	Option::set( 'ip_second_octet', $ip_second_octet );
+	Option::set( 'ip_third_octet', $ip_third_octet );
 
 	return sprintf(
-		'172.18.%s.0/24',
-		$site_ip_count
+		'10.%s.%s.0/24',
+		$ip_second_octet,
+		$ip_third_octet,
 	);
 
 }
