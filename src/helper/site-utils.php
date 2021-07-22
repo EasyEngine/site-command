@@ -757,18 +757,29 @@ function remove_etc_hosts_entry( $site_url ) {
 	$fs->dumpFile( '/etc/hosts', $hosts_file_new );
 }
 
+/**
+ * Returns a new subnet IP.
+ *
+ * @return string
+ * @throws \Exception
+ */
 function get_subnet_ip() {
 
 	$ip_second_octet = ! empty( Option::get( 'ip_second_octet' ) ) ? Option::get( 'ip_second_octet' ) : 2 ;
 	$ip_third_octet = ! empty( Option::get( 'ip_third_octet' ) ) ? Option::get( 'ip_third_octet' ) : 0 ;
 
 	if ( $ip_third_octet === 255 ) {
+		if ( $ip_second_octet === 255 ) {
+			EE::error( 'You have reached limit for EasyEngine sites.' );
+		}
 		$ip_third_octet = 0;
 		$ip_second_octet++;
+	} else {
+		$ip_third_octet++;
 	}
 
-	Option::set( 'ip_second_octet', $ip_second_octet );
-	Option::set( 'ip_third_octet', $ip_third_octet );
+	EE::get_cache()->write( 'ip_second_octet_transient', $ip_second_octet );
+	EE::get_cache()->write( 'ip_third_octet_transient', $ip_third_octet );
 
 	return sprintf(
 		'10.%s.%s.0/24',
@@ -776,4 +787,20 @@ function get_subnet_ip() {
 		$ip_third_octet,
 	);
 
+}
+
+/**
+ * Sets subnet IP from cache.
+ *
+ * @throws \Exception
+ */
+function set_subnet_ip() {
+
+	$cache = EE::get_cache();
+
+	Option::set( 'ip_second_octet', $cache->read( 'ip_second_octet_transient' ) );
+	Option::set( 'ip_third_octet', $cache->read( 'ip_third_octet_transient' ) );
+
+	$cache->remove( 'ip_second_octet_transient' );
+	$cache->remove( 'ip_third_octet_transient' );
 }

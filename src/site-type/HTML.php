@@ -154,6 +154,9 @@ class HTML extends EE_Site_Command {
 		\EE::log( 'Configuring project.' );
 
 		$this->create_site();
+
+		EE\Site\Utils\set_subnet_ip();
+
 		\EE\Utils\delem_log( 'site create end' );
 	}
 
