@@ -34,7 +34,7 @@ class AddColumnSubnetIpMigration extends Base {
 			return;
 		}
 
-		$query = 'ALTER TABLE sites ADD COLUMN subnet_ip VARCHAR NOT NULL';
+		$query = 'ALTER TABLE sites ADD COLUMN subnet_ip VARCHAR NOT NULL default \'\'';
 
 		try {
 			self::$pdo->exec( $query );
