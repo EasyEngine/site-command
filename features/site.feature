@@ -45,7 +45,3 @@ Feature: Site Command
       And Following containers of site 'site.test' should be removed:
         | container  |
         | nginx      |
-
-  @site50
-  Scenario: Create 50 sites to test Docker limit
-    When Create '50' html site to fix docker issue

@@ -84,14 +84,6 @@ class FeatureContext implements Context
 	];
 
 	/**
-	 * Variable contain all fail sites details.
-	 *
-	 * @var array
-	 */
-	public $fail_sites = [];
-
-
-	/**
 	 * Initializes context.
 	 */
 	public function __construct()
@@ -442,61 +434,5 @@ class FeatureContext implements Context
 		if(file_exists('ee-old.phar')) {
 			unlink('ee-old.phar');
 		}
-	}
-
-	/**
-	 * Function to check site is running or not
-	 *
-	 * @param string $site Site domain name.
-	 * @return void
-	 */
-	public function checkSiteIsRunningOrNot($site)
-	{
-		$url = 'http://' . $site;
-
-		$ch = curl_init();
-		curl_setopt($ch, CURLOPT_URL, $url);
-		curl_setopt($ch, CURLOPT_HEADER, true);
-		curl_setopt($ch, CURLOPT_NOBODY, true);
-		curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-		curl_setopt($ch, CURLOPT_VERBOSE, true);
-		$headers = curl_exec($ch);
-
-		curl_close($ch);
-		if ( false === strpos( $headers, 'HTTP/1.1 200 OK' ) ) {
-			$this->fail_sites[$site] =  "Unable to find `HTTP/1.1 200 OK` \nActual output is : " . $headers;
-		}
-	}
-
-	/**
-	 * @when Create :nth html site to fix docker issue
-	 */
-	public function createNNumberOfSite($nth)
-	{
-		for ( $i=1; $i <= $nth; $i++ ) {
-			$domain             = 'example'.$i.'.test';
-			self::$test_sites[] = $domain;  // Add site name to cleanup.
-			$this->createHtmlSite($domain); // Create html site.
-		}
-		// Show list of fail sites.
-		foreach( $this->fail_sites as $site_name => $fail_site ) {
-			echo $site_name . "\n" . $fail_site . "\n";
-		}
-	}
-
-	/**
-	 * Function to create n number of html sites
-	 *
-	 * @param string $domain The site name to create site.
-	 * @return void
-	 */
-	public function createHtmlSite($domain)
-	{
-		$command = sprintf(
-			'bin/ee site create %s',
-			$domain
-		);
-		EE::launch($command, false, true);
-		$this->checkSiteIsRunningOrNot($domain);
 	}
 }
