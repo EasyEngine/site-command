@@ -5,7 +5,6 @@ namespace EE\Site\Type;
 use function EE\Utils\mustache_render;
 use function EE\Site\Utils\get_ssl_policy;
 use function EE\Site\Utils\sysctl_parameters;
-use function EE\Site\Utils\get_subnet_ip;
 
 class Site_HTML_Docker {
 
