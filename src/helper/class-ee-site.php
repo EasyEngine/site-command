@@ -2,6 +2,8 @@
 
 namespace EE\Site\Type;
 
+use AcmePhp\Ssl\Certificate;
+use AcmePhp\Ssl\Parser\CertificateParser;
 use EE;
 use EE\Model\Site;
 use EE\Model\Option;
@@ -1369,7 +1371,14 @@ abstract class EE_Site_Command {
 						}
 					}
 
-					$this->init_ssl( $this->site_data['site_url'], $this->site_data['site_fs_path'], $this->site_data['site_ssl'], $wildcard, $is_www_or_non_www_pointed, $force, $alias_domains );
+					/**
+					 * In cases like Re-enabling SSL on a site which had SSL at a time, or while renewing
+					 * certificates, need to check if the existing certificate is valid. If it is valid,
+					 * we don't need to create or get new certs. We can use the existing ones.
+					 */
+					if ( EE\Site\Utils\ssl_needs_creation( $this->site_data['site_url'] ) ) {
+						$this->init_ssl( $this->site_data['site_url'], $this->site_data['site_fs_path'], $this->site_data['site_ssl'], $wildcard, $is_www_or_non_www_pointed, $force, $alias_domains );
+					}
 				}
 
 				$this->dump_docker_compose_yml( [ 'nohttps' => false ] );

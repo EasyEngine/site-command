@@ -2,6 +2,8 @@
 
 namespace EE\Site\Utils;
 
+use AcmePhp\Ssl\Certificate;
+use AcmePhp\Ssl\Parser\CertificateParser;
 use EE;
 use EE\Model\Site;
 use Symfony\Component\Filesystem\Filesystem;
@@ -754,4 +756,39 @@ function remove_etc_hosts_entry( $site_url ) {
 	$hosts_file_new   = preg_replace( "/127\.0\.0\.1\s+$site_url_escaped\n/", '', $hosts_file );
 
 	$fs->dumpFile( '/etc/hosts', $hosts_file_new );
+}
+
+/**
+ * Checks if the site certificate needs renewal.
+ *
+ * The way it differs from Site_Letsencrypt::isRenewalNecessary is that the latter
+ * checks the certificate from ACMEPHP cache. This checks the certificate from
+ * Nginx Proxy cert directory. So this function will also work for non-le certificates
+ * (custom certs).
+ *
+ * @param $site_url string URL of the site whose SSL we need to check
+ * @return bool
+ */
+function ssl_needs_creation( $site_url ) {
+	$certificatePath = EE_SERVICE_DIR . '/nginx-proxy/certs/' . $site_url . '.crt';
+
+	if ( file_exists( $certificatePath ) ) {
+		$certificate = new Certificate( file_get_contents( $certificatePath ) );
+		$certificateParser = new CertificateParser();
+		$parsedCertificate = $certificateParser->parse( $certificate );
+
+		// 3024000 = 35 days.
+		if ( $parsedCertificate->getValidTo()->format( 'U' ) - time() >= 3024000 ) {
+			\EE::log(
+				sprintf(
+					'Current certificate is valid until %s, renewal is not necessary.',
+					$parsedCertificate->getValidTo()->format( 'Y-m-d H:i:s' )
+				)
+			);
+
+			return false;
+		}
+	}
+
+	return true;
 }
