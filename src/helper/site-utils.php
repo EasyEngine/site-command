@@ -765,8 +765,8 @@ function remove_etc_hosts_entry( $site_url ) {
  */
 function get_subnet_ip() {
 
-	$ip_second_octet = ! empty( Option::get( 'ip_second_octet' ) ) ? Option::get( 'ip_second_octet' ) : 2 ;
-	$ip_third_octet = ! empty( Option::get( 'ip_third_octet' ) ) ? Option::get( 'ip_third_octet' ) : 0 ;
+	$ip_second_octet = ! empty( Option::get( 'ip_second_octet' ) ) ? (int) Option::get( 'ip_second_octet' ) : 2 ;
+	$ip_third_octet = ! empty( Option::get( 'ip_third_octet' ) ) ? (int) Option::get( 'ip_third_octet' ) : 0 ;
 
 	if ( $ip_third_octet === 255 ) {
 		if ( $ip_second_octet === 255 ) {
