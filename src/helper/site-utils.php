@@ -764,43 +764,98 @@ function remove_etc_hosts_entry( $site_url ) {
  * @throws \Exception
  */
 function get_subnet_ip() {
+	$sites = Site::all(['subnet_ip']);
+	$site_ips = array_column( $sites, 'subnet_ip');
 
-	$ip_second_octet = ! empty( Option::get( 'ip_second_octet' ) ) ? (int) Option::get( 'ip_second_octet' ) : 2 ;
-	$ip_third_octet = ! empty( Option::get( 'ip_third_octet' ) ) ? (int) Option::get( 'ip_third_octet' ) : 0 ;
+	sort( $site_ips, SORT_NATURAL );
 
-	if ( $ip_third_octet === 255 ) {
-		if ( $ip_second_octet === 255 ) {
+	// Remove all the IPs that are not in 10.* range
+	$site_ips = array_filter( $site_ips, function ( $ip ) {
+		return preg_match( '/^10\./', $ip, $matches );
+	});
+
+	if ( empty( $site_ips ) ) {
+		return "10.2.0.0/24";
+	}
+	if ( $site_ips[0] !== "10.2.0.0/24" ) {
+		return "10.2.0.0/24";
+	}
+
+	// Convert string IP address to array containing just second and third octet
+	$ip_octets = array_map( function ( $ip ) {
+		$arr = explode( '.', $ip );
+		$second_octet = (int) $arr[1];
+		$third_octet  = (int) $arr[2];
+		if ( $second_octet < 0 || $second_octet > 255 ||
+			$third_octet  < 0 || $third_octet  > 255 ) {
+			throw new \Exception( "Invalid IP address found in DB:" . implode('.', $ip ) );
+		}
+		return [
+			$second_octet,
+			$third_octet,
+		];
+	}, $site_ips );
+
+	// This loop returns first non-continuous IP address that it finds.
+	foreach ( $ip_octets as $index => $ip_octet ) {
+		if ( $index === 0 ) {
+			$ip_second_octet = 2;
+			$ip_third_octet  = 0;
+			continue;
+		}
+
+		$ip_second_octet     = $ip_octet[0];
+		$ip_third_octet      = $ip_octet[1];
+
+		$old_ip_octet        = $ip_octets[ $index - 1];
+		$old_ip_second_octet = $old_ip_octet[0];
+		$old_ip_third_octet  = $old_ip_octet[1];
+
+		if ( $ip_second_octet === 255 && $ip_third_octet === 255 ) {
 			EE::error( 'You have reached limit for EasyEngine sites.' );
 		}
+
+		/**
+		 * i.e. If  old IP address:  10.2.0.0
+		 *      and new IP address:  10.2.2.0
+		 *      then it will return: 10.2.1.0
+		 */
+		if ( $ip_third_octet !== ( $old_ip_third_octet + 1 ) % 256 ) {
+			return get_next_continuous_subnet_ip( $old_ip_second_octet, $old_ip_third_octet );
+		}
+
+		/**
+		 * i.e. If  old IP address:  10.2.255.0
+		 *      and new IP address:  10.4.0.0
+		 *      then it will return: 10.3.0.0
+		 */
+		if ( $ip_third_octet === 0 &&
+			$ip_second_octet !== ( $old_ip_second_octet + 1 ) % 256 ) {
+			return get_next_continuous_subnet_ip( $old_ip_second_octet, $old_ip_third_octet );
+		}
+	}
+
+	/**
+	 * If no non-continuous IP address are found, then the next
+	 * continous IP address is generated.
+	 */
+	return get_next_continuous_subnet_ip( $ip_second_octet, $ip_third_octet );
+}
+
+/**
+ * Returns next continuous IP address
+ *
+ * @param $ip_second_octet int Second octet of current IP address
+ * @param $ip_third_octet int Third octet of current IP address
+ * @return string
+ */
+function get_next_continuous_subnet_ip( int $ip_second_octet, int $ip_third_octet ) {
+	if ( $ip_third_octet === 255 ) {
 		$ip_third_octet = 0;
 		$ip_second_octet++;
 	} else {
 		$ip_third_octet++;
 	}
 
-	EE::get_cache()->write( 'ip_second_octet_transient', $ip_second_octet );
-	EE::get_cache()->write( 'ip_third_octet_transient', $ip_third_octet );
-
-	return sprintf(
-		'10.%s.%s.0/24',
-		$ip_second_octet,
-		$ip_third_octet,
-	);
-
-}
-
-/**
- * Sets subnet IP from cache.
- *
- * @throws \Exception
- */
-function set_subnet_ip() {
-
-	$cache = EE::get_cache();
-
-	Option::set( 'ip_second_octet', $cache->read( 'ip_second_octet_transient' ) );
-	Option::set( 'ip_third_octet', $cache->read( 'ip_third_octet_transient' ) );
-
-	$cache->remove( 'ip_second_octet_transient' );
-	$cache->remove( 'ip_third_octet_transient' );
+	return "10.$ip_second_octet.$ip_third_octet.0/24";
 }

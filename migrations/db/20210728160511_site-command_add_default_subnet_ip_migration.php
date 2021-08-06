@@ -49,7 +49,6 @@ class AddDefaultSubnetIpMigration extends Base {
 			if ( $site->site_enabled ) {
 				$site_type->refresh( [ $site->site_url ], [] );
 			}
-			EE\Site\Utils\set_subnet_ip();
 		}
 	}
 
