@@ -767,12 +767,14 @@ function get_subnet_ip() {
 	$sites = Site::all(['subnet_ip']);
 	$site_ips = array_column( $sites, 'subnet_ip');
 
-	sort( $site_ips, SORT_NATURAL );
-
 	// Remove all the IPs that are not in 10.* range
 	$site_ips = array_filter( $site_ips, function ( $ip ) {
 		return preg_match( '/^10\./', $ip, $matches );
 	});
+
+	$site_ips = array_values( $site_ips );
+
+	sort( $site_ips, SORT_NATURAL );
 
 	if ( empty( $site_ips ) ) {
 		return "10.2.0.0/24";
