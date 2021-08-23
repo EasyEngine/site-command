@@ -48,6 +48,7 @@ class CreateTableSiteMigration extends Base {
 			db_root_password     VARCHAR,
 			db_host              VARCHAR,
 			db_port              VARCHAR,
+			subnet_ip            VARCHAR,
 			app_sub_type         VARCHAR,
 			app_admin_url        VARCHAR,
 			app_admin_email      VARCHAR,
