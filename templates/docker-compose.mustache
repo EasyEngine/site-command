@@ -77,6 +77,9 @@ networks:
     {{#label}}
      - "{{name}}"
     {{/label}}
+    ipam:
+      config:
+      - subnet: '{{subnet_ip}}'
     {{/networks_labels}}
   global-frontend-network:
     external:
