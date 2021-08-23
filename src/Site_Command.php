@@ -164,9 +164,9 @@ class Site_Command {
 	 * @param array $args          Command line arguments passed to site-command.
 	 * @param string $default_type Default site-type.
 	 *
+	 * @return string site-type.
 	 * @throws \EE\ExitException
 	 *
-	 * @return string site-type.
 	 */
 	private function determine_type( $default_type, $args ) {
 

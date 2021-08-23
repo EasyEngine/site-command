@@ -135,13 +135,18 @@ class HTML extends EE_Site_Command {
 		if ( ! empty( $alias_domains ) ) {
 			$comma_seprated_domains = explode( ',', $alias_domains );
 			foreach ( $comma_seprated_domains as $domain ) {
-				$trimmed_domain = trim( $domain );
+				$trimmed_domain                   = trim( $domain );
 				$this->site_data['alias_domains'] .= $trimmed_domain . ',';
 			}
 		}
 		$this->site_data['alias_domains'] = substr( $this->site_data['alias_domains'], 0, - 1 );
 
-		$this->site_data['site_ssl'] = get_value_if_flag_isset( $assoc_args, 'ssl', [ 'le', 'self', 'inherit', 'custom' ], 'le' );
+		$this->site_data['site_ssl'] = get_value_if_flag_isset( $assoc_args, 'ssl', [
+			'le',
+			'self',
+			'inherit',
+			'custom'
+		], 'le' );
 		if ( 'custom' === $this->site_data['site_ssl'] ) {
 			try {
 				$this->validate_site_custom_ssl( get_flag_value( $assoc_args, 'ssl-key' ), get_flag_value( $assoc_args, 'ssl-crt' ) );
@@ -193,6 +198,7 @@ class HTML extends EE_Site_Command {
 			$site = (array) Site::find( $this->site_data['site_url'] );
 			$site = reset( $site );
 			EE::log( json_encode( $site ) );
+
 			return;
 		}
 
@@ -236,7 +242,7 @@ class HTML extends EE_Site_Command {
 
 		$server_name = implode( ' ', explode( ',', $this->site_data['alias_domains'] ) );
 
-		$data = [
+		$data                 = [
 			'server_name'   => $server_name,
 			'document_root' => $this->site_data['site_container_fs_path'],
 		];
