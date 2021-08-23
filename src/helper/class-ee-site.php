@@ -827,7 +827,7 @@ abstract class EE_Site_Command {
 			}, $custom_ini_data );
 		} else {
 			$custom_ini_data = array_map( function ( $custom_ini_data ) {
-				$sendmail_path = 'sendmail_path = /usr/sbin/sendmail -t -i -f ee4@easyengine.io';
+				$sendmail_path = 'sendmail_path = /usr/sbin/sendmail -t -i -f example@example.com';
 
 				return stristr( $custom_ini_data, 'sendmail_path' ) ? "$sendmail_path\n" : $custom_ini_data;
 			}, $custom_ini_data );
