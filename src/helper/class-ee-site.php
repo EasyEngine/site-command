@@ -51,12 +51,12 @@ abstract class EE_Site_Command {
 	/**
 	 * @var array $site_data Associative array containing essential site related information.
 	 */
-	protected $site_data;
+	public $site_data;
 
 	/**
 	 * @var array $site_meta Associative array containing essential site meta related information.
 	 */
-	protected $site_meta;
+	public $site_meta;
 
 	public function __construct() {
 
