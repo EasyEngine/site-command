@@ -834,7 +834,7 @@ function get_subnet_ip() {
 		];
 	}, $site_ips );
 
-	// This loop returns first non-continuous IP address that it finds.
+	// This loop returns first non-continuous IP address that it finds in sites table.
 	foreach ( $ip_octets as $index => $ip_octet ) {
 		if ( $index === 0 ) {
 			$ip_second_octet = 2;
@@ -859,7 +859,7 @@ function get_subnet_ip() {
 		 *      then it will return: 10.2.1.0
 		 */
 		if ( $ip_third_octet !== ( $old_ip_third_octet + 1 ) % 256 ) {
-			return get_next_continuous_subnet_ip( $old_ip_second_octet, $old_ip_third_octet );
+			return get_next_available_subnet_ip( $old_ip_second_octet, $old_ip_third_octet );
 		}
 
 		/**
@@ -869,7 +869,7 @@ function get_subnet_ip() {
 		 */
 		if ( $ip_third_octet === 0 &&
 			$ip_second_octet !== ( $old_ip_second_octet + 1 ) % 256 ) {
-			return get_next_continuous_subnet_ip( $old_ip_second_octet, $old_ip_third_octet );
+			return get_next_available_subnet_ip( $old_ip_second_octet, $old_ip_third_octet );
 		}
 	}
 
@@ -877,23 +877,92 @@ function get_subnet_ip() {
 	 * If no non-continuous IP address are found, then the next
 	 * continous IP address is generated.
 	 */
-	return get_next_continuous_subnet_ip( $ip_second_octet, $ip_third_octet );
+	return get_next_available_subnet_ip( $ip_second_octet, $ip_third_octet );
 }
 
 /**
- * Returns next continuous IP address
+ * Returns next available subnet IP.
  *
  * @param $ip_second_octet int Second octet of current IP address
  * @param $ip_third_octet int Third octet of current IP address
  * @return string
  */
-function get_next_continuous_subnet_ip( int $ip_second_octet, int $ip_third_octet ) {
-	if ( $ip_third_octet === 255 ) {
-		$ip_third_octet = 0;
-		$ip_second_octet++;
-	} else {
-		$ip_third_octet++;
+function get_next_available_subnet_ip( int $ip_second_octet, int $ip_third_octet, int $mask = 24 ) {
+	$existing_subnets = EE::launch( 'ip route show | cut -d \' \' -f1 | grep ^10' );
+	$existing_subnets = array_filter(
+		explode( "\n", $existing_subnets->stdout )
+	);
+
+	while ( $ip_second_octet !== 255 && $ip_third_octet !== 255 ) {
+		$ip = "10.$ip_second_octet.$ip_third_octet.0";
+
+		list( $subnet_start, $subnet_end ) = get_subnet_range( $ip, $mask );
+
+		$subnet_start = long2ip( $subnet_start );
+		$subnet_end   = long2ip( $subnet_end );
+
+		if ( ! ip_in_existing_subnets( $subnet_start, $existing_subnets ) &&
+			! ip_in_existing_subnets( $subnet_end, $existing_subnets ) ) {
+			return $ip . '/' . $mask;
+		}
+
+		if ( $ip_third_octet === 255 ) {
+			$ip_third_octet = 0;
+			$ip_second_octet++;
+		} else {
+			$ip_third_octet++;
+		}
+	}
+}
+
+/**
+ * Check if IP is in existing subnets
+ *
+ * @param $ip string IP to check in existing subnets
+ * @return bool
+ */
+function ip_in_existing_subnets( string $ip, array $existing_subnets ) {
+
+	foreach( $existing_subnets as $subnet ) {
+		if ( ip_in_subnet( $ip, $subnet ) ) {
+			return true;
+		}
 	}
 
-	return "10.$ip_second_octet.$ip_third_octet.0/24";
+	return false;
+}
+
+/**
+ * Check if an IP is in a subnet.
+ *
+ * @param $IP string IP that needs to be checked
+ * @param $CIDR string Subnet in which IP will be searched.
+ * @return bool
+ */
+function ip_in_subnet(string $IP, string $CIDR) {
+
+	list( $subnet, $mask ) = explode ('/', $CIDR );
+
+	$ip_subnet = ip2long( $subnet );
+	$ip_mask = ~(( 1 << ( 32 - $mask )) - 1 );
+	$src_ip = ip2long( $IP );
+
+	return (( $src_ip & $ip_mask ) == ( $ip_subnet & $ip_mask ));
+}
+
+/**
+ * Return starting and ending IP address of a subnet range.
+ *
+ * @param $ip
+ * @param $mask
+ * @return int[]|string[]
+ */
+function get_subnet_range( $ip, $mask ) {
+	$ipl = ip2long( $ip );
+	$maskl = ~(( 1 << ( 32 - $mask )) - 1 );
+
+	$range_start = $ipl & $maskl;
+	$range_end = $ipl | ~$maskl;
+
+	return [ $range_start, $range_end ];
 }
