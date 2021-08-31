@@ -794,108 +794,28 @@ function ssl_needs_creation( $site_url ) {
 }
 
 /**
- * Returns a new subnet IP.
+ * Get a new available subnet.
  *
- * @return string
- * @throws \Exception
+ * @param int $mask
+ * @return string|void
+ * @throws EE\ExitException
  */
-function get_subnet_ip() {
+function get_available_subnet( int $mask = 24 ) {
 	$sites = Site::all(['subnet_ip']);
 	$site_ips = array_column( $sites, 'subnet_ip');
 
-	// Remove all the IPs that are not in 10.* range
-	$site_ips = array_filter( $site_ips, function ( $ip ) {
-		return preg_match( '/^10\./', $ip, $matches );
-	});
-
-	$site_ips = array_values( $site_ips );
-
-	sort( $site_ips, SORT_NATURAL );
-
-	if ( empty( $site_ips ) ) {
-		return "10.2.0.0/24";
-	}
-	if ( $site_ips[0] !== "10.2.0.0/24" ) {
-		return "10.2.0.0/24";
-	}
-
-	// Convert string IP address to array containing just second and third octet
-	$ip_octets = array_map( function ( $ip ) {
-		$arr = explode( '.', $ip );
-		$second_octet = (int) $arr[1];
-		$third_octet  = (int) $arr[2];
-		if ( $second_octet < 0 || $second_octet > 255 ||
-			$third_octet  < 0 || $third_octet  > 255 ) {
-			throw new \Exception( "Invalid IP address found in DB:" . implode('.', $ip ) );
-		}
-		return [
-			$second_octet,
-			$third_octet,
-		];
-	}, $site_ips );
-
-	// This loop returns first non-continuous IP address that it finds in sites table.
-	foreach ( $ip_octets as $index => $ip_octet ) {
-		if ( $index === 0 ) {
-			$ip_second_octet = 2;
-			$ip_third_octet  = 0;
-			continue;
-		}
-
-		$ip_second_octet     = $ip_octet[0];
-		$ip_third_octet      = $ip_octet[1];
-
-		$old_ip_octet        = $ip_octets[ $index - 1];
-		$old_ip_second_octet = $old_ip_octet[0];
-		$old_ip_third_octet  = $old_ip_octet[1];
-
-		if ( $ip_second_octet === 255 && $ip_third_octet === 255 ) {
-			EE::error( 'You have reached limit for EasyEngine sites.' );
-		}
-
-		/**
-		 * i.e. If  old IP address:  10.2.0.0
-		 *      and new IP address:  10.2.2.0
-		 *      then it will return: 10.2.1.0
-		 */
-		if ( $ip_third_octet !== ( $old_ip_third_octet + 1 ) % 256 ) {
-			return get_next_available_subnet_ip( $old_ip_second_octet, $old_ip_third_octet );
-		}
-
-		/**
-		 * i.e. If  old IP address:  10.2.255.0
-		 *      and new IP address:  10.4.0.0
-		 *      then it will return: 10.3.0.0
-		 */
-		if ( $ip_third_octet === 0 &&
-			$ip_second_octet !== ( $old_ip_second_octet + 1 ) % 256 ) {
-			return get_next_available_subnet_ip( $old_ip_second_octet, $old_ip_third_octet );
-		}
-	}
-
-	/**
-	 * If no non-continuous IP address are found, then the next
-	 * continous IP address is generated.
-	 */
-	return get_next_available_subnet_ip( $ip_second_octet, $ip_third_octet );
-}
-
-/**
- * Returns next available subnet IP.
- *
- * @param $ip_second_octet int Second octet of current IP address
- * @param $ip_third_octet int Third octet of current IP address
- * @return string
- */
-function get_next_available_subnet_ip( int $ip_second_octet, int $ip_third_octet, int $mask = 24 ) {
-	$existing_subnets = EE::launch( 'ip route show | cut -d \' \' -f1 | grep ^10' );
-	$existing_subnets = array_filter(
-		explode( "\n", $existing_subnets->stdout )
+	$existing_host_subnets = EE::launch( 'ip route show | cut -d \' \' -f1 | grep ^10' );
+	$existing_host_subnets = array_filter(
+		explode( "\n", $existing_host_subnets->stdout )
 	);
 
-	while ( $ip_second_octet !== 255 && $ip_third_octet !== 255 ) {
-		$ip = "10.$ip_second_octet.$ip_third_octet.0";
+	$existing_subnets = array_unique( array_merge( $site_ips, $existing_host_subnets ) );
 
+	sort( $existing_subnets, SORT_NATURAL );
+
+	$ip = "10.0.0.0";
+
+	while ( $ip !== "10.255.255.0" ) {
 		list( $subnet_start, $subnet_end ) = get_subnet_range( $ip, $mask );
 
 		$subnet_start = long2ip( $subnet_start );
@@ -906,13 +826,11 @@ function get_next_available_subnet_ip( int $ip_second_octet, int $ip_third_octet
 			return $ip . '/' . $mask;
 		}
 
-		if ( $ip_third_octet === 255 ) {
-			$ip_third_octet = 0;
-			$ip_second_octet++;
-		} else {
-			$ip_third_octet++;
-		}
+		$ip = ip2long( $subnet_end ) + 1;
+		$ip = long2ip( $ip );
 	}
+
+	EE::error( "It seems you have run out of your private IP adress space." );
 }
 
 /**

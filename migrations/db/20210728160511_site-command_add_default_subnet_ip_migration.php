@@ -41,7 +41,7 @@ class AddDefaultSubnetIpMigration extends Base {
 		$sites = Site::all();
 
 		foreach ( $sites as $site ) {
-			$site->subnet_ip = EE\Site\Utils\get_subnet_ip();
+			$site->subnet_ip = EE\Site\Utils\get_available_subnet();
 			$site->save();
 
 			$site_type = $site->site_type === 'html' ? new EE\Site\Type\HTML() :
