@@ -825,9 +825,9 @@ function get_available_subnet( int $mask = 24 ) {
 
 	sort( $existing_subnets, SORT_NATURAL );
 
-	$ip = "10.0.0.0";
+	$ip = '10.0.0.0';
 
-	while ( $ip !== "10.255.255.0" ) {
+	while ( $ip !== '10.255.255.0' ) {
 		list( $subnet_start, $subnet_end ) = get_subnet_range( $ip, $mask );
 
 		$subnet_start = long2ip( $subnet_start );
@@ -842,7 +842,7 @@ function get_available_subnet( int $mask = 24 ) {
 		$ip = long2ip( $ip );
 	}
 
-	EE::error( "It seems you have run out of your private IP adress space." );
+	EE::error( 'It seems you have run out of your private IP adress space.' );
 }
 
 /**
