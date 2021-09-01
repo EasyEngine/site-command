@@ -5,6 +5,7 @@ namespace EE\Site\Utils;
 use AcmePhp\Ssl\Certificate;
 use AcmePhp\Ssl\Parser\CertificateParser;
 use EE;
+use EE\Model\Option;
 use EE\Model\Site;
 use Symfony\Component\Filesystem\Filesystem;
 use function EE\Utils\get_flag_value;
@@ -808,6 +809,17 @@ function get_available_subnet( int $mask = 24 ) {
 	$existing_host_subnets = array_filter(
 		explode( "\n", $existing_host_subnets->stdout )
 	);
+
+	$frontend_subnet = Option::get( 'frontend_subnet_ip' );
+	$backend_subnet = Option::get( 'backend_subnet_ip' );
+
+	if ( $frontend_subnet ) {
+		array_push( $site_ips, $frontend_subnet );
+	}
+
+	if ( $backend_subnet ) {
+		array_push( $site_ips, $backend_subnet );
+	}
 
 	$existing_subnets = array_unique( array_merge( $site_ips, $existing_host_subnets ) );
 
