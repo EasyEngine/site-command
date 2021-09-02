@@ -25,7 +25,8 @@ class InstallIproute2 extends Base {
 
 			return;
 		}
-		EE::exec( 'sudo apt install iproute2' );
+
+		EE::exec( 'bash -c \'if command -v apt; then sudo apt install iproute2; fi\'' );
 	}
 
 	/**
