@@ -821,7 +821,11 @@ function get_available_subnet( int $mask = 24 ) {
 		array_push( $site_ips, $backend_subnet );
 	}
 
-	$existing_subnets = array_unique( array_merge( $site_ips, $existing_host_subnets ) );
+	$existing_subnets = array_filter(
+		array_unique(
+			array_merge( $site_ips, $existing_host_subnets )
+		)
+	);
 
 	sort( $existing_subnets, SORT_NATURAL );
 
@@ -843,6 +847,11 @@ function get_available_subnet( int $mask = 24 ) {
 	}
 
 	EE::error( 'It seems you have run out of your private IP adress space.' );
+}
+
+
+function subnet_mask_int2long( int $mask ) {
+	return ~(( 1 << ( 32 - $mask )) - 1 );
 }
 
 /**
@@ -874,7 +883,7 @@ function ip_in_subnet(string $IP, string $CIDR) {
 	list( $subnet, $mask ) = explode ('/', $CIDR );
 
 	$ip_subnet = ip2long( $subnet );
-	$ip_mask = ~(( 1 << ( 32 - $mask )) - 1 );
+	$ip_mask = subnet_mask_int2long( $mask );
 	$src_ip = ip2long( $IP );
 
 	return (( $src_ip & $ip_mask ) == ( $ip_subnet & $ip_mask ));
@@ -889,7 +898,7 @@ function ip_in_subnet(string $IP, string $CIDR) {
  */
 function get_subnet_range( $ip, $mask ) {
 	$ipl = ip2long( $ip );
-	$maskl = ~(( 1 << ( 32 - $mask )) - 1 );
+	$maskl = subnet_mask_int2long( $mask );
 
 	$range_start = $ipl & $maskl;
 	$range_end = $ipl | ~$maskl;

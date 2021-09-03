@@ -4,6 +4,7 @@ namespace EE\Migration;
 use EE;
 use EE\Model\Site;
 use PDOException;
+use function EE\Service\Utils\ensure_global_network_initialized;
 use function EE\Site\Utils\auto_site_name;
 use function EE\Site\Utils\get_site_info;
 
@@ -39,6 +40,8 @@ class AddDefaultSubnetIpMigration extends Base {
 		}
 
 		$sites = Site::all();
+
+		ensure_global_network_initialized();
 
 		foreach ( $sites as $site ) {
 			$site->subnet_ip = EE\Site\Utils\get_available_subnet();
