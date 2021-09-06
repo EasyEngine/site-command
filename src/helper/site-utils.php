@@ -2,7 +2,10 @@
 
 namespace EE\Site\Utils;
 
+use AcmePhp\Ssl\Certificate;
+use AcmePhp\Ssl\Parser\CertificateParser;
 use EE;
+use EE\Model\Option;
 use EE\Model\Site;
 use Symfony\Component\Filesystem\Filesystem;
 use function EE\Utils\get_flag_value;
@@ -10,7 +13,6 @@ use function EE\Utils\get_config_value;
 use function EE\Utils\sanitize_file_folder_name;
 use function EE\Utils\remove_trailing_slash;
 use function EE\Utils\trailingslashit;
-use EE\Model\Option;
 
 /**
  * Get the site-name from the path from where ee is running if it is a valid site path.
@@ -769,106 +771,148 @@ function remove_etc_hosts_entry( $site_url ) {
 }
 
 /**
- * Returns a new subnet IP.
+ * Checks if the site certificate needs renewal.
  *
- * @return string
- * @throws \Exception
+ * The way it differs from Site_Letsencrypt::isRenewalNecessary is that the latter
+ * checks the certificate from ACMEPHP cache. This checks the certificate from
+ * Nginx Proxy cert directory. So this function will also work for non-le certificates
+ * (custom certs).
+ *
+ * @param $site_url string URL of the site whose SSL we need to check
+ * @return bool
  */
-function get_subnet_ip() {
-	$sites = Site::all(['subnet_ip']);
-	$site_ips = array_column( $sites, 'subnet_ip');
+function ssl_needs_creation( $site_url ) {
+	$certificatePath = EE_SERVICE_DIR . '/nginx-proxy/certs/' . $site_url . '.crt';
 
-	// Remove all the IPs that are not in 10.* range
-	$site_ips = array_filter( $site_ips, function ( $ip ) {
-		return preg_match( '/^10\./', $ip, $matches );
-	});
+	if ( file_exists( $certificatePath ) ) {
+		$certificate = new Certificate( file_get_contents( $certificatePath ) );
+		$certificateParser = new CertificateParser();
+		$parsedCertificate = $certificateParser->parse( $certificate );
 
-	$site_ips = array_values( $site_ips );
+		// 3024000 = 35 days.
+		if ( $parsedCertificate->getValidTo()->format( 'U' ) - time() >= 3024000 ) {
+			\EE::log(
+				sprintf(
+					'Current certificate is valid until %s, renewal is not necessary.',
+					$parsedCertificate->getValidTo()->format( 'Y-m-d H:i:s' )
+				)
+			);
 
-	sort( $site_ips, SORT_NATURAL );
-
-	if ( empty( $site_ips ) ) {
-		return "10.2.0.0/24";
-	}
-	if ( $site_ips[0] !== "10.2.0.0/24" ) {
-		return "10.2.0.0/24";
-	}
-
-	// Convert string IP address to array containing just second and third octet
-	$ip_octets = array_map( function ( $ip ) {
-		$arr = explode( '.', $ip );
-		$second_octet = (int) $arr[1];
-		$third_octet  = (int) $arr[2];
-		if ( $second_octet < 0 || $second_octet > 255 ||
-			$third_octet  < 0 || $third_octet  > 255 ) {
-			throw new \Exception( "Invalid IP address found in DB:" . implode('.', $ip ) );
-		}
-		return [
-			$second_octet,
-			$third_octet,
-		];
-	}, $site_ips );
-
-	// This loop returns first non-continuous IP address that it finds.
-	foreach ( $ip_octets as $index => $ip_octet ) {
-		if ( $index === 0 ) {
-			$ip_second_octet = 2;
-			$ip_third_octet  = 0;
-			continue;
-		}
-
-		$ip_second_octet     = $ip_octet[0];
-		$ip_third_octet      = $ip_octet[1];
-
-		$old_ip_octet        = $ip_octets[ $index - 1];
-		$old_ip_second_octet = $old_ip_octet[0];
-		$old_ip_third_octet  = $old_ip_octet[1];
-
-		if ( $ip_second_octet === 255 && $ip_third_octet === 255 ) {
-			EE::error( 'You have reached limit for EasyEngine sites.' );
-		}
-
-		/**
-		 * i.e. If  old IP address:  10.2.0.0
-		 *      and new IP address:  10.2.2.0
-		 *      then it will return: 10.2.1.0
-		 */
-		if ( $ip_third_octet !== ( $old_ip_third_octet + 1 ) % 256 ) {
-			return get_next_continuous_subnet_ip( $old_ip_second_octet, $old_ip_third_octet );
-		}
-
-		/**
-		 * i.e. If  old IP address:  10.2.255.0
-		 *      and new IP address:  10.4.0.0
-		 *      then it will return: 10.3.0.0
-		 */
-		if ( $ip_third_octet === 0 &&
-			$ip_second_octet !== ( $old_ip_second_octet + 1 ) % 256 ) {
-			return get_next_continuous_subnet_ip( $old_ip_second_octet, $old_ip_third_octet );
+			return false;
 		}
 	}
 
-	/**
-	 * If no non-continuous IP address are found, then the next
-	 * continous IP address is generated.
-	 */
-	return get_next_continuous_subnet_ip( $ip_second_octet, $ip_third_octet );
+	return true;
 }
 
 /**
- * Returns next continuous IP address
+ * Get a new available subnet.
  *
- * @param $ip_second_octet int Second octet of current IP address
- * @param $ip_third_octet int Third octet of current IP address
- * @return string
+ * @param int $mask
+ * @return string|void
+ * @throws EE\ExitException
  */
-function get_next_continuous_subnet_ip( int $ip_second_octet, int $ip_third_octet ) {
-	if ( $ip_third_octet === 255 ) {
-		$ip_third_octet = 0;
-		$ip_second_octet++;
-	} else {
-		$ip_third_octet++;
+function get_available_subnet( int $mask = 24 ) {
+	$sites = Site::all(['subnet_ip']);
+	$site_ips = array_column( $sites, 'subnet_ip');
+
+	$existing_host_subnets = EE::launch( 'ip route show | cut -d \' \' -f1 | grep ^10' );
+	$existing_host_subnets = array_filter(
+		explode( "\n", $existing_host_subnets->stdout )
+	);
+
+	$frontend_subnet = Option::get( 'frontend_subnet_ip' );
+	$backend_subnet = Option::get( 'backend_subnet_ip' );
+
+	if ( $frontend_subnet ) {
+		array_push( $site_ips, $frontend_subnet );
 	}
 
-	return "10.$ip_second_octet.$ip_third_octet.0/24";
+	if ( $backend_subnet ) {
+		array_push( $site_ips, $backend_subnet );
+	}
+
+	$existing_subnets = array_filter(
+		array_unique(
+			array_merge( $site_ips, $existing_host_subnets )
+		)
+	);
+
+	sort( $existing_subnets, SORT_NATURAL );
+
+	$ip = '10.0.0.0';
+
+	while ( $ip !== '10.255.255.0' ) {
+		list( $subnet_start, $subnet_end ) = get_subnet_range( $ip, $mask );
+
+		$subnet_start = long2ip( $subnet_start );
+		$subnet_end   = long2ip( $subnet_end );
+
+		if ( ! ip_in_existing_subnets( $subnet_start, $existing_subnets ) &&
+			! ip_in_existing_subnets( $subnet_end, $existing_subnets ) ) {
+			return $ip . '/' . $mask;
+		}
+
+		$ip = ip2long( $subnet_end ) + 1;
+		$ip = long2ip( $ip );
+	}
+
+	EE::error( 'It seems you have run out of your private IP adress space.' );
+}
+
+
+function subnet_mask_int2long( int $mask ) {
+	return ~(( 1 << ( 32 - $mask )) - 1 );
+}
+
+/**
+ * Check if IP is in existing subnets
+ *
+ * @param $ip string IP to check in existing subnets
+ * @return bool
+ */
+function ip_in_existing_subnets( string $ip, array $existing_subnets ) {
+
+	foreach( $existing_subnets as $subnet ) {
+		if ( ip_in_subnet( $ip, $subnet ) ) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+/**
+ * Check if an IP is in a subnet.
+ *
+ * @param $IP string IP that needs to be checked
+ * @param $CIDR string Subnet in which IP will be searched.
+ * @return bool
+ */
+function ip_in_subnet(string $IP, string $CIDR) {
+
+	list( $subnet, $mask ) = explode ('/', $CIDR );
+
+	$ip_subnet = ip2long( $subnet );
+	$ip_mask = subnet_mask_int2long( $mask );
+	$src_ip = ip2long( $IP );
+
+	return (( $src_ip & $ip_mask ) == ( $ip_subnet & $ip_mask ));
+}
+
+/**
+ * Return starting and ending IP address of a subnet range.
+ *
+ * @param $ip
+ * @param $mask
+ * @return int[]|string[]
+ */
+function get_subnet_range( $ip, $mask ) {
+	$ipl = ip2long( $ip );
+	$maskl = subnet_mask_int2long( $mask );
+
+	$range_start = $ipl & $maskl;
+	$range_end = $ipl | ~$maskl;
+
+	return [ $range_start, $range_end ];
 }

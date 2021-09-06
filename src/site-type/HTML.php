@@ -108,7 +108,7 @@ class HTML extends EE_Site_Command {
 		$this->logger->debug( 'args:', $args );
 		$this->logger->debug( 'assoc_args:', empty( $assoc_args ) ? [ 'NULL' ] : $assoc_args );
 		$this->site_data['site_url']  = strtolower( \EE\Utils\remove_trailing_slash( $args[0] ) );
-		$this->site_data['subnet_ip'] = \EE\Site\Utils\get_subnet_ip();
+		$this->site_data['subnet_ip'] = \EE\Site\Utils\get_available_subnet();
 		$this->site_data['site_type'] = \EE\Utils\get_flag_value( $assoc_args, 'type', 'html' );
 		if ( 'html' !== $this->site_data['site_type'] ) {
 			\EE::error( sprintf( 'Invalid site-type: %s', $this->site_data['site_type'] ) );
@@ -137,14 +137,10 @@ class HTML extends EE_Site_Command {
 				$this->site_data['alias_domains'] .= $trimmed_domain . ',';
 			}
 		}
+    
 		$this->site_data['alias_domains'] = substr( $this->site_data['alias_domains'], 0, - 1 );
+		$this->site_data['site_ssl'] = get_value_if_flag_isset( $assoc_args, 'ssl', 'le' );
 
-		$this->site_data['site_ssl'] = get_value_if_flag_isset( $assoc_args, 'ssl', [
-			'le',
-			'self',
-			'inherit',
-			'custom'
-		], 'le' );
 		if ( 'custom' === $this->site_data['site_ssl'] ) {
 			try {
 				$this->validate_site_custom_ssl( get_flag_value( $assoc_args, 'ssl-key' ), get_flag_value( $assoc_args, 'ssl-crt' ) );
