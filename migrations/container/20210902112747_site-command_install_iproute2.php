@@ -29,7 +29,7 @@ class InstallIproute2 extends Base {
 		$os = php_uname( 'v' );
 		$ip_command_present = EE::launch( 'command -v ip' )->return_code === 0;
 
-		if (( strpos( $os, 'Ubuntu') !== false || strpos( $os, 'Debian') !== false )
+		if ( ( strpos( $os, 'Ubuntu') !== false || strpos( $os, 'Debian' ) !== false )
 			&& ! $ip_command_present ) {
 			EE::exec( 'bash -c \'if command -v apt; then apt install -y iproute2; fi\'' );
 		}
