@@ -55,10 +55,12 @@ class AddDefaultSubnetIpMigration extends Base {
 			$site_data = (array) $site_type->site_data;
 			$site_data = reset($site_data );
 			$site_type->site_data = $site_data;
-			$site_type->dump_docker_compose_yml();
+			$no_https        = $site_data['site_ssl'] ? false : true;
+			$site_type->dump_docker_compose_yml([ 'nohttps' => $no_https ]);
 
 			if ( $site->site_enabled ) {
-				$site_type->refresh( [ $site->site_url ], [] );
+				$site_type->disable( [ $site->site_url ], [] );
+				$site_type->enable( [ $site->site_url ], [] );
 			}
 		}
 	}
