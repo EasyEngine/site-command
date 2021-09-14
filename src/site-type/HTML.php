@@ -65,7 +65,7 @@ class HTML extends EE_Site_Command {
 	 * : Path to the SSL key file.
 	 *
 	 * [--ssl-crt=<ssl-crt-path>]
-	 * : Path ro the SSL crt file.
+	 * : Path to the SSL crt file.
 	 *
 	 * [--wildcard]
 	 * : Gets wildcard SSL .
