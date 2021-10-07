@@ -44,7 +44,7 @@ services:
     {{/sysctl}}
     {{/sysctls}}
     external_links:
-      - services_nginx-proxy_1:${VIRTUAL_HOST}
+      - services-nginx-proxy-1:${VIRTUAL_HOST}
     {{#networks}}
     networks:
     {{#net}}
@@ -77,9 +77,6 @@ networks:
     {{#label}}
      - "{{name}}"
     {{/label}}
-    ipam:
-      config:
-      - subnet: '{{subnet_ip}}'
     {{/networks_labels}}
   global-frontend-network:
     external:

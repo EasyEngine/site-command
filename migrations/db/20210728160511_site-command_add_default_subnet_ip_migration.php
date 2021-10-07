@@ -44,7 +44,6 @@ class AddDefaultSubnetIpMigration extends Base {
 		ensure_global_network_initialized();
 
 		foreach ( $sites as $site ) {
-			$site->subnet_ip = EE\Site\Utils\get_available_subnet();
 			$site->save();
 
 			$site_type = $site->site_type === 'html' ? new EE\Site\Type\HTML() :
@@ -72,15 +71,5 @@ class AddDefaultSubnetIpMigration extends Base {
 	 */
 	public function down() {
 
-		/**
-		 * Reset Subnet IP column in table.
-		 */
-		$query = 'UPDATE sites set subnet_ip=\'\';';
-
-		try {
-			self::$pdo->exec( $query );
-		} catch ( PDOException $exception ) {
-			EE::error( 'Encountered Error while dropping table: ' . $exception->getMessage(), false );
-		}
 	}
 }
