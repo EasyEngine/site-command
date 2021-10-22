@@ -1995,8 +1995,9 @@ abstract class EE_Site_Command {
 		$this->fs->copy( $this->site_data['ssl_key'], $ssl_key_dest, true );
 		$this->fs->copy( $this->site_data['ssl_crt'], $ssl_crt_dest, true );
 	}
+
 	/**
-	 * Clones a website from source to destination.
+	 * Syncs a website from source to a new website in destination.
 	 *
 	 * ## OPTIONS
 	 *
@@ -2014,9 +2015,6 @@ abstract class EE_Site_Command {
 	 *
 	 * [--uploads]
 	 * : Sync only uploads.
-	 *
-	 * [--overwrite]
-	 * : Overwrite existing site.
 	 *
 	 * [--ssl]
 	 * : Enables ssl on site.
@@ -2052,9 +2050,9 @@ abstract class EE_Site_Command {
 	 *     # Clone site to remote
 	 *     $ ee site clone foo.com root@foo.com:bar.com
 	 *
-	 *
 	 */
 	public function clone( $args, $assoc_args ) {
+
 		list( $source, $destination ) = get_transfer_details( $args[0], $args[1] );
 
 		check_site_access( $source, $destination, $assoc_args );
@@ -2070,11 +2068,10 @@ abstract class EE_Site_Command {
 		}
 
 		$operations = [
-			'create_site' => ! get_flag_value( $assoc_args, 'overwrite' ),
 			'sync' =>  $sync
 		];
 
-		if ( $operations['create_site'] && $destination->create_site( $source, $assoc_args )->return_code ) {
+		if ( $destination->create_site( $source, $assoc_args )->return_code ) {
 			EE::error( 'Cannot create site ' . $destination->name . '. Please check logs for more info or rerun the command with --debug flag.' );
 		} else {
 			$destination->ensure_site_exists();
@@ -2091,6 +2088,76 @@ abstract class EE_Site_Command {
 			copy_site_db( $source, $destination );
 		}
 		EE::success( 'Site cloned successfully' );
+	}
+
+	/**
+	 * Syncs a website from source to an existing website in destination.
+	 *
+	 * ## OPTIONS
+	 *
+	 * <source>
+	 * : Name of source website to be synced. Format [user@ssh-hostname:]sitename
+	 *
+	 * <destination>
+	 * : Name of destination website to be synced. Format [user@ssh-hostname:]sitename
+	 *
+	 * [--files]
+	 * : Sync only files.
+	 *
+	 * [--db]
+	 * : Sync only database.
+	 *
+	 * [--uploads]
+	 * : Sync only uploads.
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     # Sync site on same host
+	 *     $ ee site sync foo.com bar.com
+	 *
+	 *     # Sync site from remote
+	 *     $ ee site sync root@foo.com:foo.com bar.com
+	 *
+	 *     # Sync site from remote
+	 *     $ ee site sync root@foo.com:foo.com .
+	 *
+	 *     # Sync site to remote
+	 *     $ ee site sync foo.com root@foo.com:bar.com
+	 *
+	 */
+	public function sync( $args, $assoc_args ) {
+
+		list( $source, $destination ) = get_transfer_details( $args[0], $args[1] );
+
+		check_site_access( $source, $destination, $assoc_args );
+
+		if ( get_flag_value( $assoc_args, 'files' ) ) {
+			$sync = 'files';
+		} elseif ( get_flag_value( $assoc_args, 'uploads' ) ) {
+			$sync = 'uploads';
+		} elseif ( get_flag_value( $assoc_args, 'db' ) ) {
+			$sync = 'db';
+		} else {
+			$sync = 'all';
+		}
+
+		$operations = [
+			'sync' =>  $sync
+		];
+
+		$destination->ensure_site_exists();
+		$destination->set_site_details();
+
+		if ( $operations['sync'] === 'files' || $operations['sync'] === 'uploads' || $operations['sync'] === 'all' ) {
+			EE::log( 'Syncing files' );
+			copy_site_files( $source, $destination, $operations['sync'] );
+		}
+
+		if ( $operations['sync'] === 'db' || $operations['sync'] === 'all' ) {
+			EE::log('Syncing database');
+			copy_site_db( $source, $destination );
+		}
+		EE::success( 'Site synced successfully' );
 	}
 
 	abstract public function create( $args, $assoc_args );
