@@ -1999,6 +1999,8 @@ abstract class EE_Site_Command {
 	/**
 	 * Syncs a website from source to a new website in destination.
 	 *
+	 * Note: SSL needs to be added explicitly in the new site.
+	 *
 	 * ## OPTIONS
 	 *
 	 * <source>
@@ -2041,14 +2043,20 @@ abstract class EE_Site_Command {
 	 *     # Clone site on same host
 	 *     $ ee site clone foo.com bar.com
 	 *
-	 *     # Clone site from remote
+	 *     # Clone site from remote server
 	 *     $ ee site clone root@foo.com:foo.com bar.com
 	 *
-	 *     # Clone site from remote
+	 *     # Clone site from remote with same name
 	 *     $ ee site clone root@foo.com:foo.com .
 	 *
 	 *     # Clone site to remote
 	 *     $ ee site clone foo.com root@foo.com:bar.com
+	 *
+	 *     # Clone site from remote. Only clone files and db, not uploads
+	 *     $ ee site clone root@foo.com:foo.com bar.com --files --db
+	 *
+	 *     # Clone site from remote and enable ssl
+	 *     $ ee site clone root@foo.com:foo.com bar.com --ssl=le --wildcard
 	 *
 	 */
 	public function clone( $args, $assoc_args ) {
@@ -2115,14 +2123,20 @@ abstract class EE_Site_Command {
 	 *     # Sync site on same host
 	 *     $ ee site sync foo.com bar.com
 	 *
-	 *     # Sync site from remote
+	 *     # Sync site from remote server
 	 *     $ ee site sync root@foo.com:foo.com bar.com
 	 *
-	 *     # Sync site from remote
+	 *     # Sync site from remote with same name
 	 *     $ ee site sync root@foo.com:foo.com .
 	 *
 	 *     # Sync site to remote
 	 *     $ ee site sync foo.com root@foo.com:bar.com
+	 *
+	 *     # Sync site from remote. Only clone files and db, not uploads
+	 *     $ ee site sync root@foo.com:foo.com bar.com --files --db
+	 *
+	 *     # Sync site from remote and enable ssl
+	 *     $ ee site sync root@foo.com:foo.com bar.com --ssl=le --wildcard
 	 *
 	 */
 	public function sync( $args, $assoc_args ) {
