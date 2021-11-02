@@ -14,7 +14,15 @@ include_once( EE_ROOT . '/php/utils.php' );
 
 define( 'EE', true );
 define( 'EE_VERSION', trim( file_get_contents( EE_ROOT . '/VERSION' ) ) );
-define( 'EE_ROOT_DIR', '/opt/easyengine' );
+
+$root_alias = '/opt';
+if ( 'Darwin' === php_uname( 's' ) ) {
+	$sys_name   = posix_getpwuid(posix_geteuid())['name'];
+	if ( ! empty( $sys_name ) ) {
+		$root_alias = '/Users/' . $sys_name;
+	}
+}
+define( 'EE_ROOT_DIR', $root_alias . '/easyengine' );
 
 require_once EE_ROOT . '/php/bootstrap.php';
 
@@ -58,6 +66,22 @@ class FeatureContext implements Context
 	public $command;
 	public $webroot_path;
 	public $ee_path;
+
+	/**
+	 * Contain all test sites name.
+	 *
+	 * @var array
+	 */
+	public static $test_sites = [
+		'wp.test',
+		'wpsubdom.test',
+		'wpsubdir.test',
+		'example.test',
+		'www.example1.test',
+		'example2.test',
+		'www.example3.test',
+		'labels.test'
+	];
 
 	/**
 	 * Initializes context.
@@ -396,20 +420,9 @@ class FeatureContext implements Context
 	 */
 	public static function cleanup(AfterFeatureScope $scope)
 	{
-		$test_sites = [
-			'wp.test',
-			'wpsubdom.test',
-			'wpsubdir.test',
-			'example.test',
-			'www.example1.test',
-			'example2.test',
-			'www.example3.test',
-			'labels.test'
-		];
-
 		$result = EE::launch( 'sudo bin/ee site list --format=text',false, true );
 		$running_sites = explode( "\n", $result->stdout );
-		$sites_to_delete = array_intersect( $test_sites, $running_sites );
+		$sites_to_delete = array_intersect( self::$test_sites, $running_sites );
 
 		foreach ( $sites_to_delete as $site ) {
 			exec("sudo bin/ee site delete $site --yes" );
