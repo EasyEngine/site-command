@@ -878,6 +878,7 @@ function ip_in_subnet(string $IP, string $CIDR) {
 
 	list( $subnet, $mask ) = explode ('/', $CIDR );
 
+	$mask = $mask ?? 16;
 	$ip_subnet = ip2long( $subnet );
 	$ip_mask = subnet_mask_int2long( $mask );
 	$src_ip = ip2long( $IP );
