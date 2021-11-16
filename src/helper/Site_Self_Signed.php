@@ -91,7 +91,7 @@ class Site_Self_signed {
 		$this->build_certificate_conf( $root_conf, 'EasyEngine' );
 
 		EE::exec( sprintf( 'openssl genrsa -des3 -passout pass:%s -out %s 2048', $this->password, $this->root_key ) );
-		EE::exec( sprintf( 'openssl req -x509 -new -nodes -key %s -sha256 -days 1024 -passin pass:%s -out %s -config %s', $this->root_key, $this->password, $this->root_pem, $root_conf ) );
+		EE::exec( sprintf( 'openssl req -x509 -new -nodes -key %s -sha256 -days 36500 -passin pass:%s -out %s -config %s', $this->root_key, $this->password, $this->root_pem, $root_conf ) );
 
 		$this->trust_certificate( $this->root_pem );
 
@@ -136,7 +136,7 @@ class Site_Self_signed {
 		EE::exec( sprintf( 'openssl req -new -sha256 -nodes -passout pass:%s -out %s -newkey rsa:2048 -keyout %s -config %s', $this->password, $csr_path, $key_path, $conf_path ) );
 
 		$serial_string = $this->fs->exists( $this->root_srl ) ? sprintf( '-CAserial %s', $this->root_srl ) : sprintf( '-CAcreateserial -CAserial %s', $this->root_srl );
-		EE::exec( sprintf( 'openssl x509 -req -in %s -CA %s -CAkey %s %s -passin pass:%s -out %s -days 1024 -sha256 -extfile %s', $csr_path, $this->root_pem, $this->root_key, $serial_string, $this->password, $crt_path, $v3_path ) );
+		EE::exec( sprintf( 'openssl x509 -req -in %s -CA %s -CAkey %s %s -passin pass:%s -out %s -days 36500 -sha256 -extfile %s', $csr_path, $this->root_pem, $this->root_key, $serial_string, $this->password, $crt_path, $v3_path ) );
 	}
 
 	/**
