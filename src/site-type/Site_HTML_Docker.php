@@ -24,6 +24,7 @@ class Site_HTML_Docker {
 
 		// nginx configuration.
 		$nginx['service_name'] = [ 'name' => 'nginx' ];
+		$nginx['container_name'] =  $filters['site_prefix'] . '_nginx_1';
 		$nginx['image']        = [ 'name' => 'easyengine/nginx:' . $img_versions['easyengine/nginx'] ];
 		$nginx['restart']      = $restart_default;
 
