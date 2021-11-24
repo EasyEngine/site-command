@@ -23,7 +23,7 @@ function copy_site_db( Site $source, Site $destination ) {
 		$export_command = 'ee shell --skip-tty ' . $source_site_name . ' --command=\'wp db export ../' . $filename . '\'';
 
 		if ( $source->execute( $export_command )->return_code ) {
-			throw new \Exception( 'Unable to export database on source. Please check for file system permissions and disk space.' );
+			EE::error('Unable to export database on source. Please check for file system permissions and disk space.');
 		}
 
 		EE::log( 'Copying database to destination' );
@@ -34,7 +34,7 @@ function copy_site_db( Site $source, Site $destination ) {
 		$copy_db_command = rsync_command( $source->get_rsync_path( $source_fs_path ), $destination->get_rsync_path( $destination_fs_path ) );
 
 		if ( ! EE::exec( $copy_db_command ) ) {
-			throw new \Exception( 'Unable to copy database to destination. Please check for file system permissions and disk space.' );
+			EE::error('Unable to copy database to destination. Please check for file system permissions and disk space.');
 		}
 
 		EE::log( 'Importing database in destination' );
@@ -42,7 +42,7 @@ function copy_site_db( Site $source, Site $destination ) {
 		$import_command = 'ee shell --skip-tty ' . $destination_site_name . ' --command=\'wp db import ../' . $filename . '\'';
 
 		if ( $destination->execute( $import_command )->return_code ) {
-			throw new \Exception( 'Unable to import database on destination. Please check for file system permissions and disk space.' );
+			EE::error('Unable to import database on destination. Please check for file system permissions and disk space.');
 		}
 
 		EE::log( 'Executing search-replace' );
@@ -51,11 +51,11 @@ function copy_site_db( Site $source, Site $destination ) {
 		$https_search_replace_command = 'ee shell ' . $destination_site_name . ' --command=\'wp search-replace https://' . $source_site_name . ' https://' .$destination_site_name . ' --network --all-tables\'' ;
 
 		if ( $destination->execute( $http_search_replace_command )->return_code ) {
-			throw new \Exception( 'Unable to execute http search-replace on database at destination.' );
+			EE::error('Unable to execute http search-replace on database at destination.');
 		}
 
 		if ( $destination->execute( $https_search_replace_command )->return_code ) {
-			throw new \Exception( 'Unable to execute https search-replace on database at destination.' );
+			EE::error('Unable to execute https search-replace on database at destination.');
 		}
 
 		if ( empty ( $source->site_details['site_ssl'] ) !== empty( $destination->site_details['site_ssl'] ) ) {
@@ -65,7 +65,7 @@ function copy_site_db( Site $source, Site $destination ) {
 			$http_https_search_replace_command = 'ee shell ' . $destination_site_name . ' --command=\'wp search-replace ' . $source_site_name_http . ' ' . $destination_site_name_http . ' --network --all-tables\'' ;
 
 			if ( $destination->execute( $http_https_search_replace_command )->return_code ) {
-				throw new \Exception( 'Unable to execute http-https search-replace on database at destination.' );
+				EE::error('Unable to execute http-https search-replace on database at destination.');
 			}
 		}
 
@@ -84,7 +84,7 @@ function copy_site_certs( Site $source, Site $destination ) {
 	$rsync_command = rsync_command( $source->get_rsync_path( '/opt/easyengine/services/nginx-proxy/certs/' . $source->name . '.{key,crt}' ) , $destination->get_rsync_path( '/tmp/' ) );
 
 	if ( ! EE::exec( $rsync_command ) || $destination->execute( 'ls -1 /tmp/' . $destination->name . '.* | wc -l' )->stdout !== "2\n" ) {
-		throw new \Exception( 'Unable to sync certs.' );
+		EE::error('Unable to sync certs.');
 	}
 }
 
@@ -110,7 +110,7 @@ function copy_site_files( Site $source, Site $destination, string $sync_type ) {
 	$rsync_command = rsync_command( $source_dir, $destination_dir, [ $exclude ] );
 
 	if ( ! EE::exec( $rsync_command ) ) {
-		throw new \Exception( 'Unable to sync files.' );
+		EE::error('Unable to sync files.');
 	}
 }
 
@@ -144,9 +144,9 @@ function get_transfer_details( string $source, string $destination ) : array {
 	$destination_site = Site::from_location( $destination );
 
 	if( ! $source_site->name && ! $destination_site->name ) {
-		throw new \Exception( "No sitename found in source and destination site." );
+		EE::error("No sitename found in source and destination site.");
 	} elseif( $source_site->ssh_string && $destination_site->ssh_string ) {
-		throw new \Exception( "Both source and destination sites cannot be remote." );
+		EE::error("Both source and destination sites cannot be remote.");
 	} elseif( ! $source_site->name ) {
 		$source_site->name = $destination_site->name;
 	} elseif( ! $destination_site->name ) {
@@ -154,7 +154,7 @@ function get_transfer_details( string $source, string $destination ) : array {
 	}
 
 	if( 'localhost' === $source_site->host && 'localhost' === $destination_site->host && $source_site->name === $destination_site->name) {
-		throw new \Exception( 'Cannot copy \'' . $source_site->name . '\' on \'' . $source_site->host . '\' to \'' . $destination_site->name . '\' on \'' . $destination_site->host . '\'' );
+		EE::error('Cannot copy \'' . $source_site->name . '\' on \'' . $source_site->host . '\' to \'' . $destination_site->name . '\' on \'' . $destination_site->host . '\'');
 	}
 
 	return [ $source_site, $destination_site ];

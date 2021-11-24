@@ -73,7 +73,7 @@ class Site {
 		$matches['version'] = preg_replace( '/-nightly.*$/', '', $matches['version'] );
 
 		if ( Comparator::lessThan( $matches['version'], '4.1.3' ) ) {
-			throw new \Exception( 'EasyEngine version on \'' . $this->host . '\' is \'' . $matches['version'] . '\' which is less than minimum required version \'4.1.3\' for cloning site.' );
+			EE::error('EasyEngine version on \'' . $this->host . '\' is \'' . $matches['version'] . '\' which is less than minimum required version \'4.1.3\' for cloning site.');
 		}
 	}
 
@@ -98,7 +98,7 @@ class Site {
 					$rsync_command_key = rsync_command( $assoc_args['ssl-key'], $this->get_rsync_path( '/tmp/' ) );
 
 					if ( ! ( EE::exec( $rsync_command_key ) && EE::exec( $rsync_command_crt ) ) ) {
-						throw new \Exception( 'Unable to sync certs.' );
+						EE::error('Unable to sync certs.');
 					}
 
 					$ssl_args .= ' --ssl-crt=\'' . '/tmp/' . basename( $assoc_args['ssl-crt'] ) . '\'';
@@ -207,13 +207,13 @@ class Site {
 
 	public function ensure_site_exists() : void {
 		if( ! $this->site_exists() ) {
-			throw new \Exception( 'Unable to find \'' . $this->name . '\' on \'' . $this->host . '\'');
+			EE::error('Unable to find \'' . $this->name . '\' on \'' . $this->host . '\'');
 		}
 	}
 
 	public function ensure_site_not_exists() : void {
 		if( $this->site_exists() ) {
-			throw new \Exception( 'Site  \'' . $this->name . '\' already exists on \'' . $this->host . '\'');
+			EE::error('Site  \'' . $this->name . '\' already exists on \'' . $this->host . '\'');
 		}
 	}
 
@@ -223,7 +223,7 @@ class Site {
 
 	public function ensure_ssh_success() : void {
 		if( ! $this->ssh_success()) {
-			throw new \Exception( 'Unable to SSH to ' . $this->host );
+			EE::error('Unable to SSH to ' . $this->host);
 		}
 	}
 
@@ -231,7 +231,7 @@ class Site {
 		$output = $this->execute('ee site info ' . $this->name . ' --format=json' );
 		$details = json_decode( $output->stdout, true );
 		if ( empty( $details ) ) {
-			throw new \Exception( 'Unable to get site info for site ' . $this->name . '. The output of command is: ' . $output->stdout . $output->stderr );
+			EE::error('Unable to get site info for site ' . $this->name . '. The output of command is: ' . $output->stdout . $output->stderr);
 		}
 		$this->site_details = $details;
 	}
