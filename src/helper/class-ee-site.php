@@ -2095,7 +2095,8 @@ abstract class EE_Site_Command {
 			EE::log('Syncing database');
 			copy_site_db( $source, $destination );
 		}
-		EE::success( 'Site cloned successfully' );
+		EE::runcommand(' site info ' . $destination->name);
+		EE::success('Site cloned successfully.' . PHP_EOL . 'You have to do these additional configurations manually (if required):' . PHP_EOL . '1.Update wp-config.php.' . PHP_EOL . '2.Add alias domains.');
 	}
 
 	/**

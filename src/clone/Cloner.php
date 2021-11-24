@@ -184,7 +184,7 @@ class Site {
 				$command .= " --admin-email=${site_details['app_admin_email']}";
 			}
 			if ( ! empty( $site_details['app_admin_password'] ) ) {
-//				$command .= " --admin-pass=${site_details['app_admin_password']}";
+				$command .= " --admin-pass=${site_details['app_admin_password']}";
 			}
 			// TODO: vip, proxy-cache-max-time, proxy-cache-max-size
 		}
