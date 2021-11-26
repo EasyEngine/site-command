@@ -11,30 +11,30 @@ use function EE\Utils\trailingslashit;
 function copy_site_db( Site $source, Site $destination ) {
 
 	$site_type = $source->site_details['site_type'];
-	$db_host = $source->site_details['db_host'];
+	$db_host   = $source->site_details['db_host'];
 
 	if ( 'wp' === $site_type || 'php' === $site_type && ! empty( $db_host ) ) {
-		$source_site_name = $source->site_details['site_url'];
+		$source_site_name      = $source->site_details['site_url'];
 		$destination_site_name = $destination->site_details['site_url'];
 
 		EE::log( 'Exporting database from source' );
 
-		$filename = $source_site_name . '-' . random_password() . '.sql';
+		$filename       = $source_site_name . '-' . random_password() . '.sql';
 		$export_command = 'ee shell --skip-tty ' . $source_site_name . ' --command=\'wp db export ../' . $filename . '\'';
 
 		if ( $source->execute( $export_command )->return_code ) {
-			EE::error('Unable to export database on source. Please check for file system permissions and disk space.');
+			EE::error( 'Unable to export database on source. Please check for file system permissions and disk space.' );
 		}
 
 		EE::log( 'Copying database to destination' );
 
-		$source_fs_path = trailingslashit( $source->site_details['site_fs_path'] ) . 'app/' . $filename ;
-		$destination_fs_path = trailingslashit( $destination->site_details['site_fs_path'] ) . 'app/' . $filename ;
+		$source_fs_path      = trailingslashit( $source->site_details['site_fs_path'] ) . 'app/' . $filename;
+		$destination_fs_path = trailingslashit( $destination->site_details['site_fs_path'] ) . 'app/' . $filename;
 
 		$copy_db_command = rsync_command( $source->get_rsync_path( $source_fs_path ), $destination->get_rsync_path( $destination_fs_path ) );
 
 		if ( ! EE::exec( $copy_db_command ) ) {
-			EE::error('Unable to copy database to destination. Please check for file system permissions and disk space.');
+			EE::error( 'Unable to copy database to destination. Please check for file system permissions and disk space.' );
 		}
 
 		EE::log( 'Importing database in destination' );
@@ -42,36 +42,36 @@ function copy_site_db( Site $source, Site $destination ) {
 		$import_command = 'ee shell --skip-tty ' . $destination_site_name . ' --command=\'wp db import ../' . $filename . '\'';
 
 		if ( $destination->execute( $import_command )->return_code ) {
-			EE::error('Unable to import database on destination. Please check for file system permissions and disk space.');
+			EE::error( 'Unable to import database on destination. Please check for file system permissions and disk space.' );
 		}
 
 		EE::log( 'Executing search-replace' );
 
-		$http_search_replace_command = 'ee shell ' . $destination_site_name . ' --command=\'wp search-replace http://' . $source_site_name . ' http://' .$destination_site_name . ' --network --all-tables\'' ;
-		$https_search_replace_command = 'ee shell ' . $destination_site_name . ' --command=\'wp search-replace https://' . $source_site_name . ' https://' .$destination_site_name . ' --network --all-tables\'' ;
+		$http_search_replace_command  = 'ee shell ' . $destination_site_name . ' --command=\'wp search-replace http://' . $source_site_name . ' http://' . $destination_site_name . ' --network --all-tables\'';
+		$https_search_replace_command = 'ee shell ' . $destination_site_name . ' --command=\'wp search-replace https://' . $source_site_name . ' https://' . $destination_site_name . ' --network --all-tables\'';
 
 		if ( $destination->execute( $http_search_replace_command )->return_code ) {
-			EE::error('Unable to execute http search-replace on database at destination.');
+			EE::error( 'Unable to execute http search-replace on database at destination.' );
 		}
 
 		if ( $destination->execute( $https_search_replace_command )->return_code ) {
-			EE::error('Unable to execute https search-replace on database at destination.');
+			EE::error( 'Unable to execute https search-replace on database at destination.' );
 		}
 
 		if ( empty ( $source->site_details['site_ssl'] ) !== empty( $destination->site_details['site_ssl'] ) ) {
-			$source_site_name_http = empty ( $source->site_details['site_ssl'] ) ? 'http://' . $destination_site_name : 'https://' . $destination_site_name;
+			$source_site_name_http      = empty ( $source->site_details['site_ssl'] ) ? 'http://' . $destination_site_name : 'https://' . $destination_site_name;
 			$destination_site_name_http = empty ( $destination->site_details['site_ssl'] ) ? 'http://' . $destination_site_name : 'https://' . $destination_site_name;
 
-			$http_https_search_replace_command = 'ee shell ' . $destination_site_name . ' --command=\'wp search-replace ' . $source_site_name_http . ' ' . $destination_site_name_http . ' --network --all-tables\'' ;
+			$http_https_search_replace_command = 'ee shell ' . $destination_site_name . ' --command=\'wp search-replace ' . $source_site_name_http . ' ' . $destination_site_name_http . ' --network --all-tables\'';
 
 			if ( $destination->execute( $http_https_search_replace_command )->return_code ) {
-				EE::error('Unable to execute http-https search-replace on database at destination.');
+				EE::error( 'Unable to execute http-https search-replace on database at destination.' );
 			}
 		}
 
 
-		$rm_db_src_command = 'rm ' . $source_fs_path;
-		$rm_db_dest_command =  'rm ' . $destination_fs_path;
+		$rm_db_src_command  = 'rm ' . $source_fs_path;
+		$rm_db_dest_command = 'rm ' . $destination_fs_path;
 
 		EE::log( 'Cleanup export file from source and destination' );
 
@@ -81,27 +81,27 @@ function copy_site_db( Site $source, Site $destination ) {
 }
 
 function copy_site_certs( Site $source, Site $destination ) {
-	$rsync_command = rsync_command( $source->get_rsync_path( '/opt/easyengine/services/nginx-proxy/certs/' . $source->name . '.{key,crt}' ) , $destination->get_rsync_path( '/tmp/' ) );
+	$rsync_command = rsync_command( $source->get_rsync_path( '/opt/easyengine/services/nginx-proxy/certs/' . $source->name . '.{key,crt}' ), $destination->get_rsync_path( '/tmp/' ) );
 
 	if ( ! EE::exec( $rsync_command ) || $destination->execute( 'ls -1 /tmp/' . $destination->name . '.* | wc -l' )->stdout !== "2\n" ) {
-		EE::error('Unable to sync certs.');
+		EE::error( 'Unable to sync certs.' );
 	}
 }
 
 function copy_site_files( Site $source, Site $destination, string $sync_type ) {
-	$exclude = '--exclude \'/wp-config.php\'';
+	$exclude            = '--exclude \'/wp-config.php\'';
 	$source_public_path = str_replace( '/var/www/htdocs', '', $source->site_details['site_container_fs_path'] );
-	$uploads_path = $source_public_path . '/wp-content/uploads';
+	$uploads_path       = $source_public_path . '/wp-content/uploads';
 	$uploads_path_share = '/shared/wp-content/uploads';
 
-	$source_dir = $source->get_site_root_dir();
-	$destination_dir =  $destination->get_site_root_dir();
+	$source_dir      = $source->get_site_root_dir();
+	$destination_dir = $destination->get_site_root_dir();
 
 	if ( $sync_type === 'files' ) {
-		$exclude .= ' --exclude \''.  $uploads_path .'\'';
-		$exclude .= ' --exclude \''.  $uploads_path_share .'\'';
+		$exclude .= ' --exclude \'' . $uploads_path . '\'';
+		$exclude .= ' --exclude \'' . $uploads_path_share . '\'';
 	} elseif ( $sync_type === 'uploads' ) {
-		$source_dir .=  $uploads_path;
+		$source_dir      .= $uploads_path;
 		$destination_dir .= $uploads_path;
 	} elseif ( $sync_type !== 'all' ) {
 		EE::error( 'Unknown sync_type: ' . $sync_type );
@@ -110,15 +110,15 @@ function copy_site_files( Site $source, Site $destination, string $sync_type ) {
 	$rsync_command = rsync_command( $source_dir, $destination_dir, [ $exclude ] );
 
 	if ( ! EE::exec( $rsync_command ) ) {
-		EE::error('Unable to sync files.');
+		EE::error( 'Unable to sync files.' );
 	}
 }
 
-function rsync_command( string $source, string $destination, array $options=[] ) {
-	$ssh_command = 'ssh -t -i ' . get_ssh_key_path();
+function rsync_command( string $source, string $destination, array $options = [] ) {
+	$ssh_command   = 'ssh -t -i ' . get_ssh_key_path();
 	$extra_options = implode( ' ', $options );
 
-	return 'rsync -azh --delete-after --ignore-errors ' . $extra_options . ' -e "' . $ssh_command . '" ' . $source . ' ' . $destination ;
+	return 'rsync -azh --delete-after --ignore-errors ' . $extra_options . ' -e "' . $ssh_command . '" ' . $source . ' ' . $destination;
 }
 
 function check_site_access( Site $source_site, Site $destination_site, $assoc_args ) {
@@ -132,36 +132,37 @@ function check_site_access( Site $source_site, Site $destination_site, $assoc_ar
 
 	$source_site->set_site_details();
 
-	if( get_flag_value( $assoc_args, 'overwrite' ) ) {
+	if ( get_flag_value( $assoc_args, 'overwrite' ) ) {
 		$destination_site->set_site_details();
 	}
 
 }
 
-function get_transfer_details( string $source, string $destination ) : array {
+function get_transfer_details( string $source, string $destination ): array {
 
-	$source_site = Site::from_location( $source );
+	$source_site      = Site::from_location( $source );
 	$destination_site = Site::from_location( $destination );
 
-	if( ! $source_site->name && ! $destination_site->name ) {
-		EE::error("No sitename found in source and destination site.");
-	} elseif( $source_site->ssh_string && $destination_site->ssh_string ) {
-		EE::error("Both source and destination sites cannot be remote.");
-	} elseif( ! $source_site->name ) {
+	if ( ! $source_site->name && ! $destination_site->name ) {
+		EE::error( "No sitename found in source and destination site." );
+	} elseif ( $source_site->ssh_string && $destination_site->ssh_string ) {
+		EE::error( "Both source and destination sites cannot be remote." );
+	} elseif ( ! $source_site->name ) {
 		$source_site->name = $destination_site->name;
-	} elseif( ! $destination_site->name ) {
+	} elseif ( ! $destination_site->name ) {
 		$destination_site->name = $source_site->name;
 	}
 
-	if( 'localhost' === $source_site->host && 'localhost' === $destination_site->host && $source_site->name === $destination_site->name) {
-		EE::error('Cannot copy \'' . $source_site->name . '\' on \'' . $source_site->host . '\' to \'' . $destination_site->name . '\' on \'' . $destination_site->host . '\'');
+	if ( 'localhost' === $source_site->host && 'localhost' === $destination_site->host && $source_site->name === $destination_site->name ) {
+		EE::error( 'Cannot copy \'' . $source_site->name . '\' on \'' . $source_site->host . '\' to \'' . $destination_site->name . '\' on \'' . $destination_site->host . '\'' );
 	}
 
 	return [ $source_site, $destination_site ];
 }
 
 function get_ssh_key_path() {
-	$user_home = get_user_home_dir(get_current_user());
+	$user_home = get_user_home_dir( get_current_user() );
+
 	return $user_home . '/.ssh/id_rsa';
 }
 
@@ -173,5 +174,6 @@ function get_user_home_dir( string $user ) {
 	}
 
 	$path = EE::launch( "printf ~$user" )->stdout;
+
 	return $path;
 }

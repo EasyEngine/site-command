@@ -10,17 +10,17 @@ use function EE\Site\Cloner\Utils\rsync_command;
 class Site {
 	public $name, $host, $user, $ssh_string, $site_details;
 
-	function __construct( string $name, string $host, string $user,  string $ssh_string, array $site_details ) {
-		$this->name = $name;
-		$this->host = $host;
-		$this->user = $user;
-		$this->ssh_string = $ssh_string;
+	function __construct( string $name, string $host, string $user, string $ssh_string, array $site_details ) {
+		$this->name         = $name;
+		$this->host         = $host;
+		$this->user         = $user;
+		$this->ssh_string   = $ssh_string;
 		$this->site_details = $site_details;
 	}
 
-	public static function from_location( string $location ) : Site {
+	public static function from_location( string $location ): Site {
 		$user = '';
-		$ssh = '';
+		$ssh  = '';
 
 		$location = trim( $location );
 
@@ -28,21 +28,22 @@ class Site {
 		$details = null;
 		preg_match( "/^(?'ssh'(?'username'\S+)@(?'host'[^:]+)):(?'sitename'\S+)/", $location, $details );
 
-		if (!$details && (strpos($location, ':') || strpos($location, '@'))) {
-			EE::error('Invalid format for remote site. Please use [user@ssh-hostname:] sitename');
+		if ( ! $details && ( strpos( $location, ':' ) || strpos( $location, '@' ) ) ) {
+			EE::error( 'Invalid format for remote site. Please use [user@ssh-hostname:] sitename' );
 		}
 		if ( $details ) {
-			$host = $details['host'];
-			$user = $details['username'];
-			$ssh = $details['ssh'];
+			$host     = $details['host'];
+			$user     = $details['username'];
+			$ssh      = $details['ssh'];
 			$sitename = $details['sitename'] ?? null;
 
 			$site = new EE\Site\Cloner\Site( $sitename, $host, $user, $ssh, [] );
+
 			return $site;
 		}
 
 		// Local
-		$host = 'localhost';
+		$host     = 'localhost';
 		$sitename = $location === '.' ? '' : $location;
 
 		$site = new EE\Site\Cloner\Site( $sitename, $host, $user, $ssh, [] );
@@ -50,25 +51,26 @@ class Site {
 		return $site;
 	}
 
-	public function execute( string $command ) : EE\ProcessRun {
+	public function execute( string $command ): EE\ProcessRun {
 		return EE::launch( $this->get_ssh_command( $command ) );
 	}
 
-	private function get_ssh_command( string $command ) : string {
+	private function get_ssh_command( string $command ): string {
 		$key = get_ssh_key_path();
-		return $this->ssh_string ? 'ssh -t -i ' . $key . ' ' . $this->ssh_string . ' "' . $command . '"' : $command ;
+
+		return $this->ssh_string ? 'ssh -t -i ' . $key . ' ' . $this->ssh_string . ' "' . $command . '"' : $command;
 	}
 
-	public function get_rsync_path( string $path ) : string {
+	public function get_rsync_path( string $path ): string {
 		return $this->ssh_string ? $this->ssh_string . ':' . $path : $path;
 	}
 
-	public function get_site_root_dir() : string {
+	public function get_site_root_dir(): string {
 		return $this->get_rsync_path( $this->site_details['site_fs_path'] . '/app/htdocs/' );
 	}
 
-	public function validate_ee_version() : void {
-		$result = $this->execute( 'ee cli version' );
+	public function validate_ee_version(): void {
+		$result  = $this->execute( 'ee cli version' );
 		$matches = null;
 
 		preg_match( "/^EE (?'version'\S+)/", $result->stdout, $matches );
@@ -76,14 +78,14 @@ class Site {
 		$matches['version'] = preg_replace( '/-nightly.*$/', '', $matches['version'] );
 
 		if ( Comparator::lessThan( $matches['version'], '4.1.3' ) ) {
-			EE::error('EasyEngine version on \'' . $this->host . '\' is \'' . $matches['version'] . '\' which is less than minimum required version \'4.1.3\' for cloning site.');
+			EE::error( 'EasyEngine version on \'' . $this->host . '\' is \'' . $matches['version'] . '\' which is less than minimum required version \'4.1.3\' for cloning site.' );
 		}
 	}
 
-	private function get_ssl_args( Site $source_site, $assoc_args ) : string {
+	private function get_ssl_args( Site $source_site, $assoc_args ): string {
 		$site_details = $source_site->site_details;
-		$ssl_args='';
-		$add_wildcard=false;
+		$ssl_args     = '';
+		$add_wildcard = false;
 
 		if ( $assoc_args['ssl'] ?? false ) {
 			if ( $assoc_args['ssl'] !== 'off' ) {
@@ -91,9 +93,11 @@ class Site {
 				if ( $assoc_args['ssl'] === 'custom' ) {
 					if ( ! ( $assoc_args['ssl-key'] ?? false && $assoc_args['ssl-crt'] ?? false ) ) {
 						EE::error( 'You need to specify --ssl-crt and --ssl-key with --ssl=custom' );
-					} if ( ! is_file ( $assoc_args['ssl-crt'] ) ) {
+					}
+					if ( ! is_file( $assoc_args['ssl-crt'] ) ) {
 						EE::error( 'Unable to find file specified in --ssl-crt at \'' . $assoc_args['ssl-crt'] . '\'' );
-					} if ( ! is_file ( $assoc_args['ssl-key'] ) ) {
+					}
+					if ( ! is_file( $assoc_args['ssl-key'] ) ) {
 						EE::error( 'Unable to find file specified in --ssl-key at \'' . $assoc_args['ssl-key'] . '\'' );
 					}
 
@@ -101,7 +105,7 @@ class Site {
 					$rsync_command_key = rsync_command( $assoc_args['ssl-key'], $this->get_rsync_path( '/tmp/' ) );
 
 					if ( ! ( EE::exec( $rsync_command_key ) && EE::exec( $rsync_command_crt ) ) ) {
-						EE::error('Unable to sync certs.');
+						EE::error( 'Unable to sync certs.' );
 					}
 
 					$ssl_args .= ' --ssl-crt=\'' . '/tmp/' . basename( $assoc_args['ssl-crt'] ) . '\'';
@@ -111,6 +115,7 @@ class Site {
 					$ssl_args .= ' --wildcard';
 				}
 			}
+
 			return $ssl_args;
 		}
 
@@ -125,7 +130,7 @@ class Site {
 					}
 				} elseif ( $site_details['site_ssl'] === 'inherit' ) {
 					EE::warning( 'Unable to enable SSL for ' . $this->name . ' as the source site was created with --ssl=custom. You can enable SSL with \'ee site update\' once site is cloned.' );
-				} elseif ( $site_details['site_ssl'] === 'self' )  {
+				} elseif ( $site_details['site_ssl'] === 'self' ) {
 					$ssl_args .= ' --ssl=' . $site_details['site_ssl'];
 					if ( $site_details['site_ssl_wildcard'] ) {
 						$ssl_args .= ' --wildcard';
@@ -135,7 +140,7 @@ class Site {
 				// If name of src and dest site are note same
 				if ( $site_details['site_ssl'] === 'custom' || $site_details['site_ssl'] === 'inherit' ) {
 					EE::warning( 'Unable to enable SSL for ' . $this->name . ' as the source site was created with --ssl=custom or --ssl=inherited. You can enable SSL with \'ee site update\' once site is cloned.' );
-				} elseif ( $site_details['site_ssl'] === 'self' )  {
+				} elseif ( $site_details['site_ssl'] === 'self' ) {
 					$ssl_args .= ' --ssl=' . $site_details['site_ssl'];
 					if ( $site_details['site_ssl_wildcard'] ) {
 						$ssl_args .= ' --wildcard';
@@ -143,22 +148,23 @@ class Site {
 				}
 			}
 		}
+
 		return $ssl_args;
 	}
 
-	private function get_site_create_command( Site $source_site, $assoc_args ) : string {
+	private function get_site_create_command( Site $source_site, $assoc_args ): string {
 		$site_details = $source_site->site_details;
-		$command = 'ee site create ' . $this->name . ' --type=' . $site_details['site_type'] ;
+		$command      = 'ee site create ' . $this->name . ' --type=' . $site_details['site_type'];
 
-		if ( in_array( $site_details['site_type'], [ 'html', 'php', 'wp'] ) ) {
+		if ( in_array( $site_details['site_type'], [ 'html', 'php', 'wp' ] ) ) {
 			if ( '/var/www/htdocs' !== $site_details['site_container_fs_path'] ) {
-				$path = str_replace( '/var/www/htdocs/', '', $site_details['site_container_fs_path'] );
+				$path    = str_replace( '/var/www/htdocs/', '', $site_details['site_container_fs_path'] );
 				$command .= " --public-dir=$path";
 			}
 			$command .= $this->get_ssl_args( $source_site, $assoc_args );
 		}
 
-		if ( in_array( $site_details['site_type'], [ 'php', 'wp'] ) ) {
+		if ( in_array( $site_details['site_type'], [ 'php', 'wp' ] ) ) {
 			if ( ! empty( $site_details['cache_nginx_browser'] ) ) {
 				$command .= " --cache";
 			}
@@ -191,50 +197,52 @@ class Site {
 			}
 			// TODO: vip, proxy-cache-max-time, proxy-cache-max-size
 		}
+
 		return $command;
 	}
 
-	public function create_site( Site $source_site, $assoc_args ) : EE\ProcessRun {
+	public function create_site( Site $source_site, $assoc_args ): EE\ProcessRun {
 		EE::log( 'Creating site' );
 		EE::debug( 'Creating site "' . $this->name . '" on "' . $this->host . '"' );
 
 		$this->ensure_site_not_exists();
 		$new_site = $this->execute( $this->get_site_create_command( $source_site, $assoc_args ) );
 		$this->set_site_details();
+
 		return $new_site;
 	}
 
-	public function site_exists() : bool {
+	public function site_exists(): bool {
 		return 0 === $this->execute( 'ee site info ' . $this->name )->return_code;
 	}
 
-	public function ensure_site_exists() : void {
-		if( ! $this->site_exists() ) {
-			EE::error('Unable to find \'' . $this->name . '\' on \'' . $this->host . '\'');
+	public function ensure_site_exists(): void {
+		if ( ! $this->site_exists() ) {
+			EE::error( 'Unable to find \'' . $this->name . '\' on \'' . $this->host . '\'' );
 		}
 	}
 
-	public function ensure_site_not_exists() : void {
-		if( $this->site_exists() ) {
-			EE::error('Site  \'' . $this->name . '\' already exists on \'' . $this->host . '\'');
+	public function ensure_site_not_exists(): void {
+		if ( $this->site_exists() ) {
+			EE::error( 'Site  \'' . $this->name . '\' already exists on \'' . $this->host . '\'' );
 		}
 	}
 
-	public function ssh_success() : bool {
+	public function ssh_success(): bool {
 		return 0 === $this->execute( 'exit' )->return_code;
 	}
 
-	public function ensure_ssh_success() : void {
-		if( ! $this->ssh_success()) {
-			EE::error('Unable to SSH to ' . $this->host);
+	public function ensure_ssh_success(): void {
+		if ( ! $this->ssh_success() ) {
+			EE::error( 'Unable to SSH to ' . $this->host );
 		}
 	}
 
-	function set_site_details() : void {
-		$output = $this->execute('ee site info ' . $this->name . ' --format=json' );
+	function set_site_details(): void {
+		$output  = $this->execute( 'ee site info ' . $this->name . ' --format=json' );
 		$details = json_decode( $output->stdout, true );
 		if ( empty( $details ) ) {
-			EE::error('Unable to get site info for site ' . $this->name . '. The output of command is: ' . $output->stdout . $output->stderr);
+			EE::error( 'Unable to get site info for site ' . $this->name . '. The output of command is: ' . $output->stdout . $output->stderr );
 		}
 		$this->site_details = $details;
 	}
