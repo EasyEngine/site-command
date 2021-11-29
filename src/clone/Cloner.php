@@ -148,13 +148,11 @@ class Site {
 		$site_details = $source_site->site_details;
 		$command      = 'ee site create ' . $this->name . ' --type=' . $site_details['site_type'];
 
-		if ( in_array( $site_details['site_type'], [ 'html', 'php', 'wp' ] ) ) {
-			if ( '/var/www/htdocs' !== $site_details['site_container_fs_path'] ) {
-				$path    = str_replace( '/var/www/htdocs/', '', $site_details['site_container_fs_path'] );
-				$command .= " --public-dir=$path";
-			}
-			$command .= $this->get_ssl_args( $source_site, $assoc_args );
+		if ( '/var/www/htdocs' !== $site_details['site_container_fs_path'] ) {
+			$path    = str_replace( '/var/www/htdocs/', '', $site_details['site_container_fs_path'] );
+			$command .= " --public-dir=$path";
 		}
+		$command .= $this->get_ssl_args( $source_site, $assoc_args );
 
 		if ( in_array( $site_details['site_type'], [ 'php', 'wp' ] ) ) {
 			if ( ! empty( $site_details['cache_nginx_browser'] ) ) {
