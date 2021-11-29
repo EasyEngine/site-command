@@ -144,9 +144,9 @@ function get_transfer_details( string $source, string $destination ): array {
 	$destination_site = Site::from_location( $destination );
 
 	if ( ! $source_site->name && ! $destination_site->name ) {
-		EE::error( "No sitename found in source and destination site." );
+		EE::error( 'No sitename found in source and destination site.' );
 	} elseif ( $source_site->ssh_string && $destination_site->ssh_string ) {
-		EE::error( "Both source and destination sites cannot be remote." );
+		EE::error( 'Both source and destination sites cannot be remote.' );
 	} elseif ( ! $source_site->name ) {
 		$source_site->name = $destination_site->name;
 	} elseif ( ! $destination_site->name ) {
