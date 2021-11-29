@@ -4,7 +4,6 @@ namespace EE\Site\Cloner;
 
 use Composer\Semver\Comparator;
 use EE;
-use function EE\Site\Cloner\Utils\get_ssh_key_path;
 use function EE\Site\Cloner\Utils\rsync_command;
 
 class Site {
@@ -56,9 +55,7 @@ class Site {
 	}
 
 	private function get_ssh_command( string $command ): string {
-		$key = get_ssh_key_path();
-
-		return $this->ssh_string ? 'ssh -t -i ' . $key . ' ' . $this->ssh_string . ' "' . $command . '"' : $command;
+		return $this->ssh_string ? 'ssh -t ' . $this->ssh_string . ' "' . $command . '"' : $command;
 	}
 
 	public function get_rsync_path( string $path ): string {
@@ -74,12 +71,7 @@ class Site {
 		$matches = null;
 
 		preg_match( "/^EE (?'version'\S+)/", $result->stdout, $matches );
-
-		$matches['version'] = preg_replace( '/-nightly.*$/', '', $matches['version'] );
-
-		if ( Comparator::lessThan( $matches['version'], '4.1.3' ) ) {
-			EE::error( 'EasyEngine version on \'' . $this->host . '\' is \'' . $matches['version'] . '\' which is less than minimum required version \'4.1.3\' for cloning site.' );
-		}
+		$matches['version'] = preg_replace('/-nightly.*$/', '', $matches['version']);
 	}
 
 	private function get_ssl_args( Site $source_site, $assoc_args ): string {

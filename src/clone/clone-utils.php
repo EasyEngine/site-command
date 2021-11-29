@@ -115,7 +115,7 @@ function copy_site_files( Site $source, Site $destination, string $sync_type ) {
 }
 
 function rsync_command( string $source, string $destination, array $options = [] ) {
-	$ssh_command   = 'ssh -t -i ' . get_ssh_key_path();
+	$ssh_command   = 'ssh -t';
 	$extra_options = implode( ' ', $options );
 
 	return 'rsync -azh --delete-after --ignore-errors ' . $extra_options . ' -e "' . $ssh_command . '" ' . $source . ' ' . $destination;
@@ -158,12 +158,6 @@ function get_transfer_details( string $source, string $destination ): array {
 	}
 
 	return [ $source_site, $destination_site ];
-}
-
-function get_ssh_key_path() {
-	$user_home = get_user_home_dir( get_current_user() );
-
-	return $user_home . '/.ssh/id_rsa';
 }
 
 function get_user_home_dir( string $user ) {
