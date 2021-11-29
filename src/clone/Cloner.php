@@ -161,10 +161,8 @@ class Site {
 			if ( ! empty( $site_details['cache_host'] ) ) {
 				$command .= " --with-local-redis";
 			}
-			if ( ( ! empty( $site_details['db_host'] ) && 'php' === $site_details['site_type'] ) || 'wp' === $site_details['site_type'] ) {
-				if ( 'php' === $site_details['site_type'] ) {
-					$command .= " --with-db";
-				}
+			if ( ( ! empty( $site_details['db_host'] ) && 'php' === $site_details['site_type'] ) ) {
+				$command .= " --with-db";
 			}
 			$command .= " --php=${site_details['php_version']}";
 		}
