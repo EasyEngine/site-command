@@ -179,6 +179,7 @@ class HTML extends EE_Site_Command {
 	 *
 	 */
 	public function info( $args, $assoc_args ) {
+
 		$format = \EE\Utils\get_flag_value( $assoc_args, 'format' );
 
 		\EE\Utils\delem_log( 'site info start' );
