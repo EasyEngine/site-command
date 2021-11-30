@@ -230,7 +230,7 @@ class Site {
 		$output  = $this->execute( 'ee site info ' . $this->name . ' --format=json' );
 		$details = json_decode( $output->stdout, true );
 		if ( empty( $details ) ) {
-			EE::error( 'Unable to get site info for site ' . $this->name . '. The output of command is: ' . $output->stdout . $output->stderr );
+			EE::error( 'Site ' . $this->name . ' does not exist on remote server' );
 		}
 		$this->site_details = $details;
 	}
