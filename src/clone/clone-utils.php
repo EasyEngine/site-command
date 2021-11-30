@@ -13,7 +13,12 @@ function copy_site_db( Site $source, Site $destination ) {
 	$site_type = $source->site_details['site_type'];
 	$db_host   = $source->site_details['db_host'];
 
-	if ( 'wp' === $site_type || 'php' === $site_type && ! empty( $db_host ) ) {
+	if ( 'php' === $site_type && ! empty( $db_host ) ) {
+		EE::log( 'Please sync the database manually from the remote site. Automated database sync for non-WP PHP sites will be supported soon.' );
+		return;
+	}
+
+	if ( 'wp' === $site_type ) {
 		$source_site_name      = $source->site_details['site_url'];
 		$destination_site_name = $destination->site_details['site_url'];
 
