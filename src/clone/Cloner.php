@@ -5,6 +5,7 @@ namespace EE\Site\Cloner;
 use Composer\Semver\Comparator;
 use EE;
 use function EE\Site\Cloner\Utils\rsync_command;
+use function EE\Utils\get_temp_dir;
 
 class Site {
 	public $name, $host, $user, $ssh_string, $site_details, $rsp;
@@ -98,15 +99,15 @@ class Site {
 						throw new \Exception( 'Unable to find file specified in --ssl-key at \'' . $assoc_args['ssl-key'] . '\'' );
 					}
 
-					$rsync_command_crt = rsync_command( $assoc_args['ssl-crt'], $this->get_rsync_path( '/tmp/' ) );
-					$rsync_command_key = rsync_command( $assoc_args['ssl-key'], $this->get_rsync_path( '/tmp/' ) );
+					$rsync_command_crt = rsync_command( $assoc_args['ssl-crt'], $this->get_rsync_path( get_temp_dir() ) );
+					$rsync_command_key = rsync_command( $assoc_args['ssl-key'], $this->get_rsync_path( get_temp_dir() ) );
 
 					if ( ! ( EE::exec( $rsync_command_key ) && EE::exec( $rsync_command_crt ) ) ) {
 						throw new \Exception( 'Unable to sync certs.' );
 					}
 
-					$ssl_args .= ' --ssl-crt=\'' . '/tmp/' . basename( $assoc_args['ssl-crt'] ) . '\'';
-					$ssl_args .= ' --ssl-key=\'' . '/tmp/' . basename( $assoc_args['ssl-key'] ) . '\'';
+					$ssl_args .= ' --ssl-crt=\'' . get_temp_dir() . basename( $assoc_args['ssl-crt'] ) . '\'';
+					$ssl_args .= ' --ssl-key=\'' . get_temp_dir() . basename( $assoc_args['ssl-key'] ) . '\'';
 				}
 				if ( $assoc_args['wildcard'] ?? false ) {
 					$ssl_args .= ' --wildcard';
@@ -121,7 +122,7 @@ class Site {
 			if ( $this->name === $source_site->name ) {
 				if ( $site_details['site_ssl'] === 'le' || $site_details['site_ssl'] === 'custom' ) {
 					EE\Site\Cloner\Utils\copy_site_certs( $source_site, $this );
-					$ssl_args .= ' --ssl=custom --ssl-key=\'' . '/tmp/' . $source_site->name . '.key\' --ssl-crt=\'/tmp/' . $source_site->name . '.crt\'';
+					$ssl_args .= ' --ssl=custom --ssl-key=\'' . get_temp_dir() . $source_site->name . '.key\' --ssl-crt=\'' . get_temp_dir() . $source_site->name . '.crt\'';
 					if ( $site_details['site_ssl_wildcard'] ) {
 						$ssl_args .= ' --wildcard';
 					}

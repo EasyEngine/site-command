@@ -5,6 +5,7 @@ namespace EE\Site\Cloner\Utils;
 use EE;
 use EE\Site\Cloner\Site;
 use function EE\Utils\get_flag_value;
+use function EE\Utils\get_temp_dir;
 use function EE\Utils\random_password;
 use function EE\Utils\trailingslashit;
 
@@ -107,15 +108,15 @@ function remove_db_files( $source, $destination, $filename ) {
 }
 
 function copy_site_certs( Site $source, Site $destination ) {
-	$rsync_command = rsync_command( $source->get_rsync_path( '/opt/easyengine/services/nginx-proxy/certs/' . $source->name . '.{key,crt}' ), $destination->get_rsync_path( '/tmp/' ) );
+	$rsync_command = rsync_command( $source->get_rsync_path( '/opt/easyengine/services/nginx-proxy/certs/' . $source->name . '.{key,crt}' ), $destination->get_rsync_path( get_temp_dir() ) );
 
 	$destination->rsp->add_step( 'clone-cert-copy', function () use ( $rsync_command, $destination ) {
-		if ( ! EE::exec( $rsync_command ) || $destination->execute( 'ls -1 /tmp/' . $destination->name . '.* | wc -l' )->stdout !== "2\n" ) {
+		if ( ! EE::exec( $rsync_command ) || $destination->execute( 'ls -1 ' . get_temp_dir() . $destination->name . '.* | wc -l' )->stdout !== "2\n" ) {
 			EE::warning( 'Unable to sync certs.' );
 			throw new \Exception( 'Unable to sync certs.' );
 		}
 	}, function () use ( $destination ) {
-		$destination->execute( 'rm /tmp/' . $destination->name . '.*' );
+		$destination->execute( 'rm ' . get_temp_dir() . $destination->name . '.*' );
 	} );
 
 	$destination->rsp->execute();
