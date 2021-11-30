@@ -216,6 +216,10 @@ class Site {
 	public function site_exists(): bool {
 		$site_list = $this->execute( 'ee site list --format=json' );
 
+		if ( 1 === $site_list->return_code && 'Error: No sites found!' . PHP_EOL === $site_list->stderr ) {
+            return false;
+        }
+
 		if ( 0 !== $site_list->return_code ) {
 			throw new \Exception( 'Unable to get site list on remote server.' );
 		}
