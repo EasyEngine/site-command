@@ -7,7 +7,7 @@ use EE;
 use function EE\Site\Cloner\Utils\rsync_command;
 
 class Site {
-	public $name, $host, $user, $ssh_string, $site_details;
+	public $name, $host, $user, $ssh_string, $site_details, $rsp;
 
 	function __construct( string $name, string $host, string $user, string $ssh_string, array $site_details ) {
 		$this->name         = $name;
@@ -15,7 +15,12 @@ class Site {
 		$this->user         = $user;
 		$this->ssh_string   = $ssh_string;
 		$this->site_details = $site_details;
+		$this->rsp          = new EE\RevertableStepProcessor();
 	}
+
+	public function rollback() {
+        $this->rsp->rollback();
+    }
 
 	public static function from_location( string $location ): Site {
 		$user = '';
@@ -28,7 +33,7 @@ class Site {
 		preg_match( "/^(?'ssh'(?'username'\S+)@(?'host'[^:]+)):(?'sitename'\S+)/", $location, $details );
 
 		if ( ! $details && ( strpos( $location, ':' ) || strpos( $location, '@' ) ) ) {
-			EE::error( 'Invalid format for remote site. Please use [user@ssh-hostname:] sitename' );
+			throw new \Exception( 'Invalid format for remote site. Please use [user@ssh-hostname:] sitename' );
 		}
 		if ( $details ) {
 			$host     = $details['host'];
@@ -84,20 +89,20 @@ class Site {
 				$ssl_args .= ' --ssl=' . $assoc_args['ssl'];
 				if ( $assoc_args['ssl'] === 'custom' ) {
 					if ( ! ( $assoc_args['ssl-key'] ?? false && $assoc_args['ssl-crt'] ?? false ) ) {
-						EE::error( 'You need to specify --ssl-crt and --ssl-key with --ssl=custom' );
+						throw new \Exception( 'You need to specify --ssl-crt and --ssl-key with --ssl=custom' );
 					}
 					if ( ! is_file( $assoc_args['ssl-crt'] ) ) {
-						EE::error( 'Unable to find file specified in --ssl-crt at \'' . $assoc_args['ssl-crt'] . '\'' );
+						throw new \Exception( 'Unable to find file specified in --ssl-crt at \'' . $assoc_args['ssl-crt'] . '\'' );
 					}
 					if ( ! is_file( $assoc_args['ssl-key'] ) ) {
-						EE::error( 'Unable to find file specified in --ssl-key at \'' . $assoc_args['ssl-key'] . '\'' );
+						throw new \Exception( 'Unable to find file specified in --ssl-key at \'' . $assoc_args['ssl-key'] . '\'' );
 					}
 
 					$rsync_command_crt = rsync_command( $assoc_args['ssl-crt'], $this->get_rsync_path( '/tmp/' ) );
 					$rsync_command_key = rsync_command( $assoc_args['ssl-key'], $this->get_rsync_path( '/tmp/' ) );
 
 					if ( ! ( EE::exec( $rsync_command_key ) && EE::exec( $rsync_command_crt ) ) ) {
-						EE::error( 'Unable to sync certs.' );
+						throw new \Exception( 'Unable to sync certs.' );
 					}
 
 					$ssl_args .= ' --ssl-crt=\'' . '/tmp/' . basename( $assoc_args['ssl-crt'] ) . '\'';
@@ -193,9 +198,16 @@ class Site {
 		EE::log( 'Creating site' );
 		EE::debug( 'Creating site "' . $this->name . '" on "' . $this->host . '"' );
 
+		$new_site='';
 		$this->ensure_site_not_exists();
-		$new_site = $this->execute( $this->get_site_create_command( $source_site, $assoc_args ) );
-		$this->set_site_details();
+		$this->rsp->add_step( 'clone-create-site', function () use ( $source_site, $assoc_args, &$new_site ) {
+			$new_site = $this->execute( $this->get_site_create_command( $source_site, $assoc_args ) );
+			$this->set_site_details();
+		}, function () {
+			$this->execute( 'ee site delete --yes ' . $this->name );
+		});
+
+		$this->rsp->execute();
 
 		return $new_site;
 	}
@@ -204,7 +216,7 @@ class Site {
 		$site_list = $this->execute( 'ee site list --format=json' );
 
 		if ( 0 !== $site_list->return_code ) {
-			EE::error( 'Unable to get site list on remote server.' );
+			throw new \Exception( 'Unable to get site list on remote server.' );
 		}
 
 		$sites = json_decode( $site_list->stdout, true );
@@ -212,7 +224,7 @@ class Site {
 		foreach ( $sites as $site ) {
 			if ( $site['site'] === $this->name ) {
                 if ( 'disabled' === $site['status'] ) {
-					EE::error( 'The site that you want to clone has been disabled. Please enable the site and clone again.' );
+					throw new \Exception( 'The site that you want to clone has been disabled. Please enable the site and clone again.' );
 				}
 				return true;
             }
@@ -223,13 +235,13 @@ class Site {
 
 	public function ensure_site_exists(): void {
 		if ( ! $this->site_exists() ) {
-			EE::error( 'Unable to find \'' . $this->name . '\' on \'' . $this->host . '\'' );
+			throw new \Exception( 'Unable to find \'' . $this->name . '\' on \'' . $this->host . '\'' );
 		}
 	}
 
 	public function ensure_site_not_exists(): void {
 		if ( $this->site_exists() ) {
-			EE::error( 'Site  \'' . $this->name . '\' already exists on \'' . $this->host . '\'' );
+			throw new \Exception( 'Site  \'' . $this->name . '\' already exists on \'' . $this->host . '\'' );
 		}
 	}
 
@@ -239,7 +251,7 @@ class Site {
 
 	public function ensure_ssh_success(): void {
 		if ( ! $this->ssh_success() ) {
-			EE::error( 'Unable to SSH to ' . $this->host );
+			throw new \Exception( 'Unable to SSH to ' . $this->host );
 		}
 	}
 
@@ -249,7 +261,7 @@ class Site {
 		$output  = $this->execute( 'ee site info ' . $this->name . ' --format=json' );
 		$details = json_decode( $output->stdout, true );
 		if ( empty( $details ) ) {
-			EE::error( 'Unable to get info for site ' . $this->name );
+			throw new \Exception( 'Unable to get info for site ' . $this->name );
 		}
 		$this->site_details = $details;
 	}

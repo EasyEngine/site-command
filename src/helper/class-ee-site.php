@@ -2063,40 +2063,50 @@ abstract class EE_Site_Command {
 
 		list( $source, $destination ) = get_transfer_details( $args[0], $args[1] );
 
-		check_site_access( $source, $destination, $assoc_args );
+		try {
 
-		if ( get_flag_value( $assoc_args, 'files' ) ) {
-			$sync = 'files';
-		} elseif ( get_flag_value( $assoc_args, 'uploads' ) ) {
-			$sync = 'uploads';
-		} elseif ( get_flag_value( $assoc_args, 'db' ) ) {
-			$sync = 'db';
-		} else {
-			$sync = 'all';
-		}
+			check_site_access( $source, $destination, $assoc_args );
 
-		$operations = [
-			'sync' =>  $sync
-		];
+			if ( get_flag_value( $assoc_args, 'files' ) ) {
+				$sync = 'files';
+			} elseif ( get_flag_value( $assoc_args, 'uploads' ) ) {
+				$sync = 'uploads';
+			} elseif ( get_flag_value( $assoc_args, 'db' ) ) {
+				$sync = 'db';
+			} else {
+				$sync = 'all';
+			}
 
-		if ( $destination->create_site( $source, $assoc_args )->return_code ) {
-			EE::error( 'Cannot create site ' . $destination->name . '. Please check logs for more info or rerun the command with --debug flag.' );
-		} else {
-			$destination->ensure_site_exists();
-			$destination->set_site_details();
-		}
+			$operations = [
+				'sync' =>  $sync
+			];
 
-		if ( $operations['sync'] === 'files' || $operations['sync'] === 'uploads' || $operations['sync'] === 'all' ) {
-			EE::log( 'Syncing files' );
-			copy_site_files( $source, $destination, $operations['sync'] );
-		}
+			if ( $destination->create_site( $source, $assoc_args )->return_code ) {
+				EE::error( 'Cannot create site ' . $destination->name . '. Please check logs for more info or rerun the command with --debug flag.' );
+			} else {
+				$destination->ensure_site_exists();
+				$destination->set_site_details();
+			}
 
-		if ( $operations['sync'] === 'db' || $operations['sync'] === 'all' ) {
-			EE::log( 'Syncing database' );
-			copy_site_db( $source, $destination );
-		}
-		EE::runcommand( ' site info ' . $destination->name );
-		EE::success( 'Site cloned successfully.' . PHP_EOL . 'You have to do these additional configurations manually (if required):' . PHP_EOL . '1.Update wp-config.php.' . PHP_EOL . '2.Add alias domains.' );
+			if ( $operations['sync'] === 'files' || $operations['sync'] === 'uploads' || $operations['sync'] === 'all' ) {
+				EE::log( 'Syncing files' );
+				copy_site_files( $source, $destination, $operations['sync'] );
+			}
+
+			if ( $operations['sync'] === 'db' || $operations['sync'] === 'all' ) {
+				EE::log( 'Syncing database' );
+				copy_site_db( $source, $destination );
+			}
+			EE::runcommand( ' site info ' . $destination->name );
+			EE::success( 'Site cloned successfully.' . PHP_EOL . 'You have to do these additional configurations manually (if required):' . PHP_EOL . '1.Update wp-config.php.' . PHP_EOL . '2.Add alias domains.' );
+		} catch ( \Exception $e ) {
+			EE::warning( 'Encountered error while cloning site. Rolling back.' );
+
+			$source->rollback();
+			$destination->rollback();
+
+            EE::error( $e->getMessage() );
+        }
 	}
 
 	/**
@@ -2144,35 +2154,44 @@ abstract class EE_Site_Command {
 
 		list( $source, $destination ) = get_transfer_details( $args[0], $args[1] );
 
-		check_site_access( $source, $destination, $assoc_args );
+		try {
+			check_site_access( $source, $destination, $assoc_args );
 
-		if ( get_flag_value( $assoc_args, 'files' ) ) {
-			$sync = 'files';
-		} elseif ( get_flag_value( $assoc_args, 'uploads' ) ) {
-			$sync = 'uploads';
-		} elseif ( get_flag_value( $assoc_args, 'db' ) ) {
-			$sync = 'db';
-		} else {
-			$sync = 'all';
+			if ( get_flag_value( $assoc_args, 'files' ) ) {
+				$sync = 'files';
+			} elseif ( get_flag_value( $assoc_args, 'uploads' ) ) {
+				$sync = 'uploads';
+			} elseif ( get_flag_value( $assoc_args, 'db' ) ) {
+				$sync = 'db';
+			} else {
+				$sync = 'all';
+			}
+
+			$operations = [
+				'sync' =>  $sync
+			];
+
+			$destination->ensure_site_exists();
+			$destination->set_site_details();
+
+			if ( $operations['sync'] === 'files' || $operations['sync'] === 'uploads' || $operations['sync'] === 'all' ) {
+				EE::log( 'Syncing files' );
+				copy_site_files( $source, $destination, $operations['sync'] );
+			}
+
+			if ( $operations['sync'] === 'db' || $operations['sync'] === 'all' ) {
+				EE::log('Syncing database');
+				copy_site_db( $source, $destination );
+			}
+			EE::success( 'Site synced successfully' );
+		} catch ( \Exception $e ) {
+			EE::warning( 'Encountered error while cloning site. Rolling back.' );
+
+			$source->rollback();
+			$destination->rollback();
+
+			EE::error( $e->getMessage() );
 		}
-
-		$operations = [
-			'sync' =>  $sync
-		];
-
-		$destination->ensure_site_exists();
-		$destination->set_site_details();
-
-		if ( $operations['sync'] === 'files' || $operations['sync'] === 'uploads' || $operations['sync'] === 'all' ) {
-			EE::log( 'Syncing files' );
-			copy_site_files( $source, $destination, $operations['sync'] );
-		}
-
-		if ( $operations['sync'] === 'db' || $operations['sync'] === 'all' ) {
-			EE::log('Syncing database');
-			copy_site_db( $source, $destination );
-		}
-		EE::success( 'Site synced successfully' );
 	}
 
 	abstract public function create( $args, $assoc_args );
