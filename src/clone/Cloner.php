@@ -201,7 +201,24 @@ class Site {
 	}
 
 	public function site_exists(): bool {
-		return 0 === $this->execute( 'ee site info ' . $this->name )->return_code;
+		$site_list = $this->execute( 'ee site list --format=json' );
+
+		if ( 0 !== $site_list->return_code ) {
+			EE::error( 'Unable to get site list on remote server.' );
+		}
+
+		$sites = json_decode( $site_list->stdout, true );
+
+		foreach ( $sites as $site ) {
+			if ( $site['site'] === $this->name ) {
+                if ( 'disabled' === $site['status'] ) {
+					EE::error( 'The site that you want to clone has been disabled. Please enable the site and clone again.' );
+				}
+				return true;
+            }
+		}
+
+		return false;
 	}
 
 	public function ensure_site_exists(): void {
@@ -227,10 +244,12 @@ class Site {
 	}
 
 	function set_site_details(): void {
+		$this->ensure_site_exists();
+
 		$output  = $this->execute( 'ee site info ' . $this->name . ' --format=json' );
 		$details = json_decode( $output->stdout, true );
 		if ( empty( $details ) ) {
-			EE::error( 'Site ' . $this->name . ' does not exist on remote server' );
+			EE::error( 'Unable to get info for site ' . $this->name );
 		}
 		$this->site_details = $details;
 	}
