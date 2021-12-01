@@ -34,7 +34,7 @@ class Site {
 		preg_match( "/^(?'ssh'(?'username'\S+)@(?'host'[^:]+)):(?'sitename'\S+)/", $location, $details );
 
 		if ( ! $details && ( strpos( $location, ':' ) || strpos( $location, '@' ) ) ) {
-			throw new \Exception( 'Invalid format for remote site. Please use [user@ssh-hostname:] sitename' );
+			EE::error( 'Invalid format for remote site. Please use [user@ssh-hostname:] sitename' );
 		}
 		if ( $details ) {
 			$host     = $details['host'];
