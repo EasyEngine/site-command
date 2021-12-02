@@ -110,16 +110,18 @@ function remove_db_files( $source, $destination, $filename ) {
 function copy_site_certs( Site $source, Site $destination ) {
 	$rsync_command = rsync_command( $source->get_rsync_path( EE_ROOT_DIR . '/services/nginx-proxy/certs/' . $source->name . '.{key,crt}' ), $destination->get_rsync_path( get_temp_dir() ) );
 
-	$destination->rsp->add_step( 'clone-cert-copy', function () use ( $rsync_command, $destination ) {
+	$rsp = new EE\RevertableStepProcessor();
+	$rsp->add_step( 'clone-cert-copy', function () use ( $rsync_command, $destination, $source ) {
 		if ( ! EE::exec( $rsync_command ) || $destination->execute( 'ls -1 ' . get_temp_dir() . $destination->name . '.* | wc -l' )->stdout !== "2\n" ) {
-			EE::warning( 'Unable to sync certs.' );
-			throw new \Exception( 'Unable to sync certs.' );
+			throw new \Exception( 'Unable to sync certs from source site ' . $source->name . ' on host ' . $source->host );
 		}
 	}, function () use ( $destination ) {
 		$destination->execute( 'rm ' . get_temp_dir() . $destination->name . '.*' );
 	} );
 
-	$destination->rsp->execute();
+	if ( ! $rsp->execute() )  {
+		throw new \Exception( 'Unable to sync certs.' );
+	}
 }
 
 function copy_site_files( Site $source, Site $destination, string $sync_type ) {
