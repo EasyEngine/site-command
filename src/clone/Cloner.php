@@ -80,6 +80,28 @@ class Site {
 		$matches['version'] = preg_replace('/-nightly.*$/', '', $matches['version']);
 	}
 
+	public function validate_parent_site_present_on_host( string $site ): void {
+		$list_result  = $this->execute( 'ee site list --format=json' );
+		$list_result = json_decode( $list_result->stdout, true );
+
+		foreach ( $list_result as $site_details ) {
+			$parent_site = $site_details['site'];
+			$substr_match = strpos( $site, $parent_site );
+
+			if ( $substr_match !== false && $substr_match !== 0 ) {
+				if ( explode( '.', $site, 2 )[1] === $parent_site ) {
+					$info_result = $this->execute( 'ee site info ' . $parent_site . ' --format=json' );
+					$info_result = json_decode( $info_result->stdout, true );
+					if ( $info_result['site_ssl'] !== '' && $info_result['site_ssl_wildcard'] === '1' ) {
+						return;
+					}
+				}
+			}
+		}
+
+		throw new \Exception( 'Parent site of ' . $site . ' not found on destination host ' . $this->host );
+	}
+
 	private function get_ssl_args( Site $source_site, $assoc_args ): string {
 		$site_details = $source_site->site_details;
 		$ssl_args     = '';
@@ -120,15 +142,16 @@ class Site {
 		if ( ! empty( $site_details['site_ssl'] ) ) {
 			// If name of src and dest site are same
 			if ( $this->name === $source_site->name ) {
-				if ( $site_details['site_ssl'] === 'le' || $site_details['site_ssl'] === 'custom' ) {
+				if ( $site_details['site_ssl'] === 'custom' ) {
 					EE\Site\Cloner\Utils\copy_site_certs( $source_site, $this );
 					$ssl_args .= ' --ssl=custom --ssl-key=\'' . get_temp_dir() . $source_site->name . '.key\' --ssl-crt=\'' . get_temp_dir() . $source_site->name . '.crt\'';
 					if ( $site_details['site_ssl_wildcard'] ) {
 						$ssl_args .= ' --wildcard';
 					}
 				} elseif ( $site_details['site_ssl'] === 'inherit' ) {
-					EE::warning( 'Unable to enable SSL for ' . $this->name . ' as the source site was created with --ssl=custom. You can enable SSL with \'ee site update\' once site is cloned.' );
-				} elseif ( $site_details['site_ssl'] === 'self' ) {
+					$this->validate_parent_site_present_on_host( $source_site->name );
+					$ssl_args .= ' --ssl=' . $site_details['site_ssl'];
+				} elseif ( $site_details['site_ssl'] === 'self' ||  $site_details['site_ssl'] === 'le' ) {
 					$ssl_args .= ' --ssl=' . $site_details['site_ssl'];
 					if ( $site_details['site_ssl_wildcard'] ) {
 						$ssl_args .= ' --wildcard';
