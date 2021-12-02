@@ -231,7 +231,7 @@ class Site {
 			$this->execute( 'ee site delete --yes ' . $this->name );
 		});
 
-		if ( ! $this->rsp->execute( false ) ) {
+		if ( ! $this->rsp->execute() ) {
 			throw new \Exception( 'Unable to create site.' );
 		}
 

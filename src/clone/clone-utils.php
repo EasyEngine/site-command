@@ -119,7 +119,7 @@ function copy_site_certs( Site $source, Site $destination ) {
 		$destination->execute( 'rm ' . get_temp_dir() . $destination->name . '.*' );
 	} );
 
-	if ( ! $rsp->execute() )  {
+	if ( ! $rsp->execute( false ) )  {
 		throw new \Exception( 'Unable to sync certs.' );
 	}
 }
