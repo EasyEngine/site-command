@@ -108,7 +108,7 @@ function remove_db_files( $source, $destination, $filename ) {
 }
 
 function copy_site_certs( Site $source, Site $destination ) {
-	$rsync_command = rsync_command( $source->get_rsync_path( '/opt/easyengine/services/nginx-proxy/certs/' . $source->name . '.{key,crt}' ), $destination->get_rsync_path( get_temp_dir() ) );
+	$rsync_command = rsync_command( $source->get_rsync_path( EE_ROOT_DIR . '/services/nginx-proxy/certs/' . $source->name . '.{key,crt}' ), $destination->get_rsync_path( get_temp_dir() ) );
 
 	$destination->rsp->add_step( 'clone-cert-copy', function () use ( $rsync_command, $destination ) {
 		if ( ! EE::exec( $rsync_command ) || $destination->execute( 'ls -1 ' . get_temp_dir() . $destination->name . '.* | wc -l' )->stdout !== "2\n" ) {
