@@ -8,6 +8,10 @@ use EE;
 use EE\Model\Site;
 use EE\Model\Option;
 use Symfony\Component\Filesystem\Filesystem;
+use function EE\Site\Cloner\Utils\check_site_access;
+use function EE\Site\Cloner\Utils\copy_site_db;
+use function EE\Site\Cloner\Utils\copy_site_files;
+use function EE\Site\Cloner\Utils\get_transfer_details;
 use function EE\Site\Utils\get_domains_of_site;
 use function EE\Site\Utils\get_preferred_ssl_challenge;
 use function EE\Site\Utils\update_site_db_entry;
@@ -554,7 +558,7 @@ abstract class EE_Site_Command {
 
 		$client = new Site_Letsencrypt();
 
-		$old_certs = $client->loadDomainCertificates($all_domains);
+		$old_certs = $client->loadDomainCertificates( $all_domains );
 
 		if ( $is_ssl ) {
 			// Update SSL.
@@ -765,12 +769,12 @@ abstract class EE_Site_Command {
 		EE::log( 'Starting php version update for: ' . $this->site_data->site_url );
 
 		try {
-			$old_php_version                 = $this->site_data->php_version;
-			$this->site_data->php_version    = $php_version;
-			$no_https                        = $this->site_data->site_ssl ? false : true;
-			$site                            = $this->site_data;
-			$array_data                      = ( array ) $this->site_data;
-			$this->site_data                 = reset( $array_data );
+			$old_php_version              = $this->site_data->php_version;
+			$this->site_data->php_version = $php_version;
+			$no_https                     = $this->site_data->site_ssl ? false : true;
+			$site                         = $this->site_data;
+			$array_data                   = ( array ) $this->site_data;
+			$this->site_data              = reset( $array_data );
 
 			EE::log( 'Taking backup of old php config.' );
 			$site_backup_dir     = $this->site_data['site_fs_path'] . '/.backup';
@@ -832,23 +836,26 @@ abstract class EE_Site_Command {
 		if ( $msmtp ) {
 			$custom_ini_data = array_map( function ( $custom_ini_data ) {
 				$sendmail_path = 'sendmail_path = /usr/bin/msmtp -t';
+
 				return stristr( $custom_ini_data, 'sendmail_path' ) ? "$sendmail_path\n" : $custom_ini_data;
 			}, $custom_ini_data );
 		} else {
 			$custom_ini_data = array_map( function ( $custom_ini_data ) {
 				$sendmail_path = 'sendmail_path = /usr/sbin/sendmail -t -i -f ee4@easyengine.io';
+
 				return stristr( $custom_ini_data, 'sendmail_path' ) ? "$sendmail_path\n" : $custom_ini_data;
 			}, $custom_ini_data );
 		}
 		file_put_contents( $custom_ini_path, implode( '', $custom_ini_data ) );
 	}
+
 	/**
 	 * Function to update ssl of a site.
 	 */
 	protected function update_ssl( $assoc_args ) {
 
-		$ssl            = EE\Utils\get_value_if_flag_isset( $assoc_args, 'ssl', 'le' );
-		$wildcard       = get_flag_value( $assoc_args, 'wildcard', false );
+		$ssl      = EE\Utils\get_value_if_flag_isset( $assoc_args, 'ssl', 'le' );
+		$wildcard = get_flag_value( $assoc_args, 'wildcard', false );
 
 		if ( $ssl === 'off' ) {
 			$ssl = false;
@@ -884,7 +891,7 @@ abstract class EE_Site_Command {
 			$this->site_data             = reset( $array_data );
 			$this->site_data['site_ssl'] = $ssl;
 
-			if( $ssl ) {
+			if ( $ssl ) {
 				$this->www_ssl_wrapper( [ 'nginx' ] );
 			} else {
 				$this->disable_ssl();
@@ -913,9 +920,9 @@ abstract class EE_Site_Command {
 	 */
 	private function disable_ssl() {
 
-		$this->dump_docker_compose_yml([ 'nohttps' => true ]);
+		$this->dump_docker_compose_yml( [ 'nohttps' => true ] );
 
-		\EE\Site\Utils\start_site_containers( $this->site_data['site_fs_path'], ['nginx'] );
+		\EE\Site\Utils\start_site_containers( $this->site_data['site_fs_path'], [ 'nginx' ] );
 		\EE\Site\Utils\reload_global_nginx_proxy();
 	}
 
@@ -1587,7 +1594,7 @@ abstract class EE_Site_Command {
 	 * : Force renewal.
 	 *
 	 * @subcommand ssl-verify
-	 * @alias ssl
+	 * @alias      ssl
 	 */
 	public function ssl_verify( $args = [], $assoc_args = [], $www_or_non_www = false ) {
 
@@ -1990,6 +1997,215 @@ abstract class EE_Site_Command {
 
 		$this->fs->copy( $this->site_data['ssl_key'], $ssl_key_dest, true );
 		$this->fs->copy( $this->site_data['ssl_crt'], $ssl_crt_dest, true );
+	}
+
+	/**
+	 * Syncs a website from source to a new website in destination.
+	 *
+	 * Note: SSL needs to be added explicitly in the new site.
+	 *
+	 * ## OPTIONS
+	 *
+	 * <source>
+	 * : Name of source website to be cloned. Format [user@ssh-hostname:]sitename
+	 *
+	 * <destination>
+	 * : Name of destination website to be cloned. Format [user@ssh-hostname:]sitename
+	 *
+	 * [--files]
+	 * : Sync only files.
+	 *
+	 * [--db]
+	 * : Sync only database.
+	 *
+	 * [--uploads]
+	 * : Sync only uploads.
+	 *
+	 * [--ssl]
+	 * : Enables ssl on site.
+	 * ---
+	 * options:
+	 *      - le
+	 *      - off
+	 *      - self
+	 *      - inherit
+	 *      - custom
+	 * ---
+	 *
+	 * [--ssl-key=<ssl-key-path>]
+	 * : Path to the SSL key file.
+	 *
+	 * [--ssl-crt=<ssl-crt-path>]
+	 * : Path to the SSL crt file.
+	 *
+	 * [--wildcard]
+	 * : Gets wildcard SSL.
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     # Clone site on same host
+	 *     $ ee site clone foo.com bar.com
+	 *
+	 *     # Clone site from remote server
+	 *     $ ee site clone root@foo.com:foo.com bar.com
+	 *
+	 *     # Clone site from remote with same name
+	 *     $ ee site clone root@foo.com:foo.com .
+	 *
+	 *     # Clone site to remote
+	 *     $ ee site clone foo.com root@foo.com:bar.com
+	 *
+	 *     # Clone site from remote. Only clone files and db, not uploads
+	 *     $ ee site clone root@foo.com:foo.com bar.com --files --db
+	 *
+	 *     # Clone site from remote and enable ssl
+	 *     $ ee site clone root@foo.com:foo.com bar.com --ssl=le --wildcard
+	 *
+	 */
+	public function clone( $args, $assoc_args ) {
+
+		list( $source, $destination ) = get_transfer_details( $args[0], $args[1] );
+
+		try {
+
+			check_site_access( $source, $destination, $assoc_args );
+
+			if ( 'wp' !== $source->site_details['site_type'] ) {
+				EE::error( 'Only clone of WordPress sites is supported as of now.' );
+			}
+
+			if ( get_flag_value( $assoc_args, 'files' ) ) {
+				$sync = 'files';
+			} elseif ( get_flag_value( $assoc_args, 'uploads' ) ) {
+				$sync = 'uploads';
+			} elseif ( get_flag_value( $assoc_args, 'db' ) ) {
+				$sync = 'db';
+			} else {
+				$sync = 'all';
+			}
+
+			$operations = [
+				'sync' => $sync
+			];
+
+			if ( $destination->create_site( $source, $assoc_args )->return_code ) {
+				EE::error( 'Cannot create site ' . $destination->name . '. Please check logs for more info or rerun the command with --debug flag.' );
+			}
+
+			$destination->ensure_site_exists();
+			$destination->set_site_details();
+
+			if ( $operations['sync'] === 'files' || $operations['sync'] === 'uploads' || $operations['sync'] === 'all' ) {
+				EE::log( 'Syncing files' );
+				copy_site_files( $source, $destination, $operations['sync'] );
+			}
+
+			if ( $operations['sync'] === 'db' || $operations['sync'] === 'all' ) {
+				EE::log( 'Syncing database' );
+				copy_site_db( $source, $destination );
+			}
+
+			echo $destination->execute( 'ee site info ' . $destination->name )->stdout;
+			$message = 'Site cloned successfully.';
+
+			if ( $destination->site_details['site_type'] === 'wp' ) {
+				$message .= PHP_EOL . 'You have to do these additional configurations manually (if required):' . PHP_EOL . '1. Update wp-config.php.' . PHP_EOL . '2. Add alias domains.';
+			}
+
+			EE::success( $message );
+		} catch ( \Exception $e ) {
+			EE::warning( 'Encountered error while cloning site. Rolling back.' );
+
+			$source->rollback();
+			$destination->rollback();
+
+			EE::error( $e->getMessage() );
+		}
+	}
+
+	/**
+	 * Syncs a website from source to an existing website in destination.
+	 *
+	 * ## OPTIONS
+	 *
+	 * <source>
+	 * : Name of source website to be synced. Format [user@ssh-hostname:]sitename
+	 *
+	 * <destination>
+	 * : Name of destination website to be synced. Format [user@ssh-hostname:]sitename
+	 *
+	 * [--files]
+	 * : Sync only files.
+	 *
+	 * [--db]
+	 * : Sync only database.
+	 *
+	 * [--uploads]
+	 * : Sync only uploads.
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     # Sync site on same host
+	 *     $ ee site sync foo.com bar.com
+	 *
+	 *     # Sync site from remote server
+	 *     $ ee site sync root@foo.com:foo.com bar.com
+	 *
+	 *     # Sync site from remote with same name
+	 *     $ ee site sync root@foo.com:foo.com .
+	 *
+	 *     # Sync site to remote
+	 *     $ ee site sync foo.com root@foo.com:bar.com
+	 *
+	 *     # Sync site from remote. Only clone files and db, not uploads
+	 *     $ ee site sync root@foo.com:foo.com bar.com --files --db
+	 *
+	 *     # Sync site from remote and enable ssl
+	 *     $ ee site sync root@foo.com:foo.com bar.com --ssl=le --wildcard
+	 *
+	 */
+	public function sync( $args, $assoc_args ) {
+
+		list( $source, $destination ) = get_transfer_details( $args[0], $args[1] );
+
+		try {
+			check_site_access( $source, $destination, $assoc_args );
+
+			if ( get_flag_value( $assoc_args, 'files' ) ) {
+				$sync = 'files';
+			} elseif ( get_flag_value( $assoc_args, 'uploads' ) ) {
+				$sync = 'uploads';
+			} elseif ( get_flag_value( $assoc_args, 'db' ) ) {
+				$sync = 'db';
+			} else {
+				$sync = 'all';
+			}
+
+			$operations = [
+				'sync' => $sync
+			];
+
+			$destination->ensure_site_exists();
+			$destination->set_site_details();
+
+			if ( $operations['sync'] === 'files' || $operations['sync'] === 'uploads' || $operations['sync'] === 'all' ) {
+				EE::log( 'Syncing files' );
+				copy_site_files( $source, $destination, $operations['sync'] );
+			}
+
+			if ( $operations['sync'] === 'db' || $operations['sync'] === 'all' ) {
+				EE::log( 'Syncing database' );
+				copy_site_db( $source, $destination );
+			}
+			EE::success( 'Site synced successfully' );
+		} catch ( \Exception $e ) {
+			EE::warning( 'Encountered error while cloning site. Rolling back.' );
+
+			$source->rollback();
+			$destination->rollback();
+
+			EE::error( $e->getMessage() );
+		}
 	}
 
 	abstract public function create( $args, $assoc_args );
