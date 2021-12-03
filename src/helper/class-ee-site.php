@@ -558,7 +558,7 @@ abstract class EE_Site_Command {
 
 		$client = new Site_Letsencrypt();
 
-		$old_certs = $client->loadDomainCertificates($all_domains);
+		$old_certs = $client->loadDomainCertificates( $all_domains );
 
 		if ( $is_ssl ) {
 			// Update SSL.
@@ -769,12 +769,12 @@ abstract class EE_Site_Command {
 		EE::log( 'Starting php version update for: ' . $this->site_data->site_url );
 
 		try {
-			$old_php_version                 = $this->site_data->php_version;
-			$this->site_data->php_version    = $php_version;
-			$no_https                        = $this->site_data->site_ssl ? false : true;
-			$site                            = $this->site_data;
-			$array_data                      = ( array ) $this->site_data;
-			$this->site_data                 = reset( $array_data );
+			$old_php_version              = $this->site_data->php_version;
+			$this->site_data->php_version = $php_version;
+			$no_https                     = $this->site_data->site_ssl ? false : true;
+			$site                         = $this->site_data;
+			$array_data                   = ( array ) $this->site_data;
+			$this->site_data              = reset( $array_data );
 
 			EE::log( 'Taking backup of old php config.' );
 			$site_backup_dir     = $this->site_data['site_fs_path'] . '/.backup';
@@ -836,23 +836,26 @@ abstract class EE_Site_Command {
 		if ( $msmtp ) {
 			$custom_ini_data = array_map( function ( $custom_ini_data ) {
 				$sendmail_path = 'sendmail_path = /usr/bin/msmtp -t';
+
 				return stristr( $custom_ini_data, 'sendmail_path' ) ? "$sendmail_path\n" : $custom_ini_data;
 			}, $custom_ini_data );
 		} else {
 			$custom_ini_data = array_map( function ( $custom_ini_data ) {
 				$sendmail_path = 'sendmail_path = /usr/sbin/sendmail -t -i -f ee4@easyengine.io';
+
 				return stristr( $custom_ini_data, 'sendmail_path' ) ? "$sendmail_path\n" : $custom_ini_data;
 			}, $custom_ini_data );
 		}
 		file_put_contents( $custom_ini_path, implode( '', $custom_ini_data ) );
 	}
+
 	/**
 	 * Function to update ssl of a site.
 	 */
 	protected function update_ssl( $assoc_args ) {
 
-		$ssl            = EE\Utils\get_value_if_flag_isset( $assoc_args, 'ssl', 'le' );
-		$wildcard       = get_flag_value( $assoc_args, 'wildcard', false );
+		$ssl      = EE\Utils\get_value_if_flag_isset( $assoc_args, 'ssl', 'le' );
+		$wildcard = get_flag_value( $assoc_args, 'wildcard', false );
 
 		if ( $ssl === 'off' ) {
 			$ssl = false;
@@ -888,7 +891,7 @@ abstract class EE_Site_Command {
 			$this->site_data             = reset( $array_data );
 			$this->site_data['site_ssl'] = $ssl;
 
-			if( $ssl ) {
+			if ( $ssl ) {
 				$this->www_ssl_wrapper( [ 'nginx' ] );
 			} else {
 				$this->disable_ssl();
@@ -917,9 +920,9 @@ abstract class EE_Site_Command {
 	 */
 	private function disable_ssl() {
 
-		$this->dump_docker_compose_yml([ 'nohttps' => true ]);
+		$this->dump_docker_compose_yml( [ 'nohttps' => true ] );
 
-		\EE\Site\Utils\start_site_containers( $this->site_data['site_fs_path'], ['nginx'] );
+		\EE\Site\Utils\start_site_containers( $this->site_data['site_fs_path'], [ 'nginx' ] );
 		\EE\Site\Utils\reload_global_nginx_proxy();
 	}
 
@@ -1591,7 +1594,7 @@ abstract class EE_Site_Command {
 	 * : Force renewal.
 	 *
 	 * @subcommand ssl-verify
-	 * @alias ssl
+	 * @alias      ssl
 	 */
 	public function ssl_verify( $args = [], $assoc_args = [], $www_or_non_www = false ) {
 
@@ -2082,7 +2085,7 @@ abstract class EE_Site_Command {
 			}
 
 			$operations = [
-				'sync' =>  $sync
+				'sync' => $sync
 			];
 
 			if ( $destination->create_site( $source, $assoc_args )->return_code ) {
@@ -2103,10 +2106,10 @@ abstract class EE_Site_Command {
 			}
 
 			echo $destination->execute( 'ee site info ' . $destination->name )->stdout;
-			$message='Site cloned successfully.';
+			$message = 'Site cloned successfully.';
 
-			if ( $destination->site_details['site_type'] === 'wp') {
-				$message .=  PHP_EOL . 'You have to do these additional configurations manually (if required):' . PHP_EOL . '1. Update wp-config.php.' . PHP_EOL . '2. Add alias domains.';
+			if ( $destination->site_details['site_type'] === 'wp' ) {
+				$message .= PHP_EOL . 'You have to do these additional configurations manually (if required):' . PHP_EOL . '1. Update wp-config.php.' . PHP_EOL . '2. Add alias domains.';
 			}
 
 			EE::success( $message );
@@ -2116,8 +2119,8 @@ abstract class EE_Site_Command {
 			$source->rollback();
 			$destination->rollback();
 
-            EE::error( $e->getMessage() );
-        }
+			EE::error( $e->getMessage() );
+		}
 	}
 
 	/**
@@ -2179,7 +2182,7 @@ abstract class EE_Site_Command {
 			}
 
 			$operations = [
-				'sync' =>  $sync
+				'sync' => $sync
 			];
 
 			$destination->ensure_site_exists();
@@ -2191,7 +2194,7 @@ abstract class EE_Site_Command {
 			}
 
 			if ( $operations['sync'] === 'db' || $operations['sync'] === 'all' ) {
-				EE::log('Syncing database');
+				EE::log( 'Syncing database' );
 				copy_site_db( $source, $destination );
 			}
 			EE::success( 'Site synced successfully' );

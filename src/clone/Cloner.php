@@ -20,8 +20,8 @@ class Site {
 	}
 
 	public function rollback() {
-        $this->rsp->rollback();
-    }
+		$this->rsp->rollback();
+	}
 
 	public static function from_location( string $location ): Site {
 		$user = '';
@@ -77,15 +77,15 @@ class Site {
 		$matches = null;
 
 		preg_match( "/^EE (?'version'\S+)/", $result->stdout, $matches );
-		$matches['version'] = preg_replace('/-nightly.*$/', '', $matches['version']);
+		$matches['version'] = preg_replace( '/-nightly.*$/', '', $matches['version'] );
 	}
 
 	public function validate_parent_site_present_on_host( string $site ): void {
-		$list_result  = $this->execute( 'ee site list --format=json' );
+		$list_result = $this->execute( 'ee site list --format=json' );
 		$list_result = json_decode( $list_result->stdout, true );
 
 		foreach ( $list_result as $site_details ) {
-			$parent_site = $site_details['site'];
+			$parent_site  = $site_details['site'];
 			$substr_match = strpos( $site, $parent_site );
 
 			if ( $substr_match !== false && $substr_match !== 0 ) {
@@ -151,7 +151,7 @@ class Site {
 				} elseif ( $site_details['site_ssl'] === 'inherit' ) {
 					$this->validate_parent_site_present_on_host( $source_site->name );
 					$ssl_args .= ' --ssl=' . $site_details['site_ssl'];
-				} elseif ( $site_details['site_ssl'] === 'self' ||  $site_details['site_ssl'] === 'le' ) {
+				} elseif ( $site_details['site_ssl'] === 'self' || $site_details['site_ssl'] === 'le' ) {
 					$ssl_args .= ' --ssl=' . $site_details['site_ssl'];
 					if ( $site_details['site_ssl_wildcard'] ) {
 						$ssl_args .= ' --wildcard';
@@ -185,20 +185,20 @@ class Site {
 
 		if ( in_array( $site_details['site_type'], [ 'php', 'wp' ] ) ) {
 			if ( ! empty( $site_details['cache_nginx_browser'] ) ) {
-				$command .= " --cache";
+				$command .= ' --cache';
 			}
 			if ( ! empty( $site_details['cache_host'] ) ) {
-				$command .= " --with-local-redis";
+				$command .= ' --with-local-redis';
 			}
 			if ( ( ! empty( $site_details['db_host'] ) && 'php' === $site_details['site_type'] ) ) {
-				$command .= " --with-db";
+				$command .= ' --with-db';
 			}
 			$command .= " --php=${site_details['php_version']}";
 		}
 
 		if ( 'wp' === $site_details['site_type'] ) {
 			if ( ! empty( $site_details['proxy_cache'] ) ) {
-				$command .= " --proxy-cache=on";
+				$command .= ' --proxy-cache=on';
 			}
 			if ( ! empty( $site_details['app_sub_type'] ) && 'wp' !== $site_details['app_sub_type'] ) {
 				$command .= " --mu=${site_details['app_sub_type']}";
@@ -222,14 +222,14 @@ class Site {
 		EE::log( 'Creating site' );
 		EE::debug( 'Creating site "' . $this->name . '" on "' . $this->host . '"' );
 
-		$new_site='';
+		$new_site = '';
 		$this->ensure_site_not_exists();
 		$this->rsp->add_step( 'clone-create-site', function () use ( $source_site, $assoc_args, &$new_site ) {
 			$new_site = $this->execute( $this->get_site_create_command( $source_site, $assoc_args ) );
 			$this->set_site_details();
 		}, function () {
 			$this->execute( 'ee site delete --yes ' . $this->name );
-		});
+		} );
 
 		if ( ! $this->rsp->execute() ) {
 			throw new \Exception( 'Unable to create site.' );
@@ -242,8 +242,8 @@ class Site {
 		$site_list = $this->execute( 'ee site list --format=json' );
 
 		if ( 1 === $site_list->return_code && 'Error: No sites found!' . PHP_EOL === $site_list->stderr ) {
-            return false;
-        }
+			return false;
+		}
 
 		if ( 0 !== $site_list->return_code ) {
 			throw new \Exception( 'Unable to get site list on remote server.' );
@@ -253,11 +253,12 @@ class Site {
 
 		foreach ( $sites as $site ) {
 			if ( $site['site'] === $this->name ) {
-                if ( 'disabled' === $site['status'] ) {
+				if ( 'disabled' === $site['status'] ) {
 					throw new \Exception( 'The site that you want to clone has been disabled. Please enable the site and clone again.' );
 				}
+
 				return true;
-            }
+			}
 		}
 
 		return false;

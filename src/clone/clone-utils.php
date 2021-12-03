@@ -16,17 +16,18 @@ function copy_site_db( Site $source, Site $destination ) {
 
 	if ( 'php' === $site_type && ! empty( $db_host ) ) {
 		EE::log( 'Please sync the database manually from the remote site. Automated database sync for non-WP PHP sites will be supported soon.' );
+
 		return;
 	}
 
 	if ( 'wp' === $site_type ) {
 		EE::log( 'Exporting database from source' );
 
-		$filename            = $source->site_details['site_url'] . '-' . random_password() . '.sql';
+		$filename = $source->site_details['site_url'] . '-' . random_password() . '.sql';
 
 		$source->rsp->add_step( 'clone-export-db', function () use ( $source, $destination, $filename ) {
-			$source_site_name      = $source->site_details['site_url'];
-			$export_command = 'ee shell --skip-tty ' . $source_site_name . ' --command=\'wp db export ../' . $filename . '\'';
+			$source_site_name = $source->site_details['site_url'];
+			$export_command   = 'ee shell --skip-tty ' . $source_site_name . ' --command=\'wp db export ../' . $filename . '\'';
 
 			if ( $source->execute( $export_command )->return_code ) {
 				throw new \Exception( 'Unable to export database on source. Please check for file system permissions and disk space.' );
@@ -49,20 +50,20 @@ function copy_site_db( Site $source, Site $destination ) {
 		$destination->rsp->add_step( 'clone-import-db', function () use ( $source, $destination, $filename ) {
 			$source_site_name      = $source->site_details['site_url'];
 			$destination_site_name = $destination->site_details['site_url'];
-			$source_fs_path      = trailingslashit( $source->site_details['site_fs_path'] ) . 'app/' . $filename;
-			$destination_fs_path = trailingslashit( $destination->site_details['site_fs_path'] ) . 'app/' . $filename;
+			$source_fs_path        = trailingslashit( $source->site_details['site_fs_path'] ) . 'app/' . $filename;
+			$destination_fs_path   = trailingslashit( $destination->site_details['site_fs_path'] ) . 'app/' . $filename;
 
 			EE::log( 'Importing database in destination' );
 
 			$import_command = 'ee shell --skip-tty ' . $destination_site_name . ' --command=\'wp db import ../' . $filename . '\'';
 
 			if ( $destination->execute( $import_command )->return_code ) {
-				throw new \Exception('Unable to import database on destination. Please check for file system permissions and disk space.');
+				throw new \Exception( 'Unable to import database on destination. Please check for file system permissions and disk space.' );
 			}
 
 			EE::log( 'Executing search-replace' );
 
-			$http_search_replace_command = 'ee shell ' . $destination_site_name . ' --command=\'wp search-replace http://' . $source_site_name . ' http://' . $destination_site_name . ' --network --all-tables\'';
+			$http_search_replace_command  = 'ee shell ' . $destination_site_name . ' --command=\'wp search-replace http://' . $source_site_name . ' http://' . $destination_site_name . ' --network --all-tables\'';
 			$https_search_replace_command = 'ee shell ' . $destination_site_name . ' --command=\'wp search-replace https://' . $source_site_name . ' https://' . $destination_site_name . ' --network --all-tables\'';
 
 			if ( $destination->execute( $http_search_replace_command )->return_code ) {
@@ -74,7 +75,7 @@ function copy_site_db( Site $source, Site $destination ) {
 			}
 
 			if ( empty ( $source->site_details['site_ssl'] ) !== empty ( $destination->site_details['site_ssl'] ) ) {
-				$source_site_name_http = empty ( $source->site_details['site_ssl'] ) ? 'http://' . $destination_site_name : 'https://' . $destination_site_name;
+				$source_site_name_http      = empty ( $source->site_details['site_ssl'] ) ? 'http://' . $destination_site_name : 'https://' . $destination_site_name;
 				$destination_site_name_http = empty ( $destination->site_details['site_ssl'] ) ? 'http://' . $destination_site_name : 'https://' . $destination_site_name;
 
 				$http_https_search_replace_command = 'ee shell ' . $destination_site_name . ' --command=\'wp search-replace ' . $source_site_name_http . ' ' . $destination_site_name_http . ' --network --all-tables\'';
@@ -85,7 +86,7 @@ function copy_site_db( Site $source, Site $destination ) {
 			}
 
 			remove_db_files( $source, $destination, $filename );
-			}, function () use ( $source, $destination, $filename ) {
+		}, function () use ( $source, $destination, $filename ) {
 			remove_db_files( $source, $destination, $filename );
 		} );
 
@@ -95,16 +96,16 @@ function copy_site_db( Site $source, Site $destination ) {
 }
 
 function remove_db_files( $source, $destination, $filename ) {
-    $source_fs_path      = trailingslashit( $source->site_details['site_fs_path'] ) . 'app/' . $filename;
-    $destination_fs_path = trailingslashit( $destination->site_details['site_fs_path'] ) . 'app/' . $filename;
+	$source_fs_path      = trailingslashit( $source->site_details['site_fs_path'] ) . 'app/' . $filename;
+	$destination_fs_path = trailingslashit( $destination->site_details['site_fs_path'] ) . 'app/' . $filename;
 
-    $rm_db_src_command  = 'rm ' . $source_fs_path;
-    $rm_db_dest_command = 'rm ' . $destination_fs_path;
+	$rm_db_src_command  = 'rm ' . $source_fs_path;
+	$rm_db_dest_command = 'rm ' . $destination_fs_path;
 
 	EE::log( 'Cleanup export file from source and destination' );
 
 	$source->execute( $rm_db_src_command );
-    $destination->execute( $rm_db_dest_command );
+	$destination->execute( $rm_db_dest_command );
 }
 
 function copy_site_certs( Site $source, Site $destination ) {
@@ -119,7 +120,7 @@ function copy_site_certs( Site $source, Site $destination ) {
 		$destination->execute( 'rm ' . get_temp_dir() . $destination->name . '.*' );
 	} );
 
-	if ( ! $rsp->execute( false ) )  {
+	if ( ! $rsp->execute( false ) ) {
 		throw new \Exception( 'Unable to sync certs.' );
 	}
 }
