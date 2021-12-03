@@ -2067,6 +2067,10 @@ abstract class EE_Site_Command {
 
 			check_site_access( $source, $destination, $assoc_args );
 
+			if ( 'wp' !== $source->site_details['site_type'] ) {
+				EE::error( 'Only clone of WordPress sites is supported as of now.' );
+			}
+
 			if ( get_flag_value( $assoc_args, 'files' ) ) {
 				$sync = 'files';
 			} elseif ( get_flag_value( $assoc_args, 'uploads' ) ) {
@@ -2083,10 +2087,10 @@ abstract class EE_Site_Command {
 
 			if ( $destination->create_site( $source, $assoc_args )->return_code ) {
 				EE::error( 'Cannot create site ' . $destination->name . '. Please check logs for more info or rerun the command with --debug flag.' );
-			} else {
-				$destination->ensure_site_exists();
-				$destination->set_site_details();
 			}
+
+			$destination->ensure_site_exists();
+			$destination->set_site_details();
 
 			if ( $operations['sync'] === 'files' || $operations['sync'] === 'uploads' || $operations['sync'] === 'all' ) {
 				EE::log( 'Syncing files' );
@@ -2097,8 +2101,15 @@ abstract class EE_Site_Command {
 				EE::log( 'Syncing database' );
 				copy_site_db( $source, $destination );
 			}
-			EE::runcommand( ' site info ' . $destination->name );
-			EE::success( 'Site cloned successfully.' . PHP_EOL . 'You have to do these additional configurations manually (if required):' . PHP_EOL . '1.Update wp-config.php.' . PHP_EOL . '2.Add alias domains.' );
+
+			echo $destination->execute( 'ee site info ' . $destination->name )->stdout;
+			$message='Site cloned successfully.';
+
+			if ( $destination->site_details['site_type'] === 'wp') {
+				$message .=  PHP_EOL . 'You have to do these additional configurations manually (if required):' . PHP_EOL . '1. Update wp-config.php.' . PHP_EOL . '2. Add alias domains.';
+			}
+
+			EE::success( $message );
 		} catch ( \Exception $e ) {
 			EE::warning( 'Encountered error while cloning site. Rolling back.' );
 
