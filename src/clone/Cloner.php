@@ -187,7 +187,7 @@ class Site {
 			if ( ! empty( $site_details['cache_nginx_browser'] ) ) {
 				$command .= ' --cache';
 			}
-			if ( ! empty( $site_details['cache_host'] ) ) {
+			if ( ! empty( $site_details['cache_host'] ) && 'redis' === $site_details['cache_host'] ) {
 				$command .= ' --with-local-redis';
 			}
 			if ( ( ! empty( $site_details['db_host'] ) && 'php' === $site_details['site_type'] ) ) {
@@ -218,6 +218,30 @@ class Site {
 		return $command;
 	}
 
+	private function get_admin_tools_command( Site $source_site, $assoc_args ): string {
+		$site_details = $source_site->site_details;
+
+		$command = '';
+
+		if ( $site_details['admin_tools'] ) {
+			$command = 'ee admin-tools enable ' . $this->name;
+		}
+
+		return $command;
+	}
+
+	private function get_mailhog_command( Site $source_site, $assoc_args ): string {
+		$site_details = $source_site->site_details;
+
+		$command = '';
+
+		if ( $site_details['mailhog_enabled'] ) {
+			$command = 'ee mailhog enable ' . $this->name;
+		}
+
+		return $command;
+	}
+
 	public function create_site( Site $source_site, $assoc_args ): EE\ProcessRun {
 		EE::log( 'Creating site' );
 		EE::debug( 'Creating site "' . $this->name . '" on "' . $this->host . '"' );
@@ -235,14 +259,47 @@ class Site {
 			throw new \Exception( 'Unable to create site.' );
 		}
 
+		$admin_tools_command = $this->get_admin_tools_command( $source_site, $assoc_args );
+		if ( ! empty( $admin_tools_command ) ) {
+			EE::log( 'Setting up admin-tools' );
+			$this->rsp->add_step( 'clone-setup-admin-tools', function () use ( $admin_tools_command ) {
+				$this->execute( $admin_tools_command );
+				$this->set_site_details();
+			}, function () {
+				$this->execute( 'ee site delete --yes ' . $this->name );
+			} );
+		}
+
+		if ( ! $this->rsp->execute() ) {
+			throw new \Exception( 'Unable to enable admin-tools.' );
+		}
+
+		$mailhog_command = $this->get_mailhog_command( $source_site, $assoc_args );
+		if ( ! empty( $mailhog_command ) ) {
+			EE::log( 'Setting up mailhog' );
+			$this->rsp->add_step( 'clone-setup-mailhog', function () use ( $mailhog_command ) {
+				$this->execute( $mailhog_command );
+				$this->set_site_details();
+			}, function () {
+				$this->execute( 'ee site delete --yes ' . $this->name );
+			} );
+		}
+
+		if ( ! $this->rsp->execute() ) {
+			throw new \Exception( 'Unable to enable mailhogs.' );
+		}
+
 		return $new_site;
 	}
 
 	public function site_exists(): bool {
-		$site_list = $this->execute( 'ee site list --format=json' );
+		$site_list = $this->execute( 'ee site list --format=json --no-color' );
 
-		if ( 1 === $site_list->return_code && 'Error: No sites found!' . PHP_EOL === $site_list->stderr ) {
-			return false;
+		if ( 1 === $site_list->return_code ) {
+			$error = trim ( preg_replace( '#\\x1b[[][^A-Za-z]*[A-Za-z]#', '', $site_list->stdout ) );
+			if ( 'Error: No sites found!' === $error ) {
+				return false;
+			}
 		}
 
 		if ( 0 !== $site_list->return_code ) {
