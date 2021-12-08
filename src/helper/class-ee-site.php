@@ -340,9 +340,12 @@ abstract class EE_Site_Command {
 				$conf_certs = EE_ROOT_DIR . "/services/nginx-proxy/acme-conf/certs/$site_url";
 				$conf_var   = EE_ROOT_DIR . "/services/nginx-proxy/acme-conf/var/$site_url";
 
-				$cert_files = [ $conf_certs, $conf_var, $crt_file, $key_file, $pem_file ];
+				\EE::log( 'Removing HTTP Auth if any.' );
+				$htpasswd_file = EE_ROOT_DIR . "/services/nginx-proxy/htpasswd/$site_url";
+
+				$delete_files = [ $conf_certs, $conf_var, $crt_file, $key_file, $pem_file, $htpasswd_file ];
 				try {
-					$this->fs->remove( $cert_files );
+					$this->fs->remove( $delete_files );
 				} catch ( \Exception $e ) {
 					\EE::warning( $e );
 				}
