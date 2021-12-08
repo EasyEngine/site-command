@@ -293,10 +293,13 @@ class Site {
 	}
 
 	public function site_exists(): bool {
-		$site_list = $this->execute( 'ee site list --format=json' );
+		$site_list = $this->execute( 'ee site list --format=json --no-color' );
 
-		if ( 1 === $site_list->return_code && 'Error: No sites found!' . PHP_EOL === $site_list->stderr ) {
-			return false;
+		if ( 1 === $site_list->return_code ) {
+			$error = trim ( preg_replace( '#\\x1b[[][^A-Za-z]*[A-Za-z]#', '', $site_list->stdout ) );
+			if ( 'Error: No sites found!' === $error ) {
+				return false;
+			}
 		}
 
 		if ( 0 !== $site_list->return_code ) {
