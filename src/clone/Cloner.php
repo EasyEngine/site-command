@@ -187,7 +187,7 @@ class Site {
 			if ( ! empty( $site_details['cache_nginx_browser'] ) ) {
 				$command .= ' --cache';
 			}
-			if ( ! empty( $site_details['cache_host'] ) ) {
+			if ( ! empty( $site_details['cache_host'] ) && 'redis' === $site_details['cache_host'] ) {
 				$command .= ' --with-local-redis';
 			}
 			if ( ( ! empty( $site_details['db_host'] ) && 'php' === $site_details['site_type'] ) ) {
