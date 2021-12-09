@@ -197,7 +197,7 @@ class Site {
 		}
 
 		if ( 'wp' === $site_details['site_type'] ) {
-			if ( ! empty( $site_details['proxy_cache'] ) ) {
+			if ( 'on' === $site_details['proxy_cache'] ) {
 				$command .= ' --proxy-cache=on';
 			}
 			if ( ! empty( $site_details['app_sub_type'] ) && 'wp' !== $site_details['app_sub_type'] ) {
