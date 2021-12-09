@@ -147,21 +147,21 @@ class Site {
 				} elseif ( $site_details['site_ssl'] === 'inherit' ) {
 					$this->validate_parent_site_present_on_host( $source_site->name );
 					$ssl_args .= ' --ssl=' . $site_details['site_ssl'];
-				} elseif ( $site_details['site_ssl'] === 'self' || $site_details['site_ssl'] === 'le' ) {
-					$ssl_args .= ' --ssl=' . $site_details['site_ssl'];
 				}
 			} else {
 				// If name of src and dest site are not same
 				if ( $site_details['site_ssl'] === 'custom' || $site_details['site_ssl'] === 'inherit' ) {
 					EE::warning( 'Unable to enable SSL for ' . $this->name . ' as the source site was created with --ssl=custom or --ssl=inherited. You can enable SSL with \'ee site update\' once site is cloned.' );
-				} elseif ( $site_details['site_ssl'] === 'self' || $site_details['site_ssl'] === 'le' ) {
-					$ssl_args .= ' --ssl=' . $site_details['site_ssl'];
 				}
 			}
-		}
 
-		if ( $site_details['site_ssl_wildcard'] ) {
-			$ssl_args .= ' --wildcard';
+			if ( $site_details['site_ssl'] === 'self' || $site_details['site_ssl'] === 'le' ) {
+				$ssl_args .= ' --ssl=' . $site_details['site_ssl'];
+			}
+
+			if ( $site_details['site_ssl_wildcard'] ) {
+				$ssl_args .= ' --wildcard';
+			}
 		}
 
 		return $ssl_args;
