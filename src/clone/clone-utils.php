@@ -4,9 +4,9 @@ namespace EE\Site\Cloner\Utils;
 
 use EE;
 use EE\Site\Cloner\Site;
-use function EE\Utils\get_flag_value;
 use function EE\Utils\get_temp_dir;
 use function EE\Utils\random_password;
+use function EE\Utils\remove_trailing_slash;
 use function EE\Utils\trailingslashit;
 
 function copy_site_db( Site $source, Site $destination ) {
@@ -131,8 +131,8 @@ function copy_site_files( Site $source, Site $destination, string $sync_type ) {
 	$uploads_path       = $source_public_path . '/wp-content/uploads';
 	$uploads_path_share = '/shared/wp-content/uploads';
 
-	$source_dir      = $source->get_site_root_dir();
-	$destination_dir = $destination->get_site_root_dir();
+	$source_dir      = remove_trailing_slash( $source->get_site_root_dir() );
+	$destination_dir = remove_trailing_slash( $destination->get_site_root_dir() );
 
 	if ( $sync_type === 'files' ) {
 		$exclude .= ' --exclude \'' . $uploads_path . '\'';
@@ -144,8 +144,7 @@ function copy_site_files( Site $source, Site $destination, string $sync_type ) {
 		throw new \Exception( 'Unknown sync_type: ' . $sync_type );
 	}
 
-	$rsync_command = rsync_command( $source_dir, $destination_dir, [ $exclude ] );
-
+	$rsync_command = rsync_command( trailingslashit( $source_dir ), trailingslashit( $destination_dir ), [ $exclude ] );
 	if ( ! EE::exec( $rsync_command ) ) {
 		throw new \Exception( 'Unable to sync files.' );
 	}
@@ -164,6 +163,7 @@ function check_site_access( Site $source_site, Site $destination_site, $sync = f
 
 	$source_site->ensure_ssh_success();
 	$source_site->validate_ee_version();
+	$source_site->ensure_site_exists();
 
 	$destination_site->ensure_ssh_success();
 	$destination_site->validate_ee_version();
@@ -171,6 +171,7 @@ function check_site_access( Site $source_site, Site $destination_site, $sync = f
 	$source_site->set_site_details();
 
 	if ( $sync ) {
+		$destination_site->ensure_site_exists();
 		$destination_site->set_site_details();
 	}
 
