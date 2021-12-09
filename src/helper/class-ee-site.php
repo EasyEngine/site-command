@@ -2001,9 +2001,7 @@ abstract class EE_Site_Command {
 	}
 
 	/**
-	 * Syncs a website from source to a new website in destination.
-	 *
-	 * Note: SSL needs to be added explicitly in the new site.
+	 * Clones a website from source to a new website in destination.
 	 *
 	 * ## OPTIONS
 	 *
