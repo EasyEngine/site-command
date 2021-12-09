@@ -158,7 +158,8 @@ function rsync_command( string $source, string $destination, array $options = []
 	return 'rsync -azh --delete-after --ignore-errors ' . $extra_options . ' -e "' . $ssh_command . '" ' . $source . ' ' . $destination;
 }
 
-function check_site_access( Site $source_site, Site $destination_site, $assoc_args ) {
+function check_site_access( Site $source_site, Site $destination_site, $sync = false ) {
+
 	EE::log( 'Checking access to both sites' );
 
 	$source_site->ensure_ssh_success();
@@ -169,7 +170,7 @@ function check_site_access( Site $source_site, Site $destination_site, $assoc_ar
 
 	$source_site->set_site_details();
 
-	if ( get_flag_value( $assoc_args, 'overwrite' ) ) {
+	if ( $sync ) {
 		$destination_site->set_site_details();
 	}
 
