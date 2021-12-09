@@ -2188,9 +2188,6 @@ abstract class EE_Site_Command {
 				'sync' => $sync
 			];
 
-			$destination->ensure_site_exists();
-			$destination->set_site_details();
-
 			if ( $operations['sync'] === 'files' || $operations['sync'] === 'uploads' || $operations['sync'] === 'all' ) {
 				EE::log( 'Syncing files' );
 				copy_site_files( $source, $destination, $operations['sync'] );
