@@ -237,7 +237,7 @@ class Site {
 	}
 
 	public function create_site( Site $source_site, $assoc_args ): EE\ProcessRun {
-		EE::log( 'Creating site' );
+		EE::log( 'Creating site. This may take a while...' );
 		EE::debug( 'Creating site "' . $this->name . '" on "' . $this->host . '"' );
 
 		$new_site = '';
