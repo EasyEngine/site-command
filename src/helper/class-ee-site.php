@@ -2067,7 +2067,7 @@ abstract class EE_Site_Command {
 
 		try {
 
-			check_site_access( $source, $destination, $assoc_args );
+			check_site_access( $source, $destination );
 
 			if ( 'wp' !== $source->site_details['site_type'] ) {
 				EE::error( 'Only clone of WordPress sites is supported as of now.' );
@@ -2168,7 +2168,11 @@ abstract class EE_Site_Command {
 		list( $source, $destination ) = get_transfer_details( $args[0], $args[1] );
 
 		try {
-			check_site_access( $source, $destination, $assoc_args );
+			check_site_access( $source, $destination, true );
+
+			if ( 'wp' !== $source->site_details['site_type'] || 'wp' !== $destination->site_details['site_type'] ) {
+				EE::error( 'Only Sync of WordPress sites is supported as of now.' );
+			}
 
 			if ( get_flag_value( $assoc_args, 'files' ) ) {
 				$sync = 'files';
