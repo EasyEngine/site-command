@@ -171,6 +171,9 @@ function check_site_access( Site $source_site, Site $destination_site, $sync = f
 	$source_site->set_site_details();
 
 	if ( $sync ) {
+		if ( $destination_site->is_production() ) {
+			EE::error( 'Can not sync to a production server.' );
+		}
 		$destination_site->ensure_site_exists();
 		$destination_site->set_site_details();
 	}
