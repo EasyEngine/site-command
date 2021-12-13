@@ -298,7 +298,7 @@ class Site {
 		}
 
 		if ( 0 !== $site_list->return_code ) {
-			throw new \Exception( 'Unable to get site list on remote server.' );
+			throw new \Exception( 'Unable to get site list on ' . $this->user . '@' . $this->host );
 		}
 
 		$sites = json_decode( $site_list->stdout, true );
@@ -336,6 +336,11 @@ class Site {
 		if ( ! $this->ssh_success() ) {
 			throw new \Exception( 'Unable to SSH to ' . $this->host );
 		}
+	}
+
+	public function is_production(): bool {
+		$output = $this->execute( 'ee config get env' );
+		return 'production' === strtolower( trim( $output->stdout ) );
 	}
 
 	function set_site_details(): void {
