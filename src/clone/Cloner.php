@@ -205,6 +205,7 @@ class Site {
 			}
 			if ( ! empty( $site_details['app_admin_password'] ) ) {
 				$command .= " --admin-pass=${site_details['app_admin_password']}";
+				$command .= ' --allow-insecure-pass';
 			}
 			// TODO: vip, proxy-cache-max-time, proxy-cache-max-size
 		}
