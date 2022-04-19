@@ -512,13 +512,15 @@ abstract class EE_Site_Command {
 				EE::warning( "Following domains: $already_added_domains is/are already present on site, skipping addition of those." );
 			}
 
-			// Handle primary site in deletion.
-			$diff_delete_domains = array_diff( $domains_to_delete, $existing_alias_domains );
-			if ( in_array( $this->site_data['site_url'], $domains_to_delete ) ) {
-				EE::error( 'Primary site domain: `' . $this->site_data['site_url'] . '` can not be deleted.' );
-			}
-			if ( ! empty( $diff_delete_domains ) ) {
-				EE::error( "Domains to delete is/are not a subset of already existing alias domains." );
+			if ( ! empty( $domains_to_delete ) ) {
+				// Handle primary site in deletion.
+				$diff_delete_domains = array_diff( $domains_to_delete, $existing_alias_domains );
+				if ( in_array( $this->site_data['site_url'], $domains_to_delete ) ) {
+					EE::error( 'Primary site domain: `' . $this->site_data['site_url'] . '` can not be deleted.' );
+				}
+				if ( ! empty( $diff_delete_domains ) ) {
+					EE::error( "Domains to delete is/are not a subset of already existing alias domains." );
+				}
 			}
 
 			foreach ( $domains_to_add as $ad ) {
