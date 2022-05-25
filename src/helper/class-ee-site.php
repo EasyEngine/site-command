@@ -2096,7 +2096,7 @@ abstract class EE_Site_Command {
 			$destination->ensure_site_exists();
 			$destination->set_site_details();
 
-			if ( $operations['files'] ) {
+			if ( $operations['files'] || $operations['uploads'] ) {
 				EE::log( 'Syncing files' );
 				copy_site_files( $source, $destination, $operations );
 			}
@@ -2189,7 +2189,7 @@ abstract class EE_Site_Command {
 				'db'      => $db_flag,
 			];
 
-			if ( $operations['files'] ) {
+			if ( $operations['files'] || $operations['uploads'] ) {
 				EE::log( 'Syncing files' );
 				copy_site_files( $source, $destination, $operations );
 			}

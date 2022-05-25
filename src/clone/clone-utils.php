@@ -135,12 +135,14 @@ function copy_site_files( Site $source, Site $destination, array $sync_type ) {
 	$source_dir      = remove_trailing_slash( $source->get_site_root_dir() );
 	$destination_dir = remove_trailing_slash( $destination->get_site_root_dir() );
 
+	if ( $sync_type['uploads'] && ! $sync_type['files'] ) {
+		$source_dir      .= $uploads_path;
+		$destination_dir .= $uploads_path;
+	}
+
 	if ( $sync_type['files'] && ! $sync_type['uploads'] ) {
 		$exclude .= ' --exclude \'' . $uploads_path . '\'';
 		$exclude .= ' --exclude \'' . $uploads_path_share . '\'';
-	} elseif ( $sync_type['uploads'] ) {
-		$source_dir      .= $uploads_path;
-		$destination_dir .= $uploads_path;
 	}
 
 	$rsync_command = rsync_command( trailingslashit( $source_dir ), trailingslashit( $destination_dir ), [ $exclude ] );
