@@ -2076,18 +2076,17 @@ abstract class EE_Site_Command {
 				EE::error( 'Only clone of WordPress sites is supported as of now.' );
 			}
 
-			if ( get_flag_value( $assoc_args, 'files' ) ) {
-				$sync = 'files';
-			} elseif ( get_flag_value( $assoc_args, 'uploads' ) ) {
-				$sync = 'uploads';
-			} elseif ( get_flag_value( $assoc_args, 'db' ) ) {
-				$sync = 'db';
-			} else {
-				$sync = 'all';
+			$files_flag   = get_flag_value( $assoc_args, 'files', false );
+			$uploads_flag = get_flag_value( $assoc_args, 'uploads', false );
+			$db_flag      = get_flag_value( $assoc_args, 'db', false );
+			if ( ! $files_flag && ! $uploads_flag && ! $db_flag ) {
+				$files_flag = $uploads_flag = $db_flag = true;
 			}
 
 			$operations = [
-				'sync' => $sync
+				'files' => $files_flag,
+				'uploads' => $uploads_flag,
+				'db' => $db_flag,
 			];
 
 			if ( $destination->create_site( $source, $assoc_args )->return_code ) {
@@ -2097,12 +2096,12 @@ abstract class EE_Site_Command {
 			$destination->ensure_site_exists();
 			$destination->set_site_details();
 
-			if ( $operations['sync'] === 'files' || $operations['sync'] === 'uploads' || $operations['sync'] === 'all' ) {
+			if ( $operations['files'] || $operations['uploads'] ) {
 				EE::log( 'Syncing files' );
-				copy_site_files( $source, $destination, $operations['sync'] );
+				copy_site_files( $source, $destination, $operations );
 			}
 
-			if ( $operations['sync'] === 'db' || $operations['sync'] === 'all' ) {
+			if ( $operations['db'] ) {
 				EE::log( 'Syncing database' );
 				copy_site_db( $source, $destination );
 			}
@@ -2177,26 +2176,25 @@ abstract class EE_Site_Command {
 				EE::error( 'Only Sync of WordPress sites is supported as of now.' );
 			}
 
-			if ( get_flag_value( $assoc_args, 'files' ) ) {
-				$sync = 'files';
-			} elseif ( get_flag_value( $assoc_args, 'uploads' ) ) {
-				$sync = 'uploads';
-			} elseif ( get_flag_value( $assoc_args, 'db' ) ) {
-				$sync = 'db';
-			} else {
-				$sync = 'all';
+			$files_flag   = get_flag_value( $assoc_args, 'files', false );
+			$uploads_flag = get_flag_value( $assoc_args, 'uploads', false );
+			$db_flag      = get_flag_value( $assoc_args, 'db', false );
+			if ( ! $files_flag && ! $uploads_flag && ! $db_flag ) {
+				$files_flag = $uploads_flag = $db_flag = true;
 			}
 
 			$operations = [
-				'sync' => $sync
+				'files'   => $files_flag,
+				'uploads' => $uploads_flag,
+				'db'      => $db_flag,
 			];
 
-			if ( $operations['sync'] === 'files' || $operations['sync'] === 'uploads' || $operations['sync'] === 'all' ) {
+			if ( $operations['files'] || $operations['uploads'] ) {
 				EE::log( 'Syncing files' );
-				copy_site_files( $source, $destination, $operations['sync'] );
+				copy_site_files( $source, $destination, $operations );
 			}
 
-			if ( $operations['sync'] === 'db' || $operations['sync'] === 'all' ) {
+			if ( $operations['db'] ) {
 				EE::log( 'Syncing database' );
 				copy_site_db( $source, $destination );
 			}
