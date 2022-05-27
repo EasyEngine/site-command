@@ -63,8 +63,8 @@ function copy_site_db( Site $source, Site $destination ) {
 
 			EE::log( 'Executing search-replace' );
 
-			$http_search_replace_command  = 'ee shell ' . $destination_site_name . ' --command=\'wp search-replace http://' . $source_site_name . ' http://' . $destination_site_name . ' --network --all-tables\'';
-			$https_search_replace_command = 'ee shell ' . $destination_site_name . ' --command=\'wp search-replace https://' . $source_site_name . ' https://' . $destination_site_name . ' --network --all-tables\'';
+			$http_search_replace_command  = 'ee shell --skip-tty ' . $destination_site_name . ' --command=\'wp search-replace http://' . $source_site_name . ' http://' . $destination_site_name . ' --network --all-tables\'';
+			$https_search_replace_command = 'ee shell --skip-tty ' . $destination_site_name . ' --command=\'wp search-replace https://' . $source_site_name . ' https://' . $destination_site_name . ' --network --all-tables\'';
 
 			if ( $destination->execute( $http_search_replace_command )->return_code ) {
 				throw new \Exception( 'Unable to execute http search-replace on database at destination.' );
@@ -78,7 +78,7 @@ function copy_site_db( Site $source, Site $destination ) {
 				$source_site_name_http      = empty ( $source->site_details['site_ssl'] ) ? 'http://' . $destination_site_name : 'https://' . $destination_site_name;
 				$destination_site_name_http = empty ( $destination->site_details['site_ssl'] ) ? 'http://' . $destination_site_name : 'https://' . $destination_site_name;
 
-				$http_https_search_replace_command = 'ee shell ' . $destination_site_name . ' --command=\'wp search-replace ' . $source_site_name_http . ' ' . $destination_site_name_http . ' --network --all-tables\'';
+				$http_https_search_replace_command = 'ee shell --skip-tty ' . $destination_site_name . ' --command=\'wp search-replace ' . $source_site_name_http . ' ' . $destination_site_name_http . ' --network --all-tables\'';
 
 				if ( $destination->execute( $http_https_search_replace_command )->return_code ) {
 					throw new \Exception( 'Unable to execute http-https search-replace on database at destination.' );

@@ -169,7 +169,7 @@ class Site {
 
 	private function get_site_create_command( Site $source_site, $assoc_args ): string {
 		$site_details = $source_site->site_details;
-		$command      = 'ee site create ' . $this->name . ' --type=' . $site_details['site_type'];
+		$command      = 'ee site create --skip-tty ' . $this->name . ' --type=' . $site_details['site_type'];
 
 		if ( '/var/www/htdocs' !== $site_details['site_container_fs_path'] ) {
 			$path    = str_replace( '/var/www/htdocs/', '', $site_details['site_container_fs_path'] );
@@ -231,7 +231,7 @@ class Site {
 		$command = '';
 
 		if ( $site_details['mailhog_enabled'] ) {
-			$command = 'ee mailhog enable ' . $this->name;
+			$command = 'ee mailhog enable --skip-tty ' . $this->name;
 		}
 
 		return $command;
@@ -247,7 +247,7 @@ class Site {
 			$new_site = $this->execute( $this->get_site_create_command( $source_site, $assoc_args ) );
 			$this->set_site_details();
 		}, function () {
-			$this->execute( 'ee site delete --yes ' . $this->name );
+			$this->execute( 'ee site delete --skip-tty --yes ' . $this->name );
 		} );
 
 		if ( ! $this->rsp->execute() ) {
@@ -261,7 +261,7 @@ class Site {
 				$this->execute( $admin_tools_command );
 				$this->set_site_details();
 			}, function () {
-				$this->execute( 'ee site delete --yes ' . $this->name );
+				$this->execute( 'ee site delete --skip-tty --yes ' . $this->name );
 			} );
 		}
 
@@ -276,7 +276,7 @@ class Site {
 				$this->execute( $mailhog_command );
 				$this->set_site_details();
 			}, function () {
-				$this->execute( 'ee site delete --yes ' . $this->name );
+				$this->execute( 'ee site delete --skip-tty --yes ' . $this->name );
 			} );
 		}
 
