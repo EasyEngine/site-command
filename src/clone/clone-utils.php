@@ -63,8 +63,8 @@ function copy_site_db( Site $source, Site $destination ) {
 
 			EE::log( 'Executing search-replace' );
 
-			$http_search_replace_command  = 'ee shell ' . $destination_site_name . ' --command=\'wp search-replace http://' . $source_site_name . ' http://' . $destination_site_name . ' --network --all-tables\'';
-			$https_search_replace_command = 'ee shell ' . $destination_site_name . ' --command=\'wp search-replace https://' . $source_site_name . ' https://' . $destination_site_name . ' --network --all-tables\'';
+			$http_search_replace_command  = 'ee shell --skip-tty ' . $destination_site_name . ' --command=\'wp search-replace http://' . $source_site_name . ' http://' . $destination_site_name . ' --network --all-tables\'';
+			$https_search_replace_command = 'ee shell --skip-tty ' . $destination_site_name . ' --command=\'wp search-replace https://' . $source_site_name . ' https://' . $destination_site_name . ' --network --all-tables\'';
 
 			if ( $destination->execute( $http_search_replace_command )->return_code ) {
 				throw new \Exception( 'Unable to execute http search-replace on database at destination.' );
@@ -78,7 +78,7 @@ function copy_site_db( Site $source, Site $destination ) {
 				$source_site_name_http      = empty ( $source->site_details['site_ssl'] ) ? 'http://' . $destination_site_name : 'https://' . $destination_site_name;
 				$destination_site_name_http = empty ( $destination->site_details['site_ssl'] ) ? 'http://' . $destination_site_name : 'https://' . $destination_site_name;
 
-				$http_https_search_replace_command = 'ee shell ' . $destination_site_name . ' --command=\'wp search-replace ' . $source_site_name_http . ' ' . $destination_site_name_http . ' --network --all-tables\'';
+				$http_https_search_replace_command = 'ee shell --skip-tty ' . $destination_site_name . ' --command=\'wp search-replace ' . $source_site_name_http . ' ' . $destination_site_name_http . ' --network --all-tables\'';
 
 				if ( $destination->execute( $http_https_search_replace_command )->return_code ) {
 					throw new \Exception( 'Unable to execute http-https search-replace on database at destination.' );
@@ -125,7 +125,8 @@ function copy_site_certs( Site $source, Site $destination ) {
 	}
 }
 
-function copy_site_files( Site $source, Site $destination, string $sync_type ) {
+function copy_site_files( Site $source, Site $destination, array $sync_type ) {
+
 	$exclude            = '--exclude \'/wp-config.php\'';
 	$source_public_path = str_replace( '/var/www/htdocs', '', $source->site_details['site_container_fs_path'] );
 	$uploads_path       = $source_public_path . '/wp-content/uploads';
@@ -134,14 +135,14 @@ function copy_site_files( Site $source, Site $destination, string $sync_type ) {
 	$source_dir      = remove_trailing_slash( $source->get_site_root_dir() );
 	$destination_dir = remove_trailing_slash( $destination->get_site_root_dir() );
 
-	if ( $sync_type === 'files' ) {
-		$exclude .= ' --exclude \'' . $uploads_path . '\'';
-		$exclude .= ' --exclude \'' . $uploads_path_share . '\'';
-	} elseif ( $sync_type === 'uploads' ) {
+	if ( $sync_type['uploads'] && ! $sync_type['files'] ) {
 		$source_dir      .= $uploads_path;
 		$destination_dir .= $uploads_path;
-	} elseif ( $sync_type !== 'all' ) {
-		throw new \Exception( 'Unknown sync_type: ' . $sync_type );
+	}
+
+	if ( $sync_type['files'] && ! $sync_type['uploads'] ) {
+		$exclude .= ' --exclude \'' . $uploads_path . '\'';
+		$exclude .= ' --exclude \'' . $uploads_path_share . '\'';
 	}
 
 	$rsync_command = rsync_command( trailingslashit( $source_dir ), trailingslashit( $destination_dir ), [ $exclude ] );
