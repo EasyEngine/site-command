@@ -65,7 +65,7 @@ class HTML extends EE_Site_Command {
 	 * : Path to the SSL key file.
 	 *
 	 * [--ssl-crt=<ssl-crt-path>]
-	 * : Path ro the SSL crt file.
+	 * : Path to the SSL crt file.
 	 *
 	 * [--wildcard]
 	 * : Gets wildcard SSL .
@@ -108,7 +108,6 @@ class HTML extends EE_Site_Command {
 		$this->logger->debug( 'args:', $args );
 		$this->logger->debug( 'assoc_args:', empty( $assoc_args ) ? [ 'NULL' ] : $assoc_args );
 		$this->site_data['site_url']  = strtolower( \EE\Utils\remove_trailing_slash( $args[0] ) );
-		$this->site_data['subnet_ip'] = \EE\Site\Utils\get_available_subnet();
 		$this->site_data['site_type'] = \EE\Utils\get_flag_value( $assoc_args, 'type', 'html' );
 		if ( 'html' !== $this->site_data['site_type'] ) {
 			\EE::error( sprintf( 'Invalid site-type: %s', $this->site_data['site_type'] ) );
@@ -334,7 +333,6 @@ class HTML extends EE_Site_Command {
 		$filter['site_prefix']   = \EE_DOCKER::get_docker_style_prefix( $this->site_data['site_url'] );
 		$filter['is_ssl']        = $this->site_data['site_ssl'];
 		$filter['alias_domains'] = implode( ',', array_diff( explode( ',', $this->site_data['alias_domains'] ), [ $this->site_data['site_url'] ] ) );
-		$filter['subnet_ip']     = $this->site_data['subnet_ip'];
 
 		foreach ( $additional_filters as $key => $addon_filter ) {
 			$filter[ $key ] = $addon_filter;
@@ -392,7 +390,6 @@ class HTML extends EE_Site_Command {
 
 		$site = Site::create( [
 			'site_url'               => $this->site_data['site_url'],
-			'subnet_ip'              => $this->site_data['subnet_ip'],
 			'site_type'              => $this->site_data['site_type'],
 			'site_fs_path'           => $this->site_data['site_fs_path'],
 			'alias_domains'          => $this->site_data['alias_domains'],

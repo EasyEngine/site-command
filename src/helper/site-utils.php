@@ -813,8 +813,6 @@ function ssl_needs_creation( $site_url ) {
  * @throws EE\ExitException
  */
 function get_available_subnet( int $mask = 24 ) {
-	$sites = Site::all(['subnet_ip']);
-	$site_ips = array_column( $sites, 'subnet_ip');
 
 	$existing_host_subnets = EE::launch( 'ip route show | cut -d \' \' -f1 | grep ^10' );
 	$existing_host_subnets = array_filter(
@@ -825,17 +823,15 @@ function get_available_subnet( int $mask = 24 ) {
 	$backend_subnet = Option::get( 'backend_subnet_ip' );
 
 	if ( $frontend_subnet ) {
-		array_push( $site_ips, $frontend_subnet );
+		array_push( $existing_host_subnets, $frontend_subnet );
 	}
 
 	if ( $backend_subnet ) {
-		array_push( $site_ips, $backend_subnet );
+		array_push( $existing_host_subnets, $backend_subnet );
 	}
 
 	$existing_subnets = array_filter(
-		array_unique(
-			array_merge( $site_ips, $existing_host_subnets )
-		)
+		array_unique( $existing_host_subnets )
 	);
 
 	sort( $existing_subnets, SORT_NATURAL );
@@ -893,6 +889,7 @@ function ip_in_subnet(string $IP, string $CIDR) {
 
 	list( $subnet, $mask ) = explode ('/', $CIDR );
 
+	$mask = $mask ?? 16;
 	$ip_subnet = ip2long( $subnet );
 	$ip_mask = subnet_mask_int2long( $mask );
 	$src_ip = ip2long( $IP );
