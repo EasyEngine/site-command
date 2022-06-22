@@ -119,11 +119,11 @@ function get_site_info( $args, $site_enabled_check = true, $exit_if_not_found = 
 /**
  * Populate basic site info from db.
  *
- * @param array $domains       Array of all domains.
+ * @param array $domains Array of all domains.
  *
  * @return string $preferred_challenge Type of challenge preffered.
  */
-function get_preferred_ssl_challenge(array $domains) {
+function get_preferred_ssl_challenge( array $domains ) {
 
 	foreach ( $domains as $domain ) {
 		if ( preg_match( '/^\*/', $domain ) ) {
@@ -436,7 +436,8 @@ function site_status_check( $site_url ) {
  * Function to pull the latest images and bring up the site containers and set EasyEngine header.
  *
  * @param string $site_fs_path Root directory of the site.
- * @param array $containers    The minimum required conatainers to start the site. Default null, leads to starting of all containers.
+ * @param array $containers    The minimum required conatainers to start the site. Default null, leads to starting of
+ *                             all containers.
  *
  * @throws \Exception when docker-compose up fails.
  */
@@ -520,7 +521,17 @@ function set_postfix_files( $site_url, $site_service_dir ) {
 function configure_postfix( $site_url, $site_fs_path ) {
 
 	chdir( $site_fs_path );
-	EE::exec( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e \'relayhost =\'' );
+
+	$default_from = EE::launch( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix sh -c \'echo $REPLY_EMAIL\'' )->stdout;
+
+	if ( ! trim( $default_from ) ) {
+		$default_from = "no-reply@$site_url";
+	}
+
+	EE::exec( \EE_DOCKER::docker_compose_with_custom() . " exec php sh -c 'echo \"host postfix\ntls off\nfrom $default_from\" > /etc/msmtprc'" );
+	$relay_host = EE::launch( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix sh -c \'echo $RELAY_HOST\'' )->stdout;
+	$relay_host = trim( $relay_host, "\n\r" );
+	EE::exec( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e \'relayhost = ' . $relay_host . '\'' );
 	EE::exec( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e \'smtpd_recipient_restrictions = permit_mynetworks\'' );
 	$launch      = EE::launch( sprintf( 'docker inspect -f \'{{ with (index .IPAM.Config 0) }}{{ .Subnet }}{{ end }}\' %s', $site_url ) );
 	$subnet_cidr = trim( $launch->stdout );
