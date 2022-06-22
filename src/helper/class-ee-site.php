@@ -845,7 +845,7 @@ abstract class EE_Site_Command {
 			}, $custom_ini_data );
 		} else {
 			$custom_ini_data = array_map( function ( $custom_ini_data ) {
-				$sendmail_path = 'sendmail_path = /usr/sbin/sendmail -t -i -f ee4@easyengine.io';
+				$sendmail_path = 'sendmail_path = /usr/sbin/sendmail -t -i -f no-reply@example.com';
 
 				return stristr( $custom_ini_data, 'sendmail_path' ) ? "$sendmail_path\n" : $custom_ini_data;
 			}, $custom_ini_data );
@@ -988,10 +988,13 @@ abstract class EE_Site_Command {
 			$this->site_data = $site;
 		}
 
+		chdir( $this->site_data->site_fs_path );
+
 		\EE::log( sprintf( 'Enabling site %s.', $this->site_data->site_url ) );
 
 		$success             = false;
-		$containers_to_start = [ 'nginx' ];
+		$containers_to_start = array_diff( \EE_DOCKER::get_services(), [ 'postfix', 'mailhog' ] );
+
 
 		# Required when newrelic is enabled on site. Newrelic ini is updated via docker-entrypoint.
 		$php_confd_dir = $this->site_data->site_fs_path . '/config/php/php/conf.d';
@@ -1013,6 +1016,12 @@ abstract class EE_Site_Command {
 				\EE::error( $err_msg );
 			}
 			throw new \Exception( $err_msg );
+		}
+
+		if ( ! empty( \EE::get_runner()->config['custom-compose'] ) ) {
+			\EE\Utils\delem_log( 'site enable end' );
+
+			return true;
 		}
 
 		\EE::log( 'Running post enable configurations.' );
@@ -1137,7 +1146,12 @@ abstract class EE_Site_Command {
 		chdir( $this->site_data['site_fs_path'] );
 
 		if ( $all || $no_service_specified ) {
-			$containers = $whitelisted_containers;
+			$available_containers = \EE_DOCKER::get_services();
+			if ( empty( \EE::get_runner()->config['custom-compose'] ) ) {
+				$containers = array_unique( array_merge( $available_containers, $whitelisted_containers ) );
+			} else {
+				$containers = $available_containers;
+			}
 		} else {
 			$containers = array_keys( $assoc_args );
 		}
