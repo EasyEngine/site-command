@@ -1149,6 +1149,7 @@ abstract class EE_Site_Command {
 			$available_containers = \EE_DOCKER::get_services();
 			if ( empty( \EE::get_runner()->config['custom-compose'] ) ) {
 				$containers = array_unique( array_merge( $available_containers, $whitelisted_containers ) );
+				$containers = array_diff( $containers, [ 'postfix', 'mailhog' ] );
 			} else {
 				$containers = $available_containers;
 			}
