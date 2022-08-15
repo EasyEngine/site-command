@@ -49,7 +49,7 @@
         ]
     },
     "require": {
-        "acmephp/core": "^2.1",
+        "acmephp/core": "1.3.0",
         "ext-openssl": "*",
         "guzzlehttp/guzzle": "^7.4",
         "league/flysystem": "1.1.4",
