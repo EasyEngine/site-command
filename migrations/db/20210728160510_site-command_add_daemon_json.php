@@ -30,8 +30,6 @@ class AddDaemonJson extends Base {
 
 			$existin_config['default-address-pools'] = json_decode( '[{"base":"10.0.0.0/8","size":24}]', true );
 			file_put_contents( '/etc/docker/daemon.json', json_encode( $existin_config ) );
-
-			EE::launch( 'command -v systemctl && systemctl restart docker || service docker restart' );
 		}
 	}
 
