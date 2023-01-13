@@ -34,10 +34,7 @@ class UpdateDaemonJson extends Base {
 
 			file_put_contents( '/etc/docker/daemon.json', json_encode( $existin_config ) );
 
-			$return_code = EE::launch( 'command -v systemctl && systemctl restart docker || service docker restart' );
-			if ( $return_code !== 0 ) {
-				EE::launch( 'command -v service && service docker restart || systemctl restart docker' );
-			}
+			EE::launch( 'command -v systemctl && systemctl restart docker || service docker restart' );
 		}
 	}
 
