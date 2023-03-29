@@ -198,7 +198,7 @@ class Site_Letsencrypt {
 	public function authorize( Array $domains, $wildcard = false, $preferred_challenge = '' ) {
 		$is_solver_dns = ( $wildcard || 'dns' === $preferred_challenge ) ? true : false;
 		if ( $is_solver_dns ) {
-			$solver = empty ( get_config_value( 'cloudflare-api-key' ) ) ? new SimpleDnsSolver( null, new ConsoleOutput() ) : new SimpleDnsCloudflareSolver( null, new ConsoleOutput() );
+			$solver = empty ( get_config_value( 'cloudflare-api-key' ) ) &&  empty ( get_config_value( 'cloudflare-api-token' ) ) ? new SimpleDnsSolver( null, new ConsoleOutput() ) : new SimpleDnsCloudflareSolver( null, new ConsoleOutput() );
 		} else {
 			$solver = new SimpleHttpSolver();
 		}
@@ -338,7 +338,7 @@ class Site_Letsencrypt {
 		$is_solver_dns = ( $wildcard || 'dns' === $preferred_challenge ) ? true : false;
 		\EE::debug( ( 'Starting check with solver ' ) . ( $is_solver_dns ? 'dns' : 'http' ) );
 		if ( $is_solver_dns ) {
-			$solver = empty ( get_config_value( 'cloudflare-api-key' ) ) ? new SimpleDnsSolver( null, new ConsoleOutput() ) : new SimpleDnsCloudflareSolver( null, new ConsoleOutput() );
+			$solver = empty ( get_config_value( 'cloudflare-api-key' ) ) &&  empty ( get_config_value( 'cloudflare-api-token' ) ) ? new SimpleDnsSolver( null, new ConsoleOutput() ) : new SimpleDnsCloudflareSolver( null, new ConsoleOutput() );
 		} else {
 			$solver = new SimpleHttpSolver();
 		}
