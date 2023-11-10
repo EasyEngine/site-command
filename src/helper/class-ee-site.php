@@ -5,6 +5,7 @@ namespace EE\Site\Type;
 use AcmePhp\Ssl\Certificate;
 use AcmePhp\Ssl\Parser\CertificateParser;
 use EE;
+use EE\Model\Cron;
 use EE\Model\Site;
 use EE\Model\Option;
 use Symfony\Component\Filesystem\Filesystem;
@@ -321,6 +322,19 @@ abstract class EE_Site_Command {
 		if ( $reload ) {
 			\EE\Site\Utils\reload_global_nginx_proxy();
 			EE::exec( 'docker exec ' . EE_PROXY_TYPE . " bash -c 'rm -rf /var/cache/nginx/$site_url'" );
+		}
+
+		try {
+			$crons = Cron::where( [ 'site_url' => $site_url ] );
+			if ( ! empty( $crons ) ) {
+				\EE::log( 'Deleting cron entry' );
+				foreach ( $crons as $cron ) {
+					$cron->delete();
+				}
+				\EE\Cron\Utils\update_cron_config();
+			}
+		} catch ( \Exception $e ) {
+			\EE::debug( $e->getMessage() );
 		}
 
 		/**
