@@ -1,5 +1,3 @@
-version: '3.5'
-
 services:
 
 {{#services}}
@@ -63,15 +61,14 @@ services:
 volumes:
   {{#external_vols}}
   {{ext_vol_name}}:
-    external:
-      name: {{prefix}}_{{ext_vol_name}}
+    external: true
+    name: {{prefix}}_{{ext_vol_name}}
   {{/external_vols}}
 {{/created_volumes}}
 
 {{#network}}
 networks:
-  site-network:
-    name: ${VIRTUAL_HOST}
+  {{name}}:
     {{#networks_labels}}
     labels:
     {{#label}}
@@ -79,6 +76,6 @@ networks:
     {{/label}}
     {{/networks_labels}}
   global-frontend-network:
-    external:
-      name: ee-global-frontend-network
+    external: true
+    name: ee-global-frontend-network
 {{/network}}
