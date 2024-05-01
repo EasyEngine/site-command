@@ -403,6 +403,8 @@ abstract class EE_Site_Command {
 	 *  - 7.4
 	 *  - 8.0
 	 *  - 8.1
+	 *  - 8.2
+	 *  - 8.3
 	 *  - latest
 	 * ---
 	 *
@@ -776,7 +778,7 @@ abstract class EE_Site_Command {
 
 		$php_version = get_flag_value( $assoc_args, 'php', false );
 
-		if ( '7.4' === $php_version ) {
+		if ( '8.2' === $php_version ) {
 			$php_version = 'latest';
 		}
 
