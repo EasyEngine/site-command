@@ -393,7 +393,7 @@ abstract class EE_Site_Command {
 	 * : Enable wildcard SSL on site.
 	 *
 	 * [--php=<php-version>]
-	 * : PHP version for site. Currently only supports PHP 5.6, 7.0, 7.2, 7.3, 7.4, 8.0, 8.1 and latest.
+	 * : PHP version for site. Currently only supports PHP 5.6, 7.0, 7.2, 7.3, 7.4, 8.0, 8.1, 8.2 and 8.3.
 	 * ---
 	 * options:
 	 *  - 5.6
@@ -405,7 +405,6 @@ abstract class EE_Site_Command {
 	 *  - 8.1
 	 *  - 8.2
 	 *  - 8.3
-	 *  - latest
 	 * ---
 	 *
 	 * [--proxy-cache=<on-or-off>]
@@ -777,10 +776,6 @@ abstract class EE_Site_Command {
 	protected function update_php( $args, $assoc_args ) {
 
 		$php_version = get_flag_value( $assoc_args, 'php', false );
-
-		if ( '8.2' === $php_version ) {
-			$php_version = 'latest';
-		}
 
 		if ( $php_version === $this->site_data->php_version ) {
 			EE::error( 'Site ' . $this->site_data->site_url . ' is already at PHP version: ' . $php_version );
