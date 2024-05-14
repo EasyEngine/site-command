@@ -330,6 +330,7 @@ class HTML extends EE_Site_Command {
 
 		$filter                  = [];
 		$filter[]                = $this->site_data['site_type'];
+		$filter['site_url']      = $this->site_data['site_url'];
 		$filter['site_prefix']   = \EE_DOCKER::get_docker_style_prefix( $this->site_data['site_url'] );
 		$filter['is_ssl']        = $this->site_data['site_ssl'];
 		$filter['alias_domains'] = implode( ',', array_diff( explode( ',', $this->site_data['alias_domains'] ), [ $this->site_data['site_url'] ] ) );

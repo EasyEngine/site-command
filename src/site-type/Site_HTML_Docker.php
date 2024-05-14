@@ -64,7 +64,7 @@ class Site_HTML_Docker {
 		$nginx['networks'] = [
 			'net' => [
 				[ 'name' => 'global-frontend-network' ],
-				[ 'name' => 'site-network' ],
+				[ 'name' => $filters['site_url'] ],
 			],
 		];
 
@@ -81,13 +81,14 @@ class Site_HTML_Docker {
 		$binding = [
 			'services' => $base,
 			'network'  => [
+				'name'            => $filters['site_url'],
 				'networks_labels' => [
 					'label' => [
 						[ 'name' => 'org.label-schema.vendor=EasyEngine' ],
 						[ 'name' => 'io.easyengine.site=${VIRTUAL_HOST}' ],
 					],
 				],
-			]
+			],
 		];
 
 		if ( ! IS_DARWIN ) {
