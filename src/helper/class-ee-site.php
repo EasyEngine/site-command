@@ -8,6 +8,8 @@ use EE;
 use EE\Model\Cron;
 use EE\Model\Site;
 use EE\Model\Option;
+use EE\Model\Auth;
+use EE\Model\Whitelist;
 use Symfony\Component\Filesystem\Filesystem;
 use function EE\Site\Cloner\Utils\check_site_access;
 use function EE\Site\Cloner\Utils\copy_site_db;
@@ -361,6 +363,32 @@ abstract class EE_Site_Command {
 				} catch ( \Exception $e ) {
 					\EE::warning( $e );
 				}
+			}
+
+			$site_auth_file = EE_ROOT_DIR . '/services/nginx-proxy/htpasswd/' . $site_url;
+			if ( $this->fs->exists( $site_auth_file ) ) {
+				try {
+					$this->fs->remove( $site_auth_file );
+				} catch ( \Exception $e ) {
+					\EE::warning( $e );
+				}
+				reload_global_nginx_proxy();
+			}
+
+			$whitelists = Whitelist::where( [
+				'site_url' => $site_url,
+			] );
+
+			foreach ( $whitelists as $whitelist ) {
+				$whitelist->delete();
+			}
+
+			$auths = Auth::where( [
+				'site_url' => $site_url,
+			] );
+
+			foreach ( $auths as $auth ) {
+				$auth->delete();
 			}
 
 			if ( Site::find( $site_url )->delete() ) {
