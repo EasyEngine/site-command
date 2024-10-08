@@ -440,7 +440,7 @@ class HTML extends EE_Site_Command {
 		$this->delete_site( $this->level, $this->site_data['site_url'], $this->site_data['site_fs_path'] );
 		\EE\Utils\delem_log( 'site cleanup end' );
 		\EE::log( 'Report bugs here: https://github.com/EasyEngine/site-command' );
-		exit;
+		exit( 1 );
 	}
 
 	/**
@@ -454,6 +454,6 @@ class HTML extends EE_Site_Command {
 		}
 
 		\EE::success( 'Rollback complete. Exiting now.' );
-		exit;
+		exit( 1 );
 	}
 }
