@@ -64,8 +64,8 @@ function auto_site_name( $args, $command, $function, $arg_pos = 0 ) {
 
 	if ( isset( $args[ $arg_pos ] ) ) {
 		$possible_site_name = $args[ $arg_pos ];
-		if ( substr( $possible_site_name, 0, 4 ) === 'http' ) {
-			$possible_site_name = str_replace( [ 'https', 'http' ], '', $possible_site_name );
+		if ( substr( $possible_site_name, 0, 7 ) === 'http://' || substr( $possible_site_name, 0, 8 ) === 'https://' ) {
+			$possible_site_name = str_replace( [ 'https://', 'http://' ], '', $possible_site_name );
 		}
 		$url_path = parse_url( EE\Utils\remove_trailing_slash( $possible_site_name ), PHP_URL_PATH );
 		if ( Site::find( $url_path ) ) {
