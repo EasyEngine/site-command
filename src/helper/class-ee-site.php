@@ -2003,6 +2003,16 @@ abstract class EE_Site_Command {
 
 		$logger = \EE::get_file_logger()->withName( 'site-command' );
 		$error  = error_get_last();
+
+		// Check if the $this->site_data is set and it is array and  $this->site_data['site_url'] is set.
+		if ( isset( $this->site_data ) && is_array( $this->site_data ) && isset( $this->site_data['site_url'] ) ) {
+			// release lock if there.
+			$lock_file = EE_BACKUP_DIR . '/' . $this->site_data['site_url'] . '.lock';
+			if ( $this->fs->exists( $lock_file ) ) {
+				$this->fs->remove( $lock_file );
+			}
+		}
+
 		if ( isset( $error ) && $error['type'] === E_ERROR ) {
 			\EE::warning( 'An Error occurred. Initiating clean-up.' );
 			$logger->error( 'Type: ' . $error['type'] );
@@ -2262,6 +2272,59 @@ abstract class EE_Site_Command {
 
 			EE::error( $e->getMessage() );
 		}
+	}
+
+	/**
+	 * Function to take backup of site.
+	 *
+	 * ## OPTIONS
+	 *
+	 * [<site-name>]
+	 * : Name of website to be backed up.
+	 *
+	 * [--list]
+	 * : List all available backups on remote.
+	 * 
+	 * ## EXAMPLES
+	 *
+	 *     # Backup a site
+	 *     $ ee site backup example.com
+	 *
+	 *     # List all available backups for a site.
+	 *     $ ee site backup example.com --list
+	 */
+	public function backup( $args, $assoc_args ) {
+		$args            = auto_site_name( $args, 'site', __FUNCTION__ );
+		$this->site_data = get_site_info( $args, true, true, true );
+		$backup_restore = new Site_Backup_Restore();
+		$backup_restore->backup( $args, $assoc_args );
+	}
+
+	/**
+	 * Restore a site from backup.
+	 *
+	 * ## OPTIONS
+	 *
+	 * [<site-name>]
+	 * : Name of the site to be restored.
+	 *
+	 * [--id=<backup_id>]
+	 * : ID of the backup to restore. If not specified, the latest backup will be restored. To get the backup id, run `ee site backup <site_name> --list`
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     # Restore latest backup of site.
+	 *     $ ee site restore example.com
+	 * 
+	 *     # Restore specific backup of site.
+	 *     $ ee site restore example.com --id=1737560626_2025-01-22-15-43-46
+	 *
+	 */
+	public function restore( $args, $assoc_args ) {
+		$args            = auto_site_name( $args, 'site', __FUNCTION__ );
+		$this->site_data = get_site_info( $args, true, true, true );
+		$backup_restore = new Site_Backup_Restore();
+		$backup_restore->restore( $args, $assoc_args );
 	}
 
 	abstract public function create( $args, $assoc_args );
