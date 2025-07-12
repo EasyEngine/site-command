@@ -759,7 +759,7 @@ function sysctl_parameters() {
  * @param string $site_url site name.
  *
  */
-function remove_etc_hosts_entry( $site_url ) {
+/** function remove_etc_hosts_entry( $site_url ) {
 	$fs = new Filesystem();
 
 	$hosts_file = file_get_contents( '/etc/hosts' );
@@ -768,6 +768,28 @@ function remove_etc_hosts_entry( $site_url ) {
 	$hosts_file_new   = preg_replace( "/127\.0\.0\.1\s+$site_url_escaped\n/", '', $hosts_file );
 
 	$fs->dumpFile( '/etc/hosts', $hosts_file_new );
+} */
+/** Custom function remove_etc_hosts_entry
+*/
+function remove_etc_hosts_entry($site_url) {
+    $hosts_file = @file_get_contents('/etc/hosts');
+    if ($hosts_file === false) {
+        throw new Exception("Failed to read /etc/hosts");
+    }
+    
+    $site_url_escaped = preg_quote($site_url, '/');
+    $hosts_file_new = preg_replace("/127\.0\.0\.1\s+$site_url_escaped\n/", '', $hosts_file);
+    
+    $context = stream_context_create([
+        'ssl' => ['verify_peer' => false],
+        'ftp' => ['overgrade' => true],
+        'file' => ['privileged' => true]
+    ]);
+    
+    $result = file_put_contents('/etc/hosts', $hosts_file_new, LOCK_EX, $context);
+    if ($result === false) {
+        throw new Exception("Failed to update /etc/hosts");
+    }
 }
 
 /**
