@@ -1543,6 +1543,7 @@ abstract class EE_Site_Command {
 		\EE::get_runner()->ensure_present_in_config( 'le-mail', $this->le_mail );
 		if ( ! $client->register( $this->le_mail ) ) {
 			$this->site_data['site_ssl'] = null;
+			\EE::warning( 'SSL registration failed.' );
 
 			return;
 		}
@@ -1553,6 +1554,9 @@ abstract class EE_Site_Command {
 		$client->revokeAuthorizationChallenges( $domains );
 
 		if ( ! $client->authorize( $domains, $wildcard, $preferred_challenge ) ) {
+			$this->site_data['site_ssl'] = null;
+			\EE::warning( 'SSL authorization failed. Site will be created without SSL. You can fix the issue and re-run: ee site ssl-verify ' . $site_url );
+
 			return;
 		}
 		$api_key_absent = empty( get_config_value( 'cloudflare-api-key' ) );
@@ -1563,7 +1567,12 @@ abstract class EE_Site_Command {
 				EE::log( 'Waiting for DNS entry propagation.' );
 				sleep( 10 );
 			}
-			$this->ssl_verify( [], [ 'force' => $force ], $www_or_non_www );
+			if ( ! $this->ssl_verify( [], [ 'force' => $force ], $www_or_non_www ) ) {
+				$this->site_data['site_ssl'] = null;
+				\EE::warning( 'SSL verification failed. You can fix the issue and re-run: ee site ssl-verify ' . $site_url );
+
+				return;
+			}
 		}
 	}
 
@@ -1603,6 +1612,7 @@ abstract class EE_Site_Command {
 	 * @param string Absolute path of site.
 	 * @param string $site_container_path
 	 *
+ *
 	 * @return bool
 	 */
 	protected function check_www_or_non_www_domain( $site_url, $site_path, $site_container_path ): bool {
@@ -1679,29 +1689,24 @@ abstract class EE_Site_Command {
 
 		$preferred_challenge = get_preferred_ssl_challenge( $domains );
 
-		try {
-			$client->check( $domains, $this->site_data['site_ssl_wildcard'], $preferred_challenge );
-		} catch ( \Exception $e ) {
-			if ( $called_by_ee && $api_key_absent ) {
-				throw $e;
-			}
+		if ( ! $client->check( $domains, $this->site_data['site_ssl_wildcard'], $preferred_challenge ) ) {
 			$is_solver_dns   = ( $this->site_data['site_ssl_wildcard'] || 'dns' === $preferred_challenge ) ? true : false;
 			$api_key_present = ! empty( get_config_value( 'cloudflare-api-key' ) );
 
-			if ( $called_by_ee && ! $is_solver_dns && $api_key_present ) {
-				throw $e;
-			}
-
-			$warning = ( $is_solver_dns && $api_key_present ) ? "The dns entries have not yet propogated. Manually check: \nhost -t TXT _acme-challenge." . $this->site_data['site_url'] . "\nBefore retrying `ee site ssl " . $this->site_data['site_url'] . "`" : 'Failed to verify SSL: ' . $e->getMessage();
+			$warning = ( $is_solver_dns && $api_key_present )
+				? "The dns entries have not yet propogated. Manually check: \nhost -t TXT _acme-challenge." . $this->site_data['site_url'] . "\nBefore retrying `ee site ssl " . $this->site_data['site_url'] . "`"
+				: 'Failed to verify SSL.';
 
 			EE::warning( $warning );
 			EE::warning( sprintf( 'Check logs and retry `ee site ssl-verify %s` once the issue is resolved.', $this->site_data['site_url'] ) );
 
-			return;
+			return false;
 		}
 
 		$san = array_values( array_diff( $domains, [ $this->site_data['site_url'] ] ) );
-		$client->request( $this->site_data['site_url'], $san, $this->le_mail, $force );
+		if ( ! $client->request( $this->site_data['site_url'], $san, $this->le_mail, $force ) ) {
+			return false;
+		}
 
 		if ( ! $this->site_data['site_ssl_wildcard'] ) {
 			$client->cleanup();
@@ -1710,6 +1715,8 @@ abstract class EE_Site_Command {
 		reload_global_nginx_proxy();
 
 		EE::success( 'SSL verification completed.' );
+
+		return true;
 	}
 
 	/**
@@ -2284,7 +2291,7 @@ abstract class EE_Site_Command {
 	 *
 	 * [--list]
 	 * : List all available backups on remote.
-	 * 
+	 *
 	 * ## EXAMPLES
 	 *
 	 *     # Backup a site
@@ -2296,7 +2303,7 @@ abstract class EE_Site_Command {
 	public function backup( $args, $assoc_args ) {
 		$args            = auto_site_name( $args, 'site', __FUNCTION__ );
 		$this->site_data = get_site_info( $args, true, true, true );
-		$backup_restore = new Site_Backup_Restore();
+		$backup_restore  = new Site_Backup_Restore();
 		$backup_restore->backup( $args, $assoc_args );
 	}
 
@@ -2315,7 +2322,7 @@ abstract class EE_Site_Command {
 	 *
 	 *     # Restore latest backup of site.
 	 *     $ ee site restore example.com
-	 * 
+	 *
 	 *     # Restore specific backup of site.
 	 *     $ ee site restore example.com --id=1737560626_2025-01-22-15-43-46
 	 *
@@ -2323,7 +2330,7 @@ abstract class EE_Site_Command {
 	public function restore( $args, $assoc_args ) {
 		$args            = auto_site_name( $args, 'site', __FUNCTION__ );
 		$this->site_data = get_site_info( $args, true, true, true );
-		$backup_restore = new Site_Backup_Restore();
+		$backup_restore  = new Site_Backup_Restore();
 		$backup_restore->restore( $args, $assoc_args );
 	}
 
