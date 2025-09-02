@@ -360,6 +360,11 @@ class Site_Backup_Restore {
 	}
 
 	private function backup_db( $backup_dir ) {
+		// Flush MySQL privileges before backup
+		if ( 'running' === \EE_DOCKER::container_status( GLOBAL_DB_CONTAINER ) ) {
+			EE::exec( 'docker exec -it ' . GLOBAL_DB_CONTAINER . " bash -c 'mysql -uroot -p\$MYSQL_ROOT_PASSWORD -e\"FLUSH PRIVILEGES\"'" );
+		}
+
 		EE::log( 'Backing up database.' );
 		$db_name      = $this->site_data['db_name'];
 		$db_user      = $this->site_data['db_user'];
