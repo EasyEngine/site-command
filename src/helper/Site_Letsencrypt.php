@@ -77,18 +77,20 @@ class EEAcmeClient extends AcmeClient {
 				]]
 		];
 
-		$client = $this->getHttpClient();
-		$resourceUrl = $this->getResourceUrl(ResourcesDirectory::NEW_ORDER);
-		$response = $client->request('POST', $resourceUrl, $client->signKidPayload($resourceUrl, $this->getResourceAccount(), $payload));
-		if (!isset($response['authorizations']) || !$response['authorizations']) {
-			throw new ChallengeNotSupportedException();
+		$client      = $this->getHttpClient();
+		$resourceUrl = $this->getResourceUrl( ResourcesDirectory::NEW_ORDER );
+		$response    = $client->request( 'POST', $resourceUrl, $client->signKidPayload( $resourceUrl, $this->getResourceAccount(), $payload ) );
+		if ( ! isset( $response['authorizations'] ) || ! $response['authorizations'] ) {
+			\EE::warning( 'Challenge not supported for domain' );
+
+			return false;
 		}
 
 		$orderEndpoint = $client->getLastLocation();
 		foreach ($response['authorizations'] as $authorizationEndpoint) {
 			$authorizationsResponse = $client->request('POST', $authorizationEndpoint, $client->signKidPayload($authorizationEndpoint, $this->getResourceAccount(), [ 'status' => 'deactivated' ]));
 		}
-		return;
+		return true;
 	}
 }
 
@@ -207,9 +209,10 @@ class Site_Letsencrypt {
 			$order = $this->client->requestOrder( $domains );
 		} catch ( \Exception $e ) {
 			\EE::warning( 'It seems you\'re in local environment or using non-public domain, please check logs. Skipping letsencrypt.' );
-			throw $e;
-		}
+			\EE::log( 'You can fix the issue and re-run: ee site ssl-verify ' . $domains[0] );
 
+			return false;
+		}
 		$authorizationChallengesToSolve = [];
 		foreach ( $order->getAuthorizationsChallenges() as $domainKey => $authorizationChallenges ) {
 			$authorizationChallenge = null;
@@ -223,12 +226,14 @@ class Site_Letsencrypt {
 					\EE::debug( 'Authorization challenge supported by solver. Solver: ' . $solverName . ' Challenge: ' . $candidate->getType() );
 					break;
 				}
-				// Should not get here as we are handling it.
 				\EE::debug( 'Authorization challenge not supported by solver. Solver: ' . $solverName . ' Challenge: ' . $candidate->getType() );
 				\EE::debug( print_r( $candidate, true ) );
 			}
 			if ( null === $authorizationChallenge ) {
-				throw new ChallengeNotSupportedException();
+				\EE::warning( 'Challenge not supported for domain ' . $domainKey );
+				\EE::log( 'You can fix the issue and re-run: ee site ssl-verify ' . $domainKey );
+
+				return false;
 			}
 			\EE::debug( 'Storing authorization challenge. Domain: ' . $domainKey . ' Challenge: ' . print_r( $authorizationChallenge->toArray(), true ) );
 
@@ -367,7 +372,9 @@ class Site_Letsencrypt {
 					}
 				}
 				if ( null === $authorizationChallenge ) {
-					throw new ChallengeNotSupportedException();
+					\EE::warning( 'Challenge not supported for domain' );
+
+					return false;
 				}
 			} else {
 				if ( ! $this->repository->hasDomainAuthorizationChallenge( $domain ) ) {
@@ -375,21 +382,27 @@ class Site_Letsencrypt {
 				}
 				$authorizationChallenge = $this->repository->loadDomainAuthorizationChallenge( $domain );
 				if ( ! $solver->supports( $authorizationChallenge ) ) {
-					throw new ChallengeNotSupportedException();
+					\EE::warning( 'Challenge not supported for domain' );
+
+					return false;
 				}
 			}
 			\EE::debug( 'Challenge loaded.' );
 
 			$authorizationChallenge = $this->client->reloadAuthorization( $authorizationChallenge );
 			if ( ! $authorizationChallenge->isValid() ) {
-				\EE::debug( sprintf( 'Testing the challenge for domain %s', $domain ) );
-				if ( ! $validator->isValid( $authorizationChallenge ) ) {
-					throw new \Exception( sprintf( 'Can not validate challenge for domain %s', $domain ) );
-				}
-
-				\EE::debug( sprintf( 'Requesting authorization check for domain %s', $domain ) );
 				try {
+					\EE::debug( sprintf( 'Testing the challenge for domain %s', $domain ) );
+					if ( ! $validator->isValid( $authorizationChallenge ) ) {
+						\EE::warning( 'Can not validate challenge for domain ' . $domain );
+						\EE::log( 'You can fix the issue and re-run: ee site ssl-verify ' . $domain );
+
+						return false;
+					}
+
+					\EE::debug( sprintf( 'Requesting authorization check for domain %s', $domain ) );
 					$this->client->challengeAuthorization( $authorizationChallenge );
+					$authorizationChallengeToCleanup[] = $authorizationChallenge;
 				} catch ( \Exception $e ) {
 					\EE::debug( $e->getMessage() );
 					\EE::warning( 'Challenge Authorization failed. Check logs and check if your domain is pointed correctly to this server.' );
@@ -398,9 +411,9 @@ class Site_Letsencrypt {
 					$site_name = str_replace( '*.', '', $site_name );
 
 					\EE::log( "Re-run `ee site ssl-verify $site_name` after fixing the issue." );
-					throw $e;
+
+					return false;
 				}
-				$authorizationChallengeToCleanup[] = $authorizationChallenge;
 			}
 		}
 
@@ -581,7 +594,7 @@ class Site_Letsencrypt {
 						)
 					);
 
-					return;
+					return true;
 				}
 
 				\EE::log(
@@ -627,12 +640,18 @@ class Site_Letsencrypt {
 			\EE::warning( 'A critical error occured during certificate renewal' );
 			\EE::debug( print_r( $e, true ) );
 
-			throw $e;
+			\EE::warning( 'Challenge Authorization failed. Check logs and check if your domain is pointed correctly to this server.' );
+			\EE::log( 'You can fix the issue and re-run: ee site ssl-verify ' . $domains[0] );
+
+			return false;
 		} catch ( \Throwable $e ) {
 			\EE::warning( 'A critical error occured during certificate renewal' );
 			\EE::debug( print_r( $e, true ) );
 
-			throw $e;
+			\EE::warning( 'Challenge Authorization failed. Check logs and check if your domain is pointed correctly to this server.' );
+			\EE::log( 'You can fix the issue and re-run: ee site ssl-verify ' . $domains[0] );
+
+			return false;
 		}
 	}
 
