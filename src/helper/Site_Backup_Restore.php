@@ -376,7 +376,7 @@ class Site_Backup_Restore {
 
 		$this->fs->mkdir( $backup_dir . '/sql' );
 
-		$backup_command = sprintf( 'mysqldump -u %s -p%s -h %s --single-transaction %s > /var/www/htdocs/%s', $db_user, $db_password, $db_host, $db_name, $sql_filename );
+		$backup_command = sprintf( 'mysqldump --skip-ssl -u %s -p%s -h %s --single-transaction %s > /var/www/htdocs/%s', $db_user, $db_password, $db_host, $db_name, $sql_filename );
 		$args           = [ 'shell', $this->site_data['site_url'] ];
 		$assoc_args     = [ 'command' => $backup_command ];
 		$options        = [ 'skip-tty' => true ];
