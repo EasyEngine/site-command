@@ -16,6 +16,10 @@ class GenerateDefaultSelfSignedCert extends Base {
 		$this->certs_dir = EE_ROOT_DIR . '/services/nginx-proxy/certs';
 		$this->key_path  = $this->certs_dir . '/default.key';
 		$this->crt_path  = $this->certs_dir . '/default.crt';
+
+		if ( ! $this->fs->exists( $this->certs_dir ) ) {
+			$this->skip_this_migration = true;
+		}
 	}
 
 	/**
@@ -23,6 +27,13 @@ class GenerateDefaultSelfSignedCert extends Base {
 	 * @throws EE\ExitException
 	 */
 	public function up() {
+
+		if ( $this->skip_this_migration ) {
+			EE::debug( 'Skipping default self-signed cert generation migration as it is not needed.' );
+
+			return;
+		}
+
 		if ( $this->fs->exists( $this->key_path ) && $this->fs->exists( $this->crt_path ) ) {
 			EE::debug( 'Default self-signed cert already exists. Skipping generation.' );
 
