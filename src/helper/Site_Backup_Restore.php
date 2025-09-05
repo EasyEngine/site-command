@@ -362,7 +362,7 @@ class Site_Backup_Restore {
 	private function backup_db( $backup_dir ) {
 		// Flush MySQL privileges before backup
 		if ( 'running' === \EE_DOCKER::container_status( GLOBAL_DB_CONTAINER ) ) {
-			EE::exec( 'docker exec -it ' . GLOBAL_DB_CONTAINER . " bash -c 'mysql -uroot -p\$MYSQL_ROOT_PASSWORD -e\"FLUSH PRIVILEGES\"'" );
+			EE::exec( 'docker exec -it ' . GLOBAL_DB_CONTAINER . " bash -c 'mysql --skip-ssl -uroot -p\$MYSQL_ROOT_PASSWORD -e\"FLUSH PRIVILEGES\"'" );
 		}
 
 		EE::log( 'Backing up database.' );
@@ -463,7 +463,7 @@ class Site_Backup_Restore {
 		$sql_path    = "/var/www/$container_path/" . basename( $sql_file ); // Use basename for safety
 
 		// Corrected command with proper escaping and error suppression for password
-		$restore_command = sprintf( "mysql -u '%s' -p'%s' -h '%s' '%s' < '%s' 2>/dev/null", $db_user, $db_password, $db_host, $db_name, $sql_path );
+		$restore_command = sprintf( "mysql --skip-ssl -u '%s' -p'%s' -h '%s' '%s' < '%s' 2>/dev/null", $db_user, $db_password, $db_host, $db_name, $sql_path );
 
 		$args       = [ 'shell', $site_url ];
 		$assoc_args = [ 'command' => $restore_command ];
@@ -775,7 +775,7 @@ class Site_Backup_Restore {
 		$this->fs->dumpFile( $query_file, $query );
 
 
-		$command = sprintf( "mysql -u %s -p%s -h %s %s < /var/www/htdocs/db_size_query.sql", $user, $password, $host, $db_name );
+		$command = sprintf( "mysql --skip-ssl -u %s -p%s -h %s %s < /var/www/htdocs/db_size_query.sql", $user, $password, $host, $db_name );
 
 		$output = EE::launch( "ee shell " . $this->site_data['site_url'] . " --skip-tty --command=\"$command\"" );
 
