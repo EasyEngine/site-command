@@ -275,8 +275,8 @@ function add_site_redirects( string $site_url, bool $ssl, bool $inherit ) {
 
 	// Check for existence of cert and key files for the cert_site_name
 	$certs_dir = EE_ROOT_DIR . '/services/nginx-proxy/certs/';
-	$crt_file = $certs_dir . $cert_site_name . '.crt';
-	$key_file = $certs_dir . $cert_site_name . '.key';
+	$crt_file  = $certs_dir . $cert_site_name . '.crt';
+	$key_file  = $certs_dir . $cert_site_name . '.key';
 
 	if ( file_exists( $crt_file ) && file_exists( $key_file ) ) {
 		if ( $has_www ) {
