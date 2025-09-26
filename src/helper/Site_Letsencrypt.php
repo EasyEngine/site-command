@@ -488,6 +488,8 @@ class Site_Letsencrypt {
 
 		// Post-generate actions
 		$this->moveCertsToNginxProxy( $domain );
+
+		return true;
 	}
 
 	private function moveCertsToNginxProxy( string $domain ) {
