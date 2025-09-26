@@ -525,7 +525,7 @@ class Site_Letsencrypt {
 			if ( $parsedCertificate->getValidTo()->format( 'U' ) - time() < 0 ) {
 				\EE::log(
 					sprintf(
-						'Current certificate is alerady expired on %s, renewal is necessary.',
+						'Current certificate is already expired on %s, renewal is necessary.',
 						$parsedCertificate->getValidTo()->format( 'Y-m-d H:i:s' )
 					)
 				);
