@@ -638,6 +638,8 @@ class Site_Letsencrypt {
 			$this->moveCertsToNginxProxy( $domain );
 			\EE::log( 'Certificate renewed successfully!' );
 
+			return true;
+
 		} catch ( \Exception $e ) {
 			\EE::warning( 'A critical error occured during certificate renewal' );
 			\EE::debug( print_r( $e, true ) );
