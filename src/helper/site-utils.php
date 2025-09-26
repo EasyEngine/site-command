@@ -273,22 +273,31 @@ function add_site_redirects( string $site_url, bool $ssl, bool $inherit ) {
 		$cert_site_name = implode( '.', array_slice( explode( '.', $site_url ), 1 ) );
 	}
 
-	if ( $has_www ) {
-		$server_name = ltrim( $site_url, '.www' );
+	// Check for existence of cert and key files for the cert_site_name
+	$certs_dir = EE_ROOT_DIR . '/services/nginx-proxy/certs/';
+	$crt_file  = $certs_dir . $cert_site_name . '.crt';
+	$key_file  = $certs_dir . $cert_site_name . '.key';
+
+	if ( file_exists( $crt_file ) && file_exists( $key_file ) ) {
+		if ( $has_www ) {
+			$server_name = ltrim( $site_url, '.www' );
+		} else {
+			$server_name = 'www.' . $site_url;
+		}
+
+		$conf_data = [
+			'site_name'      => $site_url,
+			'cert_site_name' => $cert_site_name,
+			'server_name'    => $server_name,
+			'ssl'            => $ssl,
+			$conf_ssl_policy => true,
+		];
+
+		$content = EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/redirect.conf.mustache', $conf_data );
+		$fs->dumpFile( $config_file_path, ltrim( $content, PHP_EOL ) );
 	} else {
-		$server_name = 'www.' . $site_url;
+		EE::log( sprintf( 'SSL cert/key missing for %s, skipping redirect config.', $cert_site_name ) );
 	}
-
-	$conf_data = [
-		'site_name'      => $site_url,
-		'cert_site_name' => $cert_site_name,
-		'server_name'    => $server_name,
-		'ssl'            => $ssl,
-		$conf_ssl_policy => true,
-	];
-
-	$content = EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/redirect.conf.mustache', $conf_data );
-	$fs->dumpFile( $config_file_path, ltrim( $content, PHP_EOL ) );
 }
 
 /**
