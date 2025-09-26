@@ -738,5 +738,26 @@ class Site_Letsencrypt {
 			$fs->remove( $challange_dir );
 		}
 	}
-}
 
+	/**
+	 * Check if a domain has a stored ACME authorization challenge.
+	 *
+	 * @param string $domain The domain to check for a stored challenge.
+	 *
+	 * @return bool True if a challenge exists for the domain, false otherwise.
+	 */
+	public function hasDomainAuthorizationChallenge( $domain ) {
+		return $this->repository->hasDomainAuthorizationChallenge( $domain );
+	}
+
+	/**
+	 * Load the stored ACME authorization challenge for a domain.
+	 *
+	 * @param string $domain The domain to load the challenge for.
+	 *
+	 * @return AuthorizationChallenge|null The challenge object, or null if not found.
+	 */
+	public function loadDomainAuthorizationChallenge( $domain ) {
+		return $this->repository->loadDomainAuthorizationChallenge( $domain );
+	}
+}

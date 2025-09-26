@@ -1720,6 +1720,94 @@ abstract class EE_Site_Command {
 	}
 
 	/**
+	 * Prints the DNS TXT record(s) required for DNS-based SSL challenge for a site.
+	 *
+	 * ## OPTIONS
+	 *
+	 * [<site-name>]
+	 * : Name of website.
+	 *
+	 * [--format=<format>]
+	 * : Render output in a particular format.
+	 * ---
+	 * default: table
+	 * options:
+	 *   - table
+	 *   - csv
+	 *   - yaml
+	 *   - json
+	 *   - count
+	 *   - text
+	 * ---
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     # Show DNS challenge info for a site
+	 *     $ ee site ssl-dns-info example.com
+	 *     $ ee site ssl-dns-info example.com --format=json
+	 *
+	 * @subcommand ssl-dns-info
+	 */
+	public function ssl_dns_info( $args, $assoc_args ) {
+		$args            = auto_site_name( $args, 'site', __FUNCTION__ );
+		$this->site_data = get_site_info( $args, false, true, false );
+
+		$site_url      = $this->site_data->site_url;
+		$wildcard      = ! empty( $this->site_data->site_ssl_wildcard );
+		$alias_domains = empty( $this->site_data->alias_domains ) ? [] : explode( ',', $this->site_data->alias_domains );
+		$domains       = $this->get_cert_domains( $site_url, $wildcard );
+		$domains       = array_unique( array_merge( $domains, $alias_domains ) );
+
+		$preferred_challenge = get_preferred_ssl_challenge( $domains );
+		$is_dns              = $wildcard || $preferred_challenge === 'dns';
+
+		if ( ! $is_dns ) {
+			\EE::log( 'This site does not use DNS-based (DNS-01) SSL challenge.' );
+
+			return;
+		}
+
+		$format = \EE\Utils\get_flag_value( $assoc_args, 'format', 'table' );
+		$client = new \EE\Site\Type\Site_Letsencrypt();
+		$rows   = [];
+		foreach ( $domains as $domain ) {
+			if ( $client->hasDomainAuthorizationChallenge( $domain ) ) {
+				$challenge = $client->loadDomainAuthorizationChallenge( $domain );
+				if ( method_exists( $challenge, 'toArray' ) ) {
+					$data        = $challenge->toArray();
+					$record_name = isset( $data['dnsRecordName'] ) ? $data['dnsRecordName'] : '_acme-challenge.' . $domain;
+					if ( isset( $data['dnsRecordValue'] ) ) {
+						$record_value = $data['dnsRecordValue'];
+					} elseif ( isset( $data['payload'] ) ) {
+						// Compute digest for DNS-01 TXT value
+						$keyAuthorization = $data['payload'];
+						$digest           = rtrim( strtr( base64_encode( hash( 'sha256', $keyAuthorization, true ) ), '+/', '-_' ), '=' );
+						$record_value     = $digest;
+					} else {
+						$record_value = '';
+					}
+					$rows[] = [
+						'domain'       => $domain,
+						'record_name'  => $record_name,
+						'record_value' => $record_value,
+					];
+				} else {
+					\EE::warning( "Could not extract DNS challenge for $domain." );
+				}
+			} else {
+				\EE::warning( "No pending DNS challenge found for $domain. (Try running 'ee site ssl-verify $site_url' if you are setting up SSL)" );
+			}
+		}
+		if ( $rows ) {
+			$formatter = new \EE\Formatter( $assoc_args, [ 'domain', 'record_name', 'record_value' ] );
+			$formatter->display_items( $rows );
+		} else {
+			\EE::log( 'No DNS challenge records found for this site.' );
+		}
+	}
+
+
+	/**
 	 * Renews letsencrypt ssl certificates.
 	 *
 	 * ## OPTIONS
