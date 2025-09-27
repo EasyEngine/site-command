@@ -1720,12 +1720,15 @@ abstract class EE_Site_Command {
 	}
 
 	/**
-	 * Prints the DNS TXT record(s) required for DNS-based SSL challenge for a site.
+	 * Shows SSL info and DNS challenge records for a site.
 	 *
 	 * ## OPTIONS
 	 *
 	 * [<site-name>]
 	 * : Name of website.
+	 *
+	 * [--get-dns-records]
+	 * : Show DNS challenge records (if using DNS-01 challenge).
 	 *
 	 * [--format=<format>]
 	 * : Render output in a particular format.
@@ -1736,19 +1739,19 @@ abstract class EE_Site_Command {
 	 *   - csv
 	 *   - yaml
 	 *   - json
-	 *   - count
-	 *   - text
 	 * ---
 	 *
 	 * ## EXAMPLES
 	 *
-	 *     # Show DNS challenge info for a site
-	 *     $ ee site ssl-dns-info example.com
-	 *     $ ee site ssl-dns-info example.com --format=json
+	 *     # Show SSL info for a site
+	 *     $ ee site ssl-info example.com
 	 *
-	 * @subcommand ssl-dns-info
+	 *     # Show DNS challenge info for a site
+	 *     $ ee site ssl-info example.com --get-dns-records
+	 *
+	 * @subcommand ssl-info
 	 */
-	public function ssl_dns_info( $args, $assoc_args ) {
+	public function ssl_info( $args, $assoc_args ) {
 		$args            = auto_site_name( $args, 'site', __FUNCTION__ );
 		$this->site_data = get_site_info( $args, false, true, false );
 
@@ -1758,54 +1761,150 @@ abstract class EE_Site_Command {
 		$domains       = $this->get_cert_domains( $site_url, $wildcard );
 		$domains       = array_unique( array_merge( $domains, $alias_domains ) );
 
-		$preferred_challenge = get_preferred_ssl_challenge( $domains );
-		$is_dns              = $wildcard || $preferred_challenge === 'dns';
+		$output   = [];
+		$warnings = [];
 
-		if ( ! $is_dns ) {
-			\EE::log( 'This site does not use DNS-based (DNS-01) SSL challenge.' );
+		// If --get-dns-records is passed, show DNS challenge info (old behavior)
+		if ( \EE\Utils\get_flag_value( $assoc_args, 'get-dns-records', false ) ) {
+			$preferred_challenge = get_preferred_ssl_challenge( $domains );
+			$is_dns              = $wildcard || $preferred_challenge === 'dns';
+
+			if ( ! $is_dns ) {
+				$warnings[] = 'This site does not use DNS-based (DNS-01) SSL challenge.';
+			} else {
+				$client = new \EE\Site\Type\Site_Letsencrypt();
+				$rows   = [];
+				foreach ( $domains as $domain ) {
+					if ( $client->hasDomainAuthorizationChallenge( $domain ) ) {
+						$challenge = $client->loadDomainAuthorizationChallenge( $domain );
+						if ( method_exists( $challenge, 'toArray' ) ) {
+							$data        = $challenge->toArray();
+							$record_name = isset( $data['dnsRecordName'] ) ? $data['dnsRecordName'] : '_acme-challenge.' . $domain;
+							if ( isset( $data['dnsRecordValue'] ) ) {
+								$record_value = $data['dnsRecordValue'];
+							} elseif ( isset( $data['payload'] ) ) {
+								$keyAuthorization = $data['payload'];
+								$digest           = rtrim( strtr( base64_encode( hash( 'sha256', $keyAuthorization, true ) ), '+/', '-_' ), '=' );
+								$record_value     = $digest;
+							} else {
+								$record_value = '';
+							}
+							$rows[] = [
+								'domain'       => $domain,
+								'record_name'  => $record_name,
+								'record_value' => $record_value,
+							];
+						} else {
+							$warnings[] = "Could not extract DNS challenge for $domain.";
+						}
+					} else {
+						$warnings[] = "No pending DNS challenge found for $domain. (Try running 'ee site ssl-verify $site_url' if you are setting up SSL)";
+					}
+				}
+				$output['dns_challenges'] = $rows;
+			}
+			$output['warnings'] = $warnings;
+			$formatter          = new \EE\Formatter( $assoc_args, array_keys( $output ) );
+			$formatter->display_items( [ $output ] );
 
 			return;
 		}
 
-		$format = \EE\Utils\get_flag_value( $assoc_args, 'format', 'table' );
-		$client = new \EE\Site\Type\Site_Letsencrypt();
-		$rows   = [];
-		foreach ( $domains as $domain ) {
-			if ( $client->hasDomainAuthorizationChallenge( $domain ) ) {
-				$challenge = $client->loadDomainAuthorizationChallenge( $domain );
-				if ( method_exists( $challenge, 'toArray' ) ) {
-					$data        = $challenge->toArray();
-					$record_name = isset( $data['dnsRecordName'] ) ? $data['dnsRecordName'] : '_acme-challenge.' . $domain;
-					if ( isset( $data['dnsRecordValue'] ) ) {
-						$record_value = $data['dnsRecordValue'];
-					} elseif ( isset( $data['payload'] ) ) {
-						// Compute digest for DNS-01 TXT value
-						$keyAuthorization = $data['payload'];
-						$digest           = rtrim( strtr( base64_encode( hash( 'sha256', $keyAuthorization, true ) ), '+/', '-_' ), '=' );
-						$record_value     = $digest;
-					} else {
-						$record_value = '';
+		// Otherwise, show SSL status and cert details
+		$ssl_type           = $this->site_data->site_ssl;
+		$output['ssl_type'] = $ssl_type ? $ssl_type : 'off';
+
+		if ( ! $ssl_type || $ssl_type === 'off' ) {
+			$output['status']   = 'SSL is not enabled for this site.';
+			$output['warnings'] = $warnings;
+			$formatter          = new \EE\Formatter( $assoc_args, array_keys( $output ) );
+			$formatter->display_items( [ $output ] );
+
+			return;
+		}
+
+		// Determine which cert to show (le, self, inherit, custom)
+		$cert_site_name = $site_url;
+		if ( $ssl_type === 'inherit' ) {
+			$cert_site_name = implode( '.', array_slice( explode( '.', $site_url ), 1 ) );
+		}
+
+		$certs_dir = EE_ROOT_DIR . '/services/nginx-proxy/certs/';
+		$crt_file  = $certs_dir . $cert_site_name . '.crt';
+
+		if ( ! file_exists( $crt_file ) ) {
+			$warnings[]         = "Certificate file not found for $cert_site_name ($crt_file)";
+			$output['status']   = 'Certificate file not found / yet to be issued.';
+			$output['warnings'] = $warnings;
+			$formatter          = new \EE\Formatter( $assoc_args, array_keys( $output ) );
+			$formatter->display_items( [ $output ] );
+
+			return;
+		}
+
+		try {
+			$certificate       = new \AcmePhp\Ssl\Certificate( file_get_contents( $crt_file ) );
+			$certificateParser = new \AcmePhp\Ssl\Parser\CertificateParser();
+			$parsedCertificate = $certificateParser->parse( $certificate );
+
+			$issuer    = $parsedCertificate->getIssuer();
+			$subject   = $parsedCertificate->getSubject();
+			$validFrom = $parsedCertificate->getValidFrom()->format( 'Y-m-d H:i:s' );
+			$validTo   = $parsedCertificate->getValidTo()->format( 'Y-m-d H:i:s' );
+			$serial    = $parsedCertificate->getSerialNumber();
+
+			// Use openssl_x509_parse for CN fields, as in migration
+			$crt_pem = file_get_contents( $crt_file );
+			if ( function_exists( 'openssl_x509_parse' ) ) {
+				$cert_data   = openssl_x509_parse( $crt_pem );
+				$subjectCN   = isset( $cert_data['subject']['CN'] ) ? $cert_data['subject']['CN'] : '';
+				$issuer_full = isset( $cert_data['issuer'] ) ? $cert_data['issuer'] : [];
+				$le_found    = false;
+				foreach ( $issuer_full as $field => $value ) {
+					if ( stripos( $value, "Let's Encrypt" ) !== false ) {
+						$le_found = true;
+						break;
 					}
-					$rows[] = [
-						'domain'       => $domain,
-						'record_name'  => $record_name,
-						'record_value' => $record_value,
-					];
+				}
+				if ( $le_found ) {
+					$issuerCN = "Let's Encrypt";
 				} else {
-					\EE::warning( "Could not extract DNS challenge for $domain." );
+					$issuerCN = isset( $issuer_full['CN'] ) ? $issuer_full['CN'] : implode( ', ', $issuer_full );
 				}
 			} else {
-				\EE::warning( "No pending DNS challenge found for $domain. (Try running 'ee site ssl-verify $site_url' if you are setting up SSL)" );
+				if ( is_object( $subject ) && method_exists( $subject, 'getField' ) ) {
+					$subjectCN = $subject->getField( 'CN' );
+				} else {
+					$subjectCN  = is_string( $subject ) ? $subject : json_encode( $subject );
+					$warnings[] = 'Could not parse subject CN: unexpected type.';
+				}
+				if ( is_object( $issuer ) && method_exists( $issuer, 'getField' ) ) {
+					$issuerCN = $issuer->getField( 'CN' );
+				} else {
+					$issuerCN   = is_string( $issuer ) ? $issuer : json_encode( $issuer );
+					$warnings[] = 'Could not parse issuer CN: unexpected type.';
+				}
+				$warnings[] = 'openssl_x509_parse() not available in PHP. Used fallback parser.';
 			}
-		}
-		if ( $rows ) {
-			$formatter = new \EE\Formatter( $assoc_args, [ 'domain', 'record_name', 'record_value' ] );
-			$formatter->display_items( $rows );
-		} else {
-			\EE::log( 'No DNS challenge records found for this site.' );
-		}
-	}
+			$san = $parsedCertificate->getSubjectAlternativeNames();
 
+			$output['cert_file']     = $crt_file;
+			$output['issued_to_CN']  = $subjectCN;
+			$output['issued_by_CN']  = $issuerCN;
+			$output['valid_from']    = $validFrom;
+			$output['valid_till']    = $validTo;
+			$output['serial_number'] = $serial;
+			$output['SANs']          = implode( ', ', $san );
+			$output['status']        = 'SSL certificate details loaded.';
+		} catch ( \Exception $e ) {
+			$warnings[]       = 'Could not parse certificate: ' . $e->getMessage();
+			$output['status'] = 'Could not parse certificate.';
+		}
+		$output['warnings'] = $warnings;
+
+		$formatter = new \EE\Formatter( $assoc_args, array_keys( $output ) );
+		$formatter->display_items( [ $output ] );
+	}
 
 	/**
 	 * Renews letsencrypt ssl certificates.
