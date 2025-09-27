@@ -488,6 +488,8 @@ class Site_Letsencrypt {
 
 		// Post-generate actions
 		$this->moveCertsToNginxProxy( $domain );
+
+		return true;
 	}
 
 	private function moveCertsToNginxProxy( string $domain ) {
@@ -523,7 +525,7 @@ class Site_Letsencrypt {
 			if ( $parsedCertificate->getValidTo()->format( 'U' ) - time() < 0 ) {
 				\EE::log(
 					sprintf(
-						'Current certificate is alerady expired on %s, renewal is necessary.',
+						'Current certificate is already expired on %s, renewal is necessary.',
 						$parsedCertificate->getValidTo()->format( 'Y-m-d H:i:s' )
 					)
 				);
@@ -636,6 +638,8 @@ class Site_Letsencrypt {
 			$this->moveCertsToNginxProxy( $domain );
 			\EE::log( 'Certificate renewed successfully!' );
 
+			return true;
+
 		} catch ( \Exception $e ) {
 			\EE::warning( 'A critical error occured during certificate renewal' );
 			\EE::debug( print_r( $e, true ) );
@@ -734,5 +738,26 @@ class Site_Letsencrypt {
 			$fs->remove( $challange_dir );
 		}
 	}
-}
 
+	/**
+	 * Check if a domain has a stored ACME authorization challenge.
+	 *
+	 * @param string $domain The domain to check for a stored challenge.
+	 *
+	 * @return bool True if a challenge exists for the domain, false otherwise.
+	 */
+	public function hasDomainAuthorizationChallenge( $domain ) {
+		return $this->repository->hasDomainAuthorizationChallenge( $domain );
+	}
+
+	/**
+	 * Load the stored ACME authorization challenge for a domain.
+	 *
+	 * @param string $domain The domain to load the challenge for.
+	 *
+	 * @return AuthorizationChallenge|null The challenge object, or null if not found.
+	 */
+	public function loadDomainAuthorizationChallenge( $domain ) {
+		return $this->repository->loadDomainAuthorizationChallenge( $domain );
+	}
+}
