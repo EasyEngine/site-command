@@ -278,7 +278,7 @@ function add_site_redirects( string $site_url, bool $ssl, bool $inherit ) {
 	$crt_file  = $certs_dir . $cert_site_name . '.crt';
 	$key_file  = $certs_dir . $cert_site_name . '.key';
 
-	if ( file_exists( $crt_file ) && file_exists( $key_file ) ) {
+	if ( ( $ssl && file_exists( $crt_file ) && file_exists( $key_file ) ) || ! $ssl ) {
 		if ( $has_www ) {
 			$server_name = ltrim( $site_url, '.www' );
 		} else {
