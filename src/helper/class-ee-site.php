@@ -1780,7 +1780,7 @@ abstract class EE_Site_Command {
 						if ( method_exists( $challenge, 'toArray' ) ) {
 							$data        = $challenge->toArray();
 							// Always use _acme-challenge.base-domain for wildcard domains
-							if ( strpos( $domain, '*.' ) === 0 ) {
+							if ( 0 === strpos( $domain, '*.' ) ) {
 								$base_domain = substr( $domain, 2 );
 								$record_name = '_acme-challenge.' . $base_domain;
 							} else {
