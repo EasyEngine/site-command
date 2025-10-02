@@ -1779,7 +1779,13 @@ abstract class EE_Site_Command {
 						$challenge = $client->loadDomainAuthorizationChallenge( $domain );
 						if ( method_exists( $challenge, 'toArray' ) ) {
 							$data        = $challenge->toArray();
-							$record_name = isset( $data['dnsRecordName'] ) ? $data['dnsRecordName'] : '_acme-challenge.' . $domain;
+							// Always use _acme-challenge.base-domain for wildcard domains
+							if ( strpos( $domain, '*.' ) === 0 ) {
+								$base_domain = substr( $domain, 2 );
+								$record_name = '_acme-challenge.' . $base_domain;
+							} else {
+								$record_name = isset( $data['dnsRecordName'] ) ? $data['dnsRecordName'] : '_acme-challenge.' . $domain;
+							}
 							if ( isset( $data['dnsRecordValue'] ) ) {
 								$record_value = $data['dnsRecordValue'];
 							} elseif ( isset( $data['payload'] ) ) {
