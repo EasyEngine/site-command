@@ -1733,7 +1733,7 @@ abstract class EE_Site_Command {
 	 * [--format=<format>]
 	 * : Render output in a particular format.
 	 * ---
-	 * default: table
+	 * default: json
 	 * options:
 	 *   - table
 	 *   - csv
