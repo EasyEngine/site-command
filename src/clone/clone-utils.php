@@ -27,7 +27,7 @@ function copy_site_db( Site $source, Site $destination ) {
 
 		$source->rsp->add_step( 'clone-export-db', function () use ( $source, $destination, $filename ) {
 			$source_site_name = $source->site_details['site_url'];
-			$export_command   = 'ee shell --skip-tty ' . $source_site_name . ' --command=\'wp db export ../' . $filename . '\'';
+			$export_command   = 'ee shell --skip-tty ' . $source_site_name . ' --command=\'wp db export --skip-ssl ../' . $filename . '\'';
 
 			if ( $source->execute( $export_command )->return_code ) {
 				throw new \Exception( 'Unable to export database on source. Please check for file system permissions and disk space.' );
@@ -55,7 +55,7 @@ function copy_site_db( Site $source, Site $destination ) {
 
 			EE::log( 'Importing database in destination' );
 
-			$import_command = 'ee shell --skip-tty ' . $destination_site_name . ' --command=\'wp db import ../' . $filename . '\'';
+			$import_command = 'ee shell --skip-tty ' . $destination_site_name . ' --command=\'wp db query --skip-ssl < ../' . $filename . '\'';
 
 			if ( $destination->execute( $import_command )->return_code ) {
 				throw new \Exception( 'Unable to import database on destination. Please check for file system permissions and disk space.' );
