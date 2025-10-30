@@ -55,7 +55,12 @@ function copy_site_db( Site $source, Site $destination ) {
 
 			EE::log( 'Importing database in destination' );
 
-			$import_command = 'ee shell --skip-tty ' . $destination_site_name . ' --command=\'wp db query --skip-ssl < ../' . $filename . '\'';
+			$DB_USER     = $destination->site_details['db_user'];
+			$DB_PASSWORD = $destination->site_details['db_password'];
+			$DB_HOST     = $destination->site_details['db_host'];
+			$DB_NAME     = $destination->site_details['db_name'];
+
+			$import_command = "ee shell --skip-tty $destination_site_name --command='mysql --skip-ssl -u\"$DB_USER\" -p\"$DB_PASSWORD\" -h\"$DB_HOST\" \"$DB_NAME\" < ../$filename'";
 
 			if ( $destination->execute( $import_command )->return_code ) {
 				throw new \Exception( 'Unable to import database on destination. Please check for file system permissions and disk space.' );
