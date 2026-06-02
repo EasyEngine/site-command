@@ -1271,9 +1271,61 @@ class Site_Backup_Restore {
 
 	private function rclone_download( $path ) {
 		$cpu_cores     = intval( EE::launch( 'nproc' )->stdout );
-		$multi_threads = min( intval( $cpu_cores ) * 2, 32 );
-		$command       = sprintf( "rclone copy -P --multi-thread-streams %d %s %s", $multi_threads, escapeshellarg( $this->get_remote_path( false ) ), escapeshellarg( $path ) );
-		$output        = EE::launch( $command );
+		$available_ram = intval( EE::launch( "free -m | grep Mem | awk '{print $7}'" )->stdout );
+
+		// Size download parallelism and read-ahead buffers (one --buffer-size
+		// buffer per --transfers) against available RAM, reusing the upload budget
+		// helper. The helper's S3 term models --s3-upload-concurrency multipart
+		// buffers, which downloads never allocate, so pass is_s3 = false here; the
+		// multi-thread download streams are budgeted separately below.
+		$res         = $this->compute_rclone_resources( $cpu_cores, $available_ram, false );
+		$transfers   = $res['transfers'];
+		$buffer_size = $res['buffer_size'] . 'M';
+
+		// On top of the read-ahead buffers, rclone splits large files into
+		// --multi-thread-streams concurrent download streams. Each stream holds a
+		// --multi-thread-write-buffer-size in-memory buffer (rclone default
+		// 128KiB) and pulls up to one --multi-thread-chunk-size range at a time,
+		// and every running --transfers can be multi-threaded at once, so the
+		// in-flight multi-thread footprint scales as:
+		//
+		//     transfers * multi_thread_streams * per_stream_mem
+		//
+		// The previous code set streams = min( cpu_cores * 2, 32 ) with no memory
+		// awareness and relied on rclone's default --transfers 4, so a many-core
+		// VM with little RAM (e.g. 4 GB) could fan out 4 * 32 = 128 streams and be
+		// OOM-killed during restore/rollback. It also produced
+		// --multi-thread-streams 0 when nproc returned empty. Cap the stream count
+		// so the combined multi-thread buffers fit the same memory budget used for
+		// upload, and floor it at 1.
+		$mt_write_buffer = max( 1, intval( get_config_value( 'rclone-mt-write-buffer-size', 128 ) ) ); // KiB; rclone default.
+		$mt_chunk_size   = max( 1, intval( get_config_value( 'rclone-mt-chunk-size', 64 ) ) );         // MB; rclone default.
+		$mem_fraction    = floatval( get_config_value( 'rclone-mem-fraction', 0.5 ) );
+		$mem_fraction    = min( 0.9, max( 0.1, $mem_fraction ) );
+		$budget          = (int) floor( max( 0, intval( $available_ram ) ) * $mem_fraction ); // MB.
+
+		// Per-stream in-memory cost (MB): the write buffer plus a single in-flight
+		// chunk range being read from the source.
+		$per_stream_mem = ( $mt_write_buffer / 1024 ) + $mt_chunk_size;
+
+		$mt_streams = max( 1, min( max( 1, intval( $cpu_cores ) ) * 2, 32 ) );
+		// Shrink streams until transfers * streams * per_stream_mem fits the
+		// budget, but never below 1 (a single stream still works, just slower).
+		while ( $mt_streams > 1 && ( $transfers * $mt_streams * $per_stream_mem ) > $budget ) {
+			$mt_streams--;
+		}
+
+		EE::debug( sprintf(
+			'rclone download tuning: available_ram=%dMB transfers=%d buffer-size=%s multi-thread-streams=%d (est. peak ~%dMB)',
+			$available_ram,
+			$transfers,
+			$buffer_size,
+			$mt_streams,
+			(int) ( ( $transfers * $res['buffer_size'] ) + ( $transfers * $mt_streams * $per_stream_mem ) )
+		) );
+
+		$command = sprintf( "rclone copy -P --transfers %d --checkers %d --buffer-size %s --multi-thread-streams %d --multi-thread-chunk-size %dM %s %s", $transfers, $transfers, $buffer_size, $mt_streams, $mt_chunk_size, escapeshellarg( $this->get_remote_path( false ) ), escapeshellarg( $path ) );
+		$output  = EE::launch( $command );
 
 		if ( $output->return_code ) {
 			EE::error( 'Error downloading backup from remote storage.' );
