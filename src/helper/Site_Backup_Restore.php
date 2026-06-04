@@ -1356,13 +1356,35 @@ class Site_Backup_Restore {
 	}
 
 
+	/**
+	 * Whether the configured rclone remote is an S3 backend.
+	 *
+	 * Resolves the remote name from `rclone-path` (instead of assuming
+	 * `easyengine`) and compares the backend's exact `type` value to `s3`,
+	 * rather than substring-matching the raw `rclone config show` output -- which
+	 * could both miss a non-`easyengine` remote and false-positive on any line
+	 * whose value merely contains the substring `s3`. All S3-compatible providers
+	 * (AWS, Spaces, Wasabi, MinIO, ...) share `type = s3`, so an exact match on
+	 * the type value covers them.
+	 *
+	 * @return bool
+	 */
+	private function is_s3_remote() {
+		$rclone_path = get_config_value( 'rclone-path', 'easyengine:easyengine' );
+		$remote      = explode( ':', $rclone_path )[0];
+
+		$command = sprintf( "rclone config show %s | awk -F '=' '/^[[:space:]]*type[[:space:]]*=/ {gsub(/[[:space:]]/, \"\", \$2); print \$2; exit}'", escapeshellarg( $remote ) );
+		$type    = trim( EE::launch( $command )->stdout );
+
+		return ( 's3' === $type );
+	}
+
 	private function rclone_upload( $path ) {
 		$cpu_cores     = intval( EE::launch( 'nproc' )->stdout );
 		$available_ram = $this->get_available_ram_mb();
 
 		// Detect S3 backends, which require additional multipart-upload tuning.
-		$rclone_type = EE::launch( 'rclone config show easyengine | grep type' )->stdout;
-		$is_s3       = ( strpos( $rclone_type, 's3' ) !== false );
+		$is_s3 = $this->is_s3_remote();
 
 		$res         = $this->compute_rclone_resources( $cpu_cores, $available_ram, $is_s3 );
 		$transfers   = $res['transfers'];
