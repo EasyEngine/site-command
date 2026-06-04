@@ -1316,9 +1316,20 @@ class Site_Backup_Restore {
 		$mt_chunk_size   = max( 1, intval( get_config_value( 'rclone-mt-chunk-size', 64 ) ) );         // MB; rclone default.
 		$per_stream_mem  = ( $mt_write_buffer / 1024 ) + $mt_chunk_size;                               // MB.
 
-		$per_transfer  = max( 1, intval( floor( $budget / $transfers ) ) );
-		$buffer_mb     = max( 16, min( intval( floor( $per_transfer / 2 ) ), $max_buffer ) );
-		$stream_budget = max( 0, $per_transfer - $buffer_mb );
+		// Reduce transfers until each transfer's share of the budget can hold the
+		// minimum read-ahead buffer plus at least one stream, so the combined
+		// footprint stays within budget whenever the budget allows it at all.
+		$min_per_transfer = 16 + (int) ceil( $per_stream_mem );
+		while ( $transfers > 1 && intval( floor( $budget / $transfers ) ) < $min_per_transfer ) {
+			$transfers--;
+		}
+		$per_transfer = max( $min_per_transfer, intval( floor( $budget / $transfers ) ) );
+
+		// Give the read-ahead buffer up to half the share (capped at $max_buffer)
+		// but always leave room for at least one stream; spend the rest on streams.
+		$buffer_mb     = min( intval( floor( $per_transfer / 2 ) ), $max_buffer, $per_transfer - (int) ceil( $per_stream_mem ) );
+		$buffer_mb     = max( 16, $buffer_mb );
+		$stream_budget = $per_transfer - $buffer_mb;
 		$mt_streams    = max( 1, min( $cpu_cores * 2, 32, intval( floor( $stream_budget / $per_stream_mem ) ) ) );
 		$buffer_size   = $buffer_mb . 'M';
 
@@ -1455,12 +1466,14 @@ class Site_Backup_Restore {
 
 		// If the budget can't fit the desired parallelism even at the minimum
 		// buffer size, first shrink S3 multipart concurrency (the biggest memory
-		// lever at 64M/chunk), then the number of parallel transfers.
-		while ( $is_s3 && $s3_concurrency > 2 &&
+		// lever at 64M/chunk), then the number of parallel transfers. Both may
+		// fall to 1 on extremely tight budgets so the helper honours its own cap
+		// whenever the budget allows it at all (the desired floor stays at 2).
+		while ( $is_s3 && $s3_concurrency > 1 &&
 			$transfers * ( $min_buffer + $s3_chunk_size * $s3_concurrency ) > $budget ) {
-			$s3_concurrency = max( 2, intval( $s3_concurrency / 2 ) );
+			$s3_concurrency = max( 1, intval( $s3_concurrency / 2 ) );
 		}
-		while ( $transfers > 2 &&
+		while ( $transfers > 1 &&
 			$transfers * ( $min_buffer + $s3_chunk_size * $s3_concurrency ) > $budget ) {
 			$transfers--;
 		}
