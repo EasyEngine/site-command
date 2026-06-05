@@ -1269,11 +1269,84 @@ class Site_Backup_Restore {
 	}
 
 
+	/**
+	 * Read currently-available memory in MB.
+	 *
+	 * Pins `LC_ALL=C` so the `Mem:` label and column layout stay stable across
+	 * locales, locates the "available" column by its header name (rather than a
+	 * fixed field index, which differs across `free`/procps versions) and falls
+	 * back to the "free" column on older builds that have no "available" column.
+	 *
+	 * @return int Available memory in MB (0 if it cannot be determined, in which
+	 *             case the resource helpers fall back to their safe minimums).
+	 */
+	private function get_available_ram_mb() {
+		$command = "LC_ALL=C free -m | awk 'NR==1{for(i=1;i<=NF;i++) if(\$i==\"available\") c=i+1} /^Mem:/{print (c ? \$c : \$4)}'";
+
+		return intval( EE::launch( $command )->stdout );
+	}
+
 	private function rclone_download( $path ) {
 		$cpu_cores     = intval( EE::launch( 'nproc' )->stdout );
-		$multi_threads = min( intval( $cpu_cores ) * 2, 32 );
-		$command       = sprintf( "rclone copy -P --multi-thread-streams %d %s %s", $multi_threads, escapeshellarg( $this->get_remote_path( false ) ), escapeshellarg( $path ) );
-		$output        = EE::launch( $command );
+		$available_ram = $this->get_available_ram_mb();
+
+		// Derive the memory-safe transfer count and the total RAM budget from the
+		// shared helper (is_s3 = false: downloads allocate no S3 multipart-upload
+		// buffers). The budget is reused below rather than recomputed.
+		$res        = $this->compute_rclone_resources( $cpu_cores, $available_ram, false );
+		$transfers  = $res['transfers'];
+		$budget     = $res['budget'];     // MB; available_ram * rclone-mem-fraction.
+		$max_buffer = $res['max_buffer']; // MB.
+
+		// Per concurrent --transfers a download holds one --buffer-size read-ahead
+		// buffer plus, for files above rclone's --multi-thread-cutoff,
+		// --multi-thread-streams streams -- each with a
+		// --multi-thread-write-buffer-size buffer and one in-flight
+		// --multi-thread-chunk-size range. The whole footprint must fit ONE budget:
+		//
+		//     transfers * ( buffer_size + multi_thread_streams * per_stream_mem ) <= budget
+		//
+		// so each transfer's share of the budget is split between the read-ahead
+		// buffer (up to half, capped at $max_buffer) and the multi-thread streams.
+		// Both scale with available RAM; on a tight budget streams floor at 1. The
+		// previous code budgeted the streams against the full budget independently
+		// of the read-ahead buffers, so the two pools could together reach ~2x the
+		// intended fraction and still OOM during restore/rollback.
+		$mt_write_buffer = max( 1, intval( get_config_value( 'rclone-mt-write-buffer-size', 128 ) ) ); // KiB; rclone default.
+		$mt_chunk_size   = max( 1, intval( get_config_value( 'rclone-mt-chunk-size', 64 ) ) );         // MB; rclone default.
+		$per_stream_mem  = ( $mt_write_buffer / 1024 ) + $mt_chunk_size;                               // MB.
+
+		// Reduce transfers until each transfer's share of the budget can hold the
+		// minimum read-ahead buffer plus at least one stream, so the combined
+		// footprint stays within budget whenever the budget allows it at all.
+		$min_per_transfer = 16 + (int) ceil( $per_stream_mem );
+		while ( $transfers > 1 && intval( floor( $budget / $transfers ) ) < $min_per_transfer ) {
+			$transfers--;
+		}
+		$per_transfer = max( $min_per_transfer, intval( floor( $budget / $transfers ) ) );
+
+		// Give the read-ahead buffer up to half the share (capped at $max_buffer)
+		// but always leave room for at least one stream; spend the rest on streams.
+		$buffer_mb     = min( intval( floor( $per_transfer / 2 ) ), $max_buffer, $per_transfer - (int) ceil( $per_stream_mem ) );
+		$buffer_mb     = max( 16, $buffer_mb );
+		$stream_budget = $per_transfer - $buffer_mb;
+		$mt_streams    = max( 1, min( $cpu_cores * 2, 32, intval( floor( $stream_budget / $per_stream_mem ) ) ) );
+		$buffer_size   = $buffer_mb . 'M';
+
+		EE::debug( sprintf(
+			'rclone download tuning: available_ram=%dMB budget=%dMB transfers=%d buffer-size=%s multi-thread-streams=%d mt-write-buffer=%dKi mt-chunk-size=%dM (est. peak ~%dMB)',
+			$available_ram,
+			$budget,
+			$transfers,
+			$buffer_size,
+			$mt_streams,
+			$mt_write_buffer,
+			$mt_chunk_size,
+			(int) ( $transfers * ( $buffer_mb + $mt_streams * $per_stream_mem ) )
+		) );
+
+		$command = sprintf( "rclone copy -P --transfers %d --buffer-size %s --multi-thread-streams %d --multi-thread-write-buffer-size %dKi --multi-thread-chunk-size %dM %s %s", $transfers, $buffer_size, $mt_streams, $mt_write_buffer, $mt_chunk_size, escapeshellarg( $this->get_remote_path( false ) ), escapeshellarg( $path ) );
+		$output  = EE::launch( $command );
 
 		if ( $output->return_code ) {
 			EE::error( 'Error downloading backup from remote storage.' );
@@ -1283,23 +1356,55 @@ class Site_Backup_Restore {
 	}
 
 
+	/**
+	 * Whether the configured rclone remote is an S3 backend.
+	 *
+	 * Resolves the remote name from `rclone-path` (instead of assuming
+	 * `easyengine`) and compares the backend's exact `type` value to `s3`,
+	 * rather than substring-matching the raw `rclone config show` output -- which
+	 * could both miss a non-`easyengine` remote and false-positive on any line
+	 * whose value merely contains the substring `s3`. All S3-compatible providers
+	 * (AWS, Spaces, Wasabi, MinIO, ...) share `type = s3`, so an exact match on
+	 * the type value covers them.
+	 *
+	 * @return bool
+	 */
+	private function is_s3_remote() {
+		$rclone_path = get_config_value( 'rclone-path', 'easyengine:easyengine' );
+		$remote      = explode( ':', $rclone_path )[0];
+
+		$command = sprintf( "rclone config show %s | awk -F '=' '/^[[:space:]]*type[[:space:]]*=/ {gsub(/[[:space:]]/, \"\", \$2); print \$2; exit}'", escapeshellarg( $remote ) );
+		$type    = trim( EE::launch( $command )->stdout );
+
+		return ( 's3' === $type );
+	}
+
 	private function rclone_upload( $path ) {
-		$cpu_cores       = intval( EE::launch( 'nproc' )->stdout );
-		$ram             = intval( EE::launch( "free -m | grep Mem | awk '{print $7}'" )->stdout );
-		$transfers       = max( 2, min( intval( $cpu_cores / 2 ), 4 ) );
-		$max_buffer_size = 4096;
+		$cpu_cores     = intval( EE::launch( 'nproc' )->stdout );
+		$available_ram = $this->get_available_ram_mb();
 
+		// Detect S3 backends, which require additional multipart-upload tuning.
+		$is_s3 = $this->is_s3_remote();
 
-		$buffer_size = min( floor( $ram / $transfers ), $max_buffer_size ) . 'M';
+		$res         = $this->compute_rclone_resources( $cpu_cores, $available_ram, $is_s3 );
+		$transfers   = $res['transfers'];
+		$buffer_size = $res['buffer_size'] . 'M';
 
-
-		$command = 'rclone config show easyengine | grep type';
-		$output  = EE::launch( $command )->stdout;
 		$s3_flag = '';
-
-		if ( strpos( $output, 's3' ) !== false ) {
-			$s3_flag = ' --s3-chunk-size=64M --s3-upload-concurrency ' . min( intval( $cpu_cores ) * 2, 32 );
+		if ( $is_s3 ) {
+			$s3_flag = sprintf( ' --s3-chunk-size=%dM --s3-upload-concurrency %d', $res['s3_chunk_size'], $res['s3_concurrency'] );
 		}
+
+		EE::debug( sprintf(
+			'rclone upload tuning: available_ram=%dMB transfers=%d buffer-size=%s s3=%s s3-chunk-size=%dM s3-upload-concurrency=%d (est. peak ~%dMB)',
+			$available_ram,
+			$transfers,
+			$buffer_size,
+			$is_s3 ? 'yes' : 'no',
+			$res['s3_chunk_size'],
+			$res['s3_concurrency'],
+			$transfers * ( $res['buffer_size'] + ( $res['s3_chunk_size'] * $res['s3_concurrency'] ) )
+		) );
 
 		$command = sprintf( "rclone copy -P %s --transfers %d --checkers %d --buffer-size %s %s %s", $s3_flag, $transfers, $transfers, $buffer_size, escapeshellarg( $path ), escapeshellarg( $this->get_remote_path() ) );
 		$output  = EE::launch( $command );
@@ -1329,6 +1434,86 @@ class Site_Backup_Restore {
 				$this->cleanup_old_backups();
 			}
 		}
+	}
+
+	/**
+	 * Compute memory-safe rclone transfer settings shared by upload and download.
+	 *
+	 * rclone allocates one `--buffer-size` read-ahead buffer per concurrent
+	 * `--transfers`, and, for S3 uploads, an additional
+	 * `--s3-chunk-size * --s3-upload-concurrency` multipart buffer per transfer.
+	 * The upload in-memory footprint is therefore:
+	 *
+	 *     transfers * ( buffer_size + s3_chunk_size * s3_upload_concurrency )
+	 *
+	 * The previous implementation set `buffer_size = available_ram / transfers`,
+	 * which made the read-ahead buffers alone consume ~100% of available memory
+	 * (e.g. `--buffer-size 1328M --transfers 2` on a 4 GB host) and routinely
+	 * triggered the OOM killer during backups. This helper instead caps rclone's
+	 * total footprint at a fraction of currently-available memory, while still
+	 * scaling parallelism and buffer size up on larger hosts so spare RAM is used.
+	 *
+	 * The returned `budget` (and `max_buffer`) let callers that allocate further
+	 * buffer pools -- e.g. `rclone_download()` sizing `--multi-thread-streams` --
+	 * stay within the same single budget instead of recomputing their own.
+	 *
+	 * Tunable via global config: `rclone-mem-fraction` (default 0.5) and
+	 * `rclone-max-buffer-size` in MB (default 256).
+	 *
+	 * @param int  $cpu_cores     Number of CPU cores (nproc).
+	 * @param int  $available_ram Currently available memory in MB.
+	 * @param bool $is_s3         Whether the remote is an S3 backend.
+	 *
+	 * @return array{transfers:int,buffer_size:int,s3_concurrency:int,s3_chunk_size:int,budget:int,max_buffer:int}
+	 */
+	private function compute_rclone_resources( $cpu_cores, $available_ram, $is_s3 ) {
+		$cpu_cores     = max( 1, intval( $cpu_cores ) );
+		$available_ram = max( 0, intval( $available_ram ) );
+
+		// Fraction of *available* RAM rclone may use, clamped to a safe range so
+		// a backup never starves the host (MariaDB, PHP-FPM, nginx) or itself.
+		$mem_fraction = floatval( get_config_value( 'rclone-mem-fraction', 0.5 ) );
+		$mem_fraction = min( 0.9, max( 0.1, $mem_fraction ) );
+
+		$min_buffer    = 16; // rclone's default; never go below it.
+		$max_buffer    = max( $min_buffer, intval( get_config_value( 'rclone-max-buffer-size', 256 ) ) );
+		$s3_chunk_size = $is_s3 ? 64 : 0;
+
+		// Total memory budget for rclone transfer/multipart buffers.
+		$budget = (int) floor( $available_ram * $mem_fraction );
+
+		// Desired parallelism, scaled with cores but capped to sane bounds.
+		$transfers      = max( 2, min( $cpu_cores, 8 ) );
+		$s3_concurrency = $is_s3 ? max( 2, min( $cpu_cores * 2, 32 ) ) : 0;
+
+		// If the budget can't fit the desired parallelism even at the minimum
+		// buffer size, first shrink S3 multipart concurrency (the biggest memory
+		// lever at 64M/chunk), then the number of parallel transfers. Both may
+		// fall to 1 on extremely tight budgets so the helper honours its own cap
+		// whenever the budget allows it at all (the desired floor stays at 2).
+		while ( $is_s3 && $s3_concurrency > 1 &&
+			$transfers * ( $min_buffer + $s3_chunk_size * $s3_concurrency ) > $budget ) {
+			$s3_concurrency = max( 1, intval( $s3_concurrency / 2 ) );
+		}
+		while ( $transfers > 1 &&
+			$transfers * ( $min_buffer + $s3_chunk_size * $s3_concurrency ) > $budget ) {
+			$transfers--;
+		}
+
+		// Spend whatever budget remains after reserving S3 multipart buffers on
+		// the read-ahead buffer, clamped to [$min_buffer, $max_buffer].
+		$per_transfer_budget = intval( floor( $budget / $transfers ) );
+		$buffer_size         = $per_transfer_budget - ( $s3_chunk_size * $s3_concurrency );
+		$buffer_size         = max( $min_buffer, min( $buffer_size, $max_buffer ) );
+
+		return [
+			'transfers'      => $transfers,
+			'buffer_size'    => $buffer_size,
+			's3_concurrency' => $s3_concurrency,
+			's3_chunk_size'  => $s3_chunk_size,
+			'budget'         => $budget,
+			'max_buffer'     => $max_buffer,
+		];
 	}
 
 	/**
