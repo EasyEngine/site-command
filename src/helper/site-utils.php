@@ -764,19 +764,32 @@ function sysctl_parameters() {
 
 /**
  * Removes entry of the site from /etc/hosts
+ * Optimized for Docker environments to prevent Inode/Device busy errors.
  *
  * @param string $site_url site name.
- *
+ * @throws Exception If /etc/hosts cannot be read or written.
  */
 function remove_etc_hosts_entry( $site_url ) {
-	$fs = new Filesystem();
 
-	$hosts_file = file_get_contents( '/etc/hosts' );
+    // 1. Read /etc/hosts file; suppress warnings and handle failure manually
+    $hosts_file = @file_get_contents( '/etc/hosts' );
+    if ( $hosts_file === false ) {
+        throw new Exception( "Failed to read /etc/hosts" );
+    }
 
-	$site_url_escaped = preg_replace( '/\./', '\.', $site_url );
-	$hosts_file_new   = preg_replace( "/127\.0\.0\.1\s+$site_url_escaped\n/", '', $hosts_file );
+    // 2. Escape special characters in domain (e.g., dots) for regex safety
+    $site_url_escaped = preg_quote( $site_url, '/' );
 
-	$fs->dumpFile( '/etc/hosts', $hosts_file_new );
+    // 3. Remove the specific line matching the Localhost IP and the site URL
+    $hosts_file_new = preg_replace( "/127\.0\.0\.1\s+$site_url_escaped\n/", '', $hosts_file );
+
+    // 4. Overwrite file directly to maintain the Inode (fixes Docker mount issues)
+    // Using LOCK_EX to prevent race conditions during write
+    $result = file_put_contents( '/etc/hosts', $hosts_file_new, LOCK_EX );
+
+    if ( $result === false ) {
+        throw new Exception( "Failed to update /etc/hosts" );
+    }
 }
 
 /**
