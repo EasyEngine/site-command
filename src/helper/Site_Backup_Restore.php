@@ -23,6 +23,13 @@ class Site_Backup_Restore {
 	const ERROR_TYPE_INTERRUPTED = 'interrupted';           // Killed/stopped
 	const ERROR_TYPE_UNKNOWN = 'unknown_error';             // Unexpected
 
+	// Minimum rclone version that supports each download flag added after the
+	// original multi-thread support. Older rclone rejects unknown flags and
+	// aborts the copy, so these are only passed when the installed rclone is new
+	// enough. (Update if upstream confirms different introduction versions.)
+	const RCLONE_MIN_VERSION_MT_WRITE_BUFFER = '1.63.0'; // --multi-thread-write-buffer-size (rclone v1.63.0)
+	const RCLONE_MIN_VERSION_MT_CHUNK_SIZE   = '1.64.0'; // --multi-thread-chunk-size (rclone v1.64.0)
+
 	private $fs;
 	public $site_data;
 	private $rclone_config_path;
@@ -65,6 +72,7 @@ class Site_Backup_Restore {
 
 		// Handle --list flag to display available backups
 		if ( $list_backups ) {
+			$this->check_rclone_available();
 			$this->list_remote_backups();
 
 			return; // Exit after listing backups
@@ -262,6 +270,12 @@ class Site_Backup_Restore {
 		}
 
 		if ( $backup_id ) {
+
+			// verify_backup_id() lists remote backups (rclone lsf) before the
+			// pre_restore_check() preflight below, so check rclone here too --
+			// otherwise a missing rclone surfaces as a misleading "Invalid backup
+			// ID" instead of the friendly "rclone is not installed" message.
+			$this->check_rclone_available();
 
 			if ( ! $this->verify_backup_id( $backup_id ) ) {
 				EE::error( "Invalid backup ID provided.\nPlease provide a valid ID from the list using 'ee site backup --list " . $this->site_data['site_url'] . "'." );
@@ -865,7 +879,14 @@ class Site_Backup_Restore {
 		EE::run_command( $args, $assoc_args, $options );
 	}
 
-	private function pre_backup_restore_checks() {
+	/**
+	 * Verify rclone is installed and the configured backend exists.
+	 *
+	 * Extracted from pre_backup_restore_checks() so read-only paths (e.g.
+	 * `ee site backup --list`) can run it before invoking rclone and surface a
+	 * friendly message instead of a raw "sh: 1: rclone: not found".
+	 */
+	private function check_rclone_available() {
 		$command     = 'rclone --version';
 		$return_code = EE::exec( $command );
 
@@ -893,6 +914,10 @@ class Site_Backup_Restore {
 			);
 			EE::error( sprintf( 'rclone backend "%s" does not exist. Please create it using `rclone config`', $rclone_backend ) );
 		}
+	}
+
+	private function pre_backup_restore_checks() {
+		$this->check_rclone_available();
 
 		$this->check_and_install( 'zip', 'zip' );
 		$this->check_and_install( '7z', 'p7zip-full' );
@@ -1286,6 +1311,20 @@ class Site_Backup_Restore {
 		return intval( EE::launch( $command )->stdout );
 	}
 
+	/**
+	 * Installed rclone version as a dotted string (e.g. "1.66.0"), or '' if it
+	 * cannot be determined. Used to gate download flags that older rclone lacks.
+	 *
+	 * @return string
+	 */
+	private function get_rclone_version() {
+		// `rclone version` prints e.g. "rclone v1.66.0" on its first line.
+		$output  = EE::launch( "rclone version | head -n1 | awk '{print $2}'" )->stdout;
+		$version = ltrim( trim( $output ), 'v' );
+
+		return preg_match( '/^[0-9]+\.[0-9]+/', $version ) ? $version : '';
+	}
+
 	private function rclone_download( $path ) {
 		$cpu_cores     = intval( EE::launch( 'nproc' )->stdout );
 		$available_ram = $this->get_available_ram_mb();
@@ -1333,8 +1372,23 @@ class Site_Backup_Restore {
 		$mt_streams    = max( 1, min( $cpu_cores * 2, 32, intval( floor( $stream_budget / $per_stream_mem ) ) ) );
 		$buffer_size   = $buffer_mb . 'M';
 
+		// --multi-thread-write-buffer-size and --multi-thread-chunk-size were added
+		// after the original multi-thread support; older rclone aborts on unknown
+		// flags, so only pass them when the installed rclone is new enough. The
+		// budget above already assumes their defaults, so gating them out changes
+		// only which knobs reach rclone, not the computed footprint.
+		$rclone_version = $this->get_rclone_version();
+		$mt_flags       = sprintf( '--multi-thread-streams %d', $mt_streams );
+		if ( $rclone_version && version_compare( $rclone_version, self::RCLONE_MIN_VERSION_MT_WRITE_BUFFER, '>=' ) ) {
+			$mt_flags .= sprintf( ' --multi-thread-write-buffer-size %dKi', $mt_write_buffer );
+		}
+		if ( $rclone_version && version_compare( $rclone_version, self::RCLONE_MIN_VERSION_MT_CHUNK_SIZE, '>=' ) ) {
+			$mt_flags .= sprintf( ' --multi-thread-chunk-size %dM', $mt_chunk_size );
+		}
+
 		EE::debug( sprintf(
-			'rclone download tuning: available_ram=%dMB budget=%dMB transfers=%d buffer-size=%s multi-thread-streams=%d mt-write-buffer=%dKi mt-chunk-size=%dM (est. peak ~%dMB)',
+			'rclone download tuning: rclone=%s available_ram=%dMB budget=%dMB transfers=%d buffer-size=%s multi-thread-streams=%d mt-write-buffer=%dKi mt-chunk-size=%dM (est. peak ~%dMB)',
+			$rclone_version ?: 'unknown',
 			$available_ram,
 			$budget,
 			$transfers,
@@ -1345,7 +1399,7 @@ class Site_Backup_Restore {
 			(int) ( $transfers * ( $buffer_mb + $mt_streams * $per_stream_mem ) )
 		) );
 
-		$command = sprintf( "rclone copy -P --transfers %d --buffer-size %s --multi-thread-streams %d --multi-thread-write-buffer-size %dKi --multi-thread-chunk-size %dM %s %s", $transfers, $buffer_size, $mt_streams, $mt_write_buffer, $mt_chunk_size, escapeshellarg( $this->get_remote_path( false ) ), escapeshellarg( $path ) );
+		$command = sprintf( "rclone copy -P --transfers %d --buffer-size %s %s %s %s", $transfers, $buffer_size, $mt_flags, escapeshellarg( $this->get_remote_path( false ) ), escapeshellarg( $path ) );
 		$output  = EE::launch( $command );
 
 		if ( $output->return_code ) {
