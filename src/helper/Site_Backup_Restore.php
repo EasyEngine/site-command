@@ -827,8 +827,14 @@ class Site_Backup_Restore {
 		$meta_data  = json_decode( file_get_contents( $backup_dir . '/meta.json' ), true );
 		$wp_version = $meta_data['wordpressVersion'];
 
+		// wp core download extracts the WordPress archive in PHP, which needs more
+		// than a typical site's 128M memory_limit and OOMs on low-RAM hosts. Raise
+		// the limit for this command (site creation does the same with `php -d
+		// memory_limit` in site-type-wp) via WP_CLI_PHP_ARGS, which WP-CLI applies
+		// to the PHP process it spawns. The shell command runs through bash, so the
+		// env-var prefix is honoured.
 		$args       = [ 'shell', $this->site_data['site_url'] ];
-		$assoc_args = [ 'command' => sprintf( 'wp core download --force --version=%s', $wp_version ) ];
+		$assoc_args = [ 'command' => sprintf( "WP_CLI_PHP_ARGS='-d memory_limit=512M' wp core download --force --version=%s", $wp_version ) ];
 		$options    = [ 'skip-tty' => true ];
 		EE::run_command( $args, $assoc_args, $options );
 
