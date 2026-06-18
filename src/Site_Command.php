@@ -113,7 +113,7 @@ class Site_Command {
 					continue;
 				}
 
-				$api_key_absent        = empty( EE\Utils\get_config_value( 'cloudflare-api-key' ) );
+				$api_key_absent        = empty( EE\Utils\get_config_value( 'cloudflare-api-key' ) ) &&  empty ( get_config_value( 'cloudflare-api-token' ) );
 				$skip_wildcard_warning = false;
 
 				if ( $site->site_ssl_wildcard && $api_key_absent ) {
