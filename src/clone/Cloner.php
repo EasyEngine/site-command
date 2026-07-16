@@ -84,6 +84,11 @@ class Site {
 		$list_result = $this->execute( 'ee site list --format=json' );
 		$list_result = json_decode( $list_result->stdout, true );
 
+		// Empty host: `ee site list` returns no JSON ("No sites found!" on stderr), so there is no parent to match.
+		if ( ! is_array( $list_result ) ) {
+			$list_result = [];
+		}
+
 		foreach ( $list_result as $site_details ) {
 			$parent_site  = $site_details['site'];
 			$substr_match = strpos( $site, $parent_site );
@@ -290,14 +295,13 @@ class Site {
 	public function site_exists(): bool {
 		$site_list = $this->execute( 'ee site list --format=json --no-color' );
 
-		if ( 1 === $site_list->return_code ) {
-			$error = trim ( preg_replace( '#\\x1b[[][^A-Za-z]*[A-Za-z]#', '', $site_list->stdout ) );
-			if ( 'Error: No sites found!' === $error ) {
+		if ( 0 !== $site_list->return_code ) {
+			// "No sites found!" is emitted on stderr (merged into stdout under `ssh -t`).
+			$output = trim( preg_replace( '#\\x1b[[][^A-Za-z]*[A-Za-z]#', '', $site_list->stderr . $site_list->stdout ) );
+			if ( false !== strpos( $output, 'Error: No sites found!' ) ) {
 				return false;
 			}
-		}
 
-		if ( 0 !== $site_list->return_code ) {
 			throw new \Exception( 'Unable to get site list on ' . $this->user . '@' . $this->host );
 		}
 
