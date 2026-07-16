@@ -81,11 +81,14 @@ class Site {
 	}
 
 	public function validate_parent_site_present_on_host( string $site ): void {
-		$list_result = $this->execute( 'ee site list --format=json' );
-		$list_result = json_decode( $list_result->stdout, true );
+		$list_run = $this->execute( 'ee site list --format=json' );
+		$list_result = json_decode( $list_run->stdout, true );
 
-		// Empty host: `ee site list` returns no JSON ("No sites found!" on stderr), so there is no parent to match.
 		if ( ! is_array( $list_result ) ) {
+			// An empty host has no parent to match; any other failure must surface, not be masked as "parent not found".
+			if ( 0 !== $list_run->return_code && ! $this->is_no_sites_error( $list_run ) ) {
+				throw new \Exception( 'Unable to get site list on ' . $this->user . '@' . $this->host );
+			}
 			$list_result = [];
 		}
 
@@ -292,16 +295,26 @@ class Site {
 		return $new_site;
 	}
 
+	// True when `ee site list` failed specifically because the host has no sites.
+	// `\EE::error( 'No sites found!' )` exits 1 and writes to stderr (merged into stdout under `ssh -t`).
+	private function is_no_sites_error( EE\ProcessRun $result ): bool {
+		if ( 1 !== $result->return_code ) {
+			return false;
+		}
+
+		$output = trim( preg_replace( '#\\x1b[[][^A-Za-z]*[A-Za-z]#', '', $result->stderr . $result->stdout ) );
+
+		return false !== strpos( $output, 'Error: No sites found!' );
+	}
+
 	public function site_exists(): bool {
 		$site_list = $this->execute( 'ee site list --format=json --no-color' );
 
-		if ( 0 !== $site_list->return_code ) {
-			// "No sites found!" is emitted on stderr (merged into stdout under `ssh -t`).
-			$output = trim( preg_replace( '#\\x1b[[][^A-Za-z]*[A-Za-z]#', '', $site_list->stderr . $site_list->stdout ) );
-			if ( false !== strpos( $output, 'Error: No sites found!' ) ) {
-				return false;
-			}
+		if ( $this->is_no_sites_error( $site_list ) ) {
+			return false;
+		}
 
+		if ( 0 !== $site_list->return_code ) {
 			throw new \Exception( 'Unable to get site list on ' . $this->user . '@' . $this->host );
 		}
 
