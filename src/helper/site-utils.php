@@ -759,6 +759,29 @@ function split_alias_domains( $domains ) {
 }
 
 /**
+ * Exits with an error listing the alias domains that are not a plain hostname or `*.hostname`.
+ *
+ * Alias domains are also used as proxy file names (e.g. auth-command's htpasswd and ACL files), so the global `default` names are rejected too.
+ *
+ * @param array $domains Alias domains.
+ */
+function validate_alias_domains( $domains ) {
+
+	$label   = '[A-Za-z0-9_](?:[A-Za-z0-9_-]*[A-Za-z0-9_])?';
+	$invalid = array_filter(
+		$domains,
+		function ( $domain ) use ( $label ) {
+			return 1 !== preg_match( '/^(?:\*\.)?' . $label . '(?:\.' . $label . ')*$/D', $domain )
+				|| in_array( strtolower( $domain ), [ 'default', 'default_admin_tools' ], true );
+		}
+	);
+
+	if ( ! empty( $invalid ) ) {
+		\EE::error( sprintf( 'Invalid alias domain(s): %s. An alias domain must be a hostname or `*.hostname` whose labels use letters, digits, `-` and `_` (not starting or ending with `-`), and can not be `default` or `default_admin_tools`.', implode( ', ', $invalid ) ) );
+	}
+}
+
+/**
  * 'sysctl' parameters for docker-compose file.
  *
  * @return array of all 'sysctl' parameters.

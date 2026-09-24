@@ -27,6 +27,7 @@ use function EE\Site\Utils\get_site_info;
 use function EE\Site\Utils\reload_global_nginx_proxy;
 use function EE\Site\Utils\get_parent_of_alias;
 use function EE\Site\Utils\split_alias_domains;
+use function EE\Site\Utils\validate_alias_domains;
 
 /**
  * Base class for Site command
@@ -510,6 +511,8 @@ abstract class EE_Site_Command {
 			if ( empty( $domains_to_add ) && empty( $domains_to_delete ) ) {
 				EE::error( 'Please provide at least one alias domain to add or delete.' );
 			}
+
+			validate_alias_domains( $domains_to_add );
 
 			$already_added_domains = array_intersect( $existing_alias_domains, $domains_to_add );
 			$domains_to_add        = array_values( array_diff( $domains_to_add, $existing_alias_domains ) );
