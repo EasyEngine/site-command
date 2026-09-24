@@ -100,7 +100,8 @@ class Site {
 				if ( explode( '.', $site, 2 )[1] === $parent_site ) {
 					$info_result = $this->execute( 'ee site info ' . $parent_site . ' --format=json' );
 					$info_result = json_decode( $info_result->stdout, true );
-					if ( $info_result['site_ssl'] !== '' && $info_result['site_ssl_wildcard'] === '1' ) {
+					// site_ssl_wildcard is int 1 or string '1' depending on the PHP version (PDO SQLite typing).
+					if ( ! empty( $info_result['site_ssl'] ) && ! empty( $info_result['site_ssl_wildcard'] ) ) {
 						return;
 					}
 				}
