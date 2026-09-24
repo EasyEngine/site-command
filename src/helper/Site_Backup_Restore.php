@@ -330,6 +330,28 @@ class Site_Backup_Restore {
 		return empty( $clean_output ) ? '-' : $clean_output;
 	}
 
+	/**
+	 * Build a child `ee shell` command that runs the current EE binary, not whatever `ee` is on PATH.
+	 *
+	 * @param string $command Command to run inside the site's php container.
+	 *
+	 * @return string
+	 */
+	private function get_ee_shell_command( $command ) {
+		$ee_script = class_exists( 'Phar' ) ? \Phar::running( false ) : '';
+		if ( '' === $ee_script ) {
+			$ee_script = EE_ROOT . '/php/boot-fs.php';
+		}
+
+		return sprintf(
+			'%s %s shell %s --skip-tty --command=%s',
+			escapeshellarg( \EE\Utils\get_php_binary() ),
+			escapeshellarg( $ee_script ),
+			escapeshellarg( $this->site_data['site_url'] ),
+			escapeshellarg( $command )
+		);
+	}
+
 	private function backup_site_details( $backup_dir ) {
 
 		$backup_data = [];
@@ -701,7 +723,7 @@ class Site_Backup_Restore {
 		);
 
 		// Launched to get the exit code: the `>` redirect leaves a 0-byte file even when mysqldump fails.
-		$dump_result = EE::launch( sprintf( 'ee shell %s --skip-tty --command=%s', escapeshellarg( $this->site_data['site_url'] ), escapeshellarg( $backup_command ) ) );
+		$dump_result = EE::launch( $this->get_ee_shell_command( $backup_command ) );
 
 		$sql_dump_path = EE_ROOT_DIR . '/sites/' . $this->site_data['site_url'] . '/app/htdocs/' . $sql_filename;
 
