@@ -690,10 +690,7 @@ class Site_Backup_Restore {
 
 		$this->fs->mkdir( $backup_dir . '/sql' );
 
-		// Best-effort layer-1 quoting of DB credentials (consistent with get_db_size()).
-		// NOTE: the value still passes through a second double-quoted `bash -c "$command"` layer
-		// inside `ee shell` that escapeshellarg cannot protect, so a password containing ` " or $
-		// can still break the dump. Fully hardening that inner wrapper is out of scope here.
+		// ee shell re-wraps this in bash -c "...", so a password containing ` " or $ can still break the dump.
 		$backup_command = sprintf(
 			'mysqldump --skip-ssl -u %s -p%s -h %s --single-transaction %s > /var/www/htdocs/%s',
 			escapeshellarg( $db_user ),
@@ -703,14 +700,11 @@ class Site_Backup_Restore {
 			$sql_filename
 		);
 
-		// Launch via `ee shell` so the dump's exit code is captured. The shell `>` redirect
-		// creates/truncates the target before mysqldump runs, so a failed dump leaves a 0-byte
-		// file that passes exists(); rely on the exit code + filesize instead.
+		// Launched to get the exit code: the `>` redirect leaves a 0-byte file even when mysqldump fails.
 		$dump_result = EE::launch( sprintf( 'ee shell %s --skip-tty --command=%s', escapeshellarg( $this->site_data['site_url'] ), escapeshellarg( $backup_command ) ) );
 
 		$sql_dump_path = EE_ROOT_DIR . '/sites/' . $this->site_data['site_url'] . '/app/htdocs/' . $sql_filename;
 
-		// A 0-byte or missing dump, or a non-zero exit, means the backup failed.
 		if ( 0 !== $dump_result->return_code || ! $this->fs->exists( $sql_dump_path ) || filesize( $sql_dump_path ) <= 0 ) {
 			// EE::launch captures the dump's stderr, so show it or the cause is lost.
 			if ( '' !== trim( $dump_result->stderr ) ) {
@@ -724,9 +718,7 @@ class Site_Backup_Restore {
 			EE::error( 'Database backup failed. Please check database credentials and connectivity.' );
 		}
 
-		// A failed mv (cross-device, permissions, disk-full, etc.) would leave sql/ empty;
-		// `7z u` on an empty dir exits 0 and `7z t` passes, shipping a DB-less "successful"
-		// backup. Fail loudly unless the dump actually landed and is non-empty.
+		// If mv fails, `7z u`/`7z t` still pass on the empty sql/ dir and a DB-less backup would ship.
 		if ( ! EE::exec( sprintf( 'mv %s %s', escapeshellarg( $sql_dump_path ), escapeshellarg( $sql_file ) ) )
 			|| ! $this->fs->exists( $sql_file ) || filesize( $sql_file ) <= 0 ) {
 			$this->capture_error(
