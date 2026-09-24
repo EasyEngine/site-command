@@ -65,6 +65,9 @@ class Site_Backup_Restore {
 	public function __construct() {
 		$this->fs = new Filesystem();
 		register_shutdown_function( [ $this, 'cleanup_temp_query_files' ] );
+		// Registered here so it runs before any lock-release shutdown handler: once the
+		// site lock is released, another run may already be writing into this dir.
+		register_shutdown_function( [ $this, 'cleanup_staging_dir' ] );
 	}
 
 	public function backup( $args, $assoc_args = [] ) {
@@ -139,10 +142,9 @@ class Site_Backup_Restore {
 		$this->pre_backup_check();
 		$backup_dir = EE_BACKUP_DIR . '/' . $this->site_data['site_url'];
 
-		// Track the staging dir so an abnormal exit (error, crash, OOM, Ctrl-C)
-		// purges the half-built archive instead of leaving it to fill the disk.
+		// Track the staging dir so a failed run (any EE::error/exit) purges the
+		// half-built archive instead of leaving it to fill the disk.
 		$this->staging_dir = $backup_dir;
-		register_shutdown_function( [ $this, 'cleanup_staging_dir' ] );
 
 		$this->fs->remove( $backup_dir );
 		$this->fs->mkdir( $backup_dir );
@@ -298,18 +300,8 @@ class Site_Backup_Restore {
 			$this->rclone_config_path = \EE\Utils\trailingslashit( $this->get_rclone_config_path() ) . $backup_id;
 		}
 
+		// Arms staging-dir cleanup once this site's lock is held (see pre_restore_check()).
 		$this->pre_restore_check();
-
-		// Track the staging dir for shutdown cleanup only AFTER pre_restore_check()
-		// has acquired this site's lock. Setting it earlier would let an early exit
-		// (e.g. invalid backup id, lock held by another process) delete a dir that a
-		// concurrent backup/restore of the same site is actively writing into.
-		$this->staging_dir = $backup_dir;
-		register_shutdown_function( [ $this, 'cleanup_staging_dir' ] );
-
-		if ( ! $this->fs->exists( $backup_dir ) ) {
-			$this->fs->mkdir( $backup_dir );
-		}
 
 		if ( 'wp' === $this->site_data['site_type'] ) {
 			$this->restore_wp( $backup_dir );
@@ -1132,6 +1124,12 @@ class Site_Backup_Restore {
 	private function pre_restore_check() {
 
 		$this->pre_backup_restore_checks();
+
+		// Only now that this site's lock is held: track the staging dir so a failed
+		// download or metadata check is cleaned up, and drop any leftover from an
+		// earlier run (e.g. SIGKILL) so a stale or partial archive is never reused.
+		$this->staging_dir = EE_BACKUP_DIR . '/' . $this->site_data['site_url'];
+		$this->fs->remove( $this->staging_dir );
 
 		$remote_path = $this->get_remote_path( false );
 		$command     = sprintf( 'rclone size --json %s', escapeshellarg( $remote_path ) );
