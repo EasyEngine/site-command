@@ -522,6 +522,7 @@ abstract class EE_Site_Command {
 
 		$add_domains    = get_flag_value( $assoc_args, 'add-alias-domains', false );
 		$delete_domains = get_flag_value( $assoc_args, 'delete-alias-domains', false );
+		$pre_hook_fired = false;
 
 		try {
 
@@ -581,6 +582,18 @@ abstract class EE_Site_Command {
 			$final_alias_domains = array_merge( $existing_alias_domains, $domains_to_add );
 			$final_alias_domains = array_diff( $final_alias_domains, $domains_to_delete );
 
+			// Set before firing, so a callback that throws still gets the failure hook to undo its partial work.
+			$pre_hook_fired = true;
+
+			/**
+			 * Execute before the new alias domains of a site are served by the proxy.
+			 * Note: This can be used by package commands to set up per-domain config the proxy needs from the first request.
+			 *
+			 * @param string $site_url       Url of site whose alias domains change.
+			 * @param array  $domains_to_add Alias domains that are being added.
+			 */
+			\EE::do_hook( 'site_alias_domains_before_update', $this->site_data['site_url'], $domains_to_add );
+
 			$this->site_data['alias_domains'] = implode( ',', $final_alias_domains );
 			$is_ssl                           = $this->site_data['site_ssl'] ? true : false;
 			$preferred_ssl_challenge          = get_preferred_ssl_challenge( get_domains_of_site( $this->site_data['site_url'] ) );
@@ -589,6 +602,16 @@ abstract class EE_Site_Command {
 			$this->dump_docker_compose_yml( [ 'nohttps' => $nohttps ] );
 			\EE_DOCKER::docker_compose_up( $this->site_data['site_fs_path'], [ 'nginx' ] );
 		} catch ( \Exception $e ) {
+			if ( $pre_hook_fired ) {
+				/**
+				 * Execute when an alias domains update is aborted after `site_alias_domains_before_update`.
+				 * Note: The site keeps its old alias domains, so this can be used to undo what was set up for the new ones.
+				 *
+				 * @param string $site_url       Url of site whose alias domains update failed.
+				 * @param array  $domains_to_add Alias domains that were not added after all.
+				 */
+				\EE::do_hook( 'site_alias_domains_update_failed', $site->site_url, $domains_to_add );
+			}
 			EE::error( $e->getMessage() );
 		}
 
@@ -618,6 +641,7 @@ abstract class EE_Site_Command {
 				} catch ( \Exception $e ) {
 					EE::warning( 'Certificate could not be issued. Reverting back to original state.' );
 					$this->enable( [ $this->site_data['site_url'] ], [ 'refresh' => 'true' ] );
+					\EE::do_hook( 'site_alias_domains_update_failed', $site->site_url, $domains_to_add );
 					EE::error( $e->getMessage() );
 				}
 			} elseif ( 'custom' === $this->site_data['site_ssl'] ) {
