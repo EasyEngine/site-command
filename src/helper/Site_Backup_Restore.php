@@ -711,6 +711,10 @@ class Site_Backup_Restore {
 
 		// A 0-byte or missing dump, or a non-zero exit, means the backup failed.
 		if ( 0 !== $dump_result->return_code || ! $this->fs->exists( $sql_dump_path ) || filesize( $sql_dump_path ) <= 0 ) {
+			// EE::launch captures the dump's stderr, so show it or the cause is lost.
+			if ( '' !== trim( $dump_result->stderr ) ) {
+				EE::warning( trim( $dump_result->stderr ) );
+			}
 			$this->capture_error(
 				sprintf( 'Database backup failed for database: %s', $db_name ),
 				self::ERROR_TYPE_DATABASE,
