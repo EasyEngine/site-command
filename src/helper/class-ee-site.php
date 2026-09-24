@@ -2273,6 +2273,18 @@ abstract class EE_Site_Command {
 			EE::error( 'The supplied --ssl-crt is not a valid/parseable certificate.' );
 		}
 
+		// nginx loads every certificate in the file, so a truncated or corrupt chain certificate breaks it too.
+		$begin_count = substr_count( $crt_contents, '-----BEGIN CERTIFICATE-----' );
+		$block_count = preg_match_all( '/-----BEGIN CERTIFICATE-----.+?-----END CERTIFICATE-----/s', $crt_contents, $crt_blocks );
+		if ( $begin_count !== $block_count ) {
+			EE::error( 'The supplied --ssl-crt contains a truncated certificate.' );
+		}
+		foreach ( $crt_blocks[0] as $crt_block ) {
+			if ( false === openssl_x509_parse( $crt_block ) ) {
+				EE::error( 'The supplied --ssl-crt contains an invalid chain certificate.' );
+			}
+		}
+
 		if ( false === openssl_pkey_get_private( $key_contents ) ) {
 			EE::error( 'The supplied --ssl-key is not a valid private key.' );
 		}
