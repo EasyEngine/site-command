@@ -324,7 +324,7 @@ class Site_Backup_Restore {
 			$shell_command .= ' --skip-plugins --skip-themes ';
 		}
 		$shell_command .= $command;
-		$output        = EE::launch( "ee shell " . $this->site_data['site_url'] . " --skip-tty --command=\"$shell_command\"" );
+		$output        = EE::launch( $this->get_ee_shell_command( $shell_command ) );
 		$clean_output  = trim( $output->stdout );
 
 		return empty( $clean_output ) ? '-' : $clean_output;
@@ -1285,7 +1285,7 @@ class Site_Backup_Restore {
 
 		$command = sprintf( "mysql --skip-ssl -u %s -p%s -h %s %s < /var/www/htdocs/db_size_query.sql", $user, $password, $host, $db_name );
 
-		$output = EE::launch( "ee shell " . $this->site_data['site_url'] . " --skip-tty --command=\"$command\"" );
+		$output = EE::launch( $this->get_ee_shell_command( $command ) );
 
 
 		$this->fs->remove( $query_file );
