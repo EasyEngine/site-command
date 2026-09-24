@@ -320,6 +320,11 @@ class Site {
 
 		$sites = json_decode( $site_list->stdout, true );
 
+		// Unparseable output must not read as "site doesn't exist": a clone rollback would then delete an existing destination site.
+		if ( ! is_array( $sites ) ) {
+			throw new \Exception( 'Unable to get site list on ' . $this->user . '@' . $this->host );
+		}
+
 		foreach ( $sites as $site ) {
 			if ( $site['site'] === $this->name ) {
 				if ( 'disabled' === $site['status'] ) {
