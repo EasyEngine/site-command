@@ -759,25 +759,50 @@ function split_alias_domains( $domains ) {
 }
 
 /**
- * Exits with an error listing the alias domains that are not a plain hostname or `*.hostname`.
+ * Checks whether a name is one of the global proxy file names (e.g. auth-command's htpasswd and ACL files), in any case.
  *
- * Alias domains are also used as proxy file names (e.g. auth-command's htpasswd and ACL files), so the global `default` names are rejected too.
+ * @param string $name File name.
+ *
+ * @return bool
+ */
+function is_reserved_proxy_file_name( $name ) {
+
+	return in_array( strtolower( (string) $name ), [ 'default', 'default_admin_tools' ], true );
+}
+
+/**
+ * Checks whether an alias domain is a plain hostname or `*.hostname` that is safe to use as a proxy file name.
+ *
+ * @param string $domain Alias domain.
+ *
+ * @return bool
+ */
+function is_valid_alias_domain( $domain ) {
+
+	// No leading `_`, so an alias can't take over the `_wildcard.<site>` files of another site.
+	$label = '[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9_])?';
+
+	return is_string( $domain )
+		&& 1 === preg_match( '/^(?:\*\.)?' . $label . '(?:\.' . $label . ')*$/D', $domain )
+		&& ! is_reserved_proxy_file_name( $domain );
+}
+
+/**
+ * Exits with an error listing the alias domains that are not a plain hostname or `*.hostname`.
  *
  * @param array $domains Alias domains.
  */
 function validate_alias_domains( $domains ) {
 
-	$label   = '[A-Za-z0-9_](?:[A-Za-z0-9_-]*[A-Za-z0-9_])?';
 	$invalid = array_filter(
 		$domains,
-		function ( $domain ) use ( $label ) {
-			return 1 !== preg_match( '/^(?:\*\.)?' . $label . '(?:\.' . $label . ')*$/D', $domain )
-				|| in_array( strtolower( $domain ), [ 'default', 'default_admin_tools' ], true );
+		function ( $domain ) {
+			return ! is_valid_alias_domain( $domain );
 		}
 	);
 
 	if ( ! empty( $invalid ) ) {
-		\EE::error( sprintf( 'Invalid alias domain(s): %s. An alias domain must be a hostname or `*.hostname` whose labels use letters, digits, `-` and `_` (not starting or ending with `-`), and can not be `default` or `default_admin_tools`.', implode( ', ', $invalid ) ) );
+		\EE::error( sprintf( 'Invalid alias domain(s): %s. An alias domain must be a hostname or `*.hostname` whose labels use letters, digits, `-` and `_`, do not start with `-` or `_` (a leading `_` is reserved for proxy files like `_wildcard.<site>`) and do not end with `-`. It can not be `default` or `default_admin_tools`.', implode( ', ', $invalid ) ) );
 	}
 }
 
