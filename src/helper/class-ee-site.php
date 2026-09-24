@@ -35,6 +35,10 @@ use function EE\Site\Utils\get_parent_of_alias;
  * @package ee
  */
 abstract class EE_Site_Command {
+	// Seconds to wait for another process's SSL lock before giving up; cron renewals can wait longer.
+	const SSL_LOCK_WAIT_SECONDS       = 120;
+	const SSL_RENEW_LOCK_WAIT_SECONDS = 600;
+
 	/**
 	 * @var Filesystem $fs Symfony Filesystem object.
 	 */
@@ -1547,15 +1551,16 @@ abstract class EE_Site_Command {
 	 * overwrites the account key. This guards the three ACME entry points so only one
 	 * such operation runs per server at a time.
 	 *
-	 * Non-blocking (LOCK_NB): a held lock fails fast instead of hanging cron. The handle
+	 * Polls a non-blocking flock for up to $wait seconds, so the wait stays bounded and interruptible. The handle
 	 * is never released here; the kernel drops the flock when the process exits.
 	 *
 	 * @param bool $throw Throw an exception instead of exiting, so callers that already changed site state can roll back.
+	 * @param int  $wait  Seconds to wait for a lock held by another process.
 	 *
 	 * @throws \Exception When $throw is set and the lock can't be acquired.
 	 * @return void
 	 */
-	private function acquire_ssl_lock( $throw = false ) {
+	private function acquire_ssl_lock( $throw = false, $wait = self::SSL_LOCK_WAIT_SECONDS ) {
 		// Already held by this process (reentrant: nested ssl_verify, or --all loop).
 		if ( isset( self::$ssl_lock_handle ) ) {
 			return;
@@ -1564,13 +1569,30 @@ abstract class EE_Site_Command {
 		// EE_ROOT_DIR is defined at plugin load and always exists at runtime.
 		$lock_file = EE_ROOT_DIR . '/ssl-global.lock';
 		$fh        = fopen( $lock_file, 'c' );
+		$locked    = false;
 
-		if ( ! $fh || ! flock( $fh, LOCK_EX | LOCK_NB ) ) {
-			if ( $fh ) {
-				fclose( $fh );
-				$message = 'Another SSL operation is already in progress on this server. Wait for it to finish and retry.';
-			} else {
+		if ( $fh ) {
+			$deadline = microtime( true ) + $wait;
+			$waiting  = false;
+			while ( true ) {
+				$locked = flock( $fh, LOCK_EX | LOCK_NB, $would_block );
+				if ( $locked || ! $would_block || microtime( true ) >= $deadline ) {
+					break;
+				}
+				if ( ! $waiting ) {
+					\EE::log( sprintf( 'Waiting up to %ds for another SSL operation to finish...', $wait ) );
+					$waiting = true;
+				}
+				sleep( 1 );
+			}
+		}
+
+		if ( ! $locked ) {
+			if ( ! $fh ) {
 				$message = 'Unable to open SSL lock file: ' . $lock_file;
+			} else {
+				fclose( $fh );
+				$message = $would_block ? 'Another SSL operation is already in progress on this server. Wait for it to finish and retry.' : 'Unable to lock SSL lock file: ' . $lock_file;
 			}
 			if ( $throw ) {
 				throw new \Exception( $message );
@@ -2009,7 +2031,7 @@ abstract class EE_Site_Command {
 		EE::log( 'Starting SSL cert renewal' );
 
 		// First call in a `ssl-renew --all` batch locks; later per-site calls are reentrant.
-		$this->acquire_ssl_lock();
+		$this->acquire_ssl_lock( false, self::SSL_RENEW_LOCK_WAIT_SECONDS );
 
 		if ( ! isset( $this->le_mail ) ) {
 			$this->le_mail = EE::get_config( 'le-mail' ) ?? EE::input( 'Enter your mail id: ' );
