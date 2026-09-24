@@ -1265,16 +1265,20 @@ class Site_Backup_Restore {
 		$unreadable = 0;
 
 		foreach ( $files as $file ) {
+			// A broken symlink has no content to archive; don't warn about it.
+			if ( $file->isLink() && ! file_exists( $file->getPathname() ) ) {
+				continue;
+			}
 			if ( ! $file->isReadable() ) {
 				$unreadable++;
 				continue;
 			}
-			$file_size = $file->getSize();
-			if ( false === $file_size ) {
+			// getSize() throws (never returns false) when stat fails, e.g. a file removed mid-scan.
+			try {
+				$size += $file->getSize();
+			} catch ( \RuntimeException $e ) {
 				$unreadable++;
-				continue;
 			}
-			$size += $file_size;
 		}
 
 		if ( $unreadable > 0 ) {
