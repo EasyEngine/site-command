@@ -949,14 +949,7 @@ class Site_Backup_Restore {
 
 		$lock_file = EE_BACKUP_DIR . '/' . $this->site_data['site_url'] . '.lock';
 
-		// Per-site lock guarding against a concurrent backup/restore of the SAME
-		// site. Uses flock() rather than file existence so the OS releases it
-		// automatically if the process dies mid-operation -- the previous
-		// file-existence lock was removed only on success paths, so any crash,
-		// OOM, or error exit left a stale `.lock` that permanently blocked all
-		// future backups/restores of that site. Opened with the 'e' flag
-		// (O_CLOEXEC) so backup subprocesses (rclone, mysqldump, docker exec)
-		// don't inherit the descriptor and keep the lock held after we exit.
+		// flock so the OS drops the lock if we die; 'e' (O_CLOEXEC) so orphaned subprocesses can't keep holding it.
 		$this->site_backup_lock_handle = fopen( $lock_file, 'c+e' );
 
 		if ( ! $this->site_backup_lock_handle ) {
@@ -980,9 +973,7 @@ class Site_Backup_Restore {
 			EE::error( 'Another backup/restore process is running. Please wait for it to complete.' );
 		}
 
-		// Release on graceful exit (EE::error/exit, PHP fatal, Ctrl-C). On
-		// SIGTERM/SIGKILL/OOM the shutdown handler does not run, but the OS
-		// releases the flock on process death -- so the lock is freed in every case.
+		// Hard kills skip shutdown functions, but the OS still drops the flock.
 		register_shutdown_function( [ $this, 'release_site_backup_lock' ] );
 
 		// Record the holder for debugging only; flock is the source of truth.
@@ -1938,9 +1929,7 @@ class Site_Backup_Restore {
 			$this->fs->mkdir( EE_BACKUP_DIR );
 		}
 
-		// Open file handle (creates if doesn't exist). The 'e' flag (O_CLOEXEC)
-		// stops backup subprocesses (rclone, mysqldump, docker exec) from
-		// inheriting this descriptor and holding the lock after this process exits.
+		// 'e' (O_CLOEXEC) so orphaned subprocesses can't keep holding the lock after we die.
 		$this->global_backup_lock_handle = fopen( $lock_file, 'c+e' );
 
 		if ( ! $this->global_backup_lock_handle ) {
