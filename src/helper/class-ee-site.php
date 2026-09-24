@@ -540,6 +540,11 @@ abstract class EE_Site_Command {
 			$array_data      = (array) $this->site_data;
 			$this->site_data = reset( $array_data );
 
+			// Lock before the compose dump below drops HTTPS, so a busy lock can't leave the site half-updated.
+			if ( 'le' === $this->site_data['site_ssl'] ) {
+				$this->acquire_ssl_lock();
+			}
+
 			// Validate data.
 			$existing_alias_domains = [];
 			$domains_to_add         = [];
@@ -1542,14 +1547,15 @@ abstract class EE_Site_Command {
 	 * overwrites the account key. This guards the three ACME entry points so only one
 	 * such operation runs per server at a time.
 	 *
-	 * Non-blocking (LOCK_NB): a held lock fails fast with a clear error instead of
-	 * hanging cron. The handle is kept open for the whole operation and is never
-	 * released or deleted here -- the advisory flock is tied to the fd and the kernel
-	 * drops it automatically when the process exits, so it is crash-safe.
+	 * Non-blocking (LOCK_NB): a held lock fails fast instead of hanging cron. The handle
+	 * is never released here; the kernel drops the flock when the process exits.
 	 *
+	 * @param bool $throw Throw an exception instead of exiting, so callers that already changed site state can roll back.
+	 *
+	 * @throws \Exception When $throw is set and the lock can't be acquired.
 	 * @return void
 	 */
-	private function acquire_ssl_lock() {
+	private function acquire_ssl_lock( $throw = false ) {
 		// Already held by this process (reentrant: nested ssl_verify, or --all loop).
 		if ( isset( self::$ssl_lock_handle ) ) {
 			return;
@@ -1562,8 +1568,14 @@ abstract class EE_Site_Command {
 		if ( ! $fh || ! flock( $fh, LOCK_EX | LOCK_NB ) ) {
 			if ( $fh ) {
 				fclose( $fh );
+				$message = 'Another SSL operation is already in progress on this server. Wait for it to finish and retry.';
+			} else {
+				$message = 'Unable to open SSL lock file: ' . $lock_file;
 			}
-			\EE::error( 'Another SSL operation is already in progress on this server. Wait for it to finish and retry.' );
+			if ( $throw ) {
+				throw new \Exception( $message );
+			}
+			\EE::error( $message );
 		}
 
 		self::$ssl_lock_handle = $fh;
@@ -1580,8 +1592,8 @@ abstract class EE_Site_Command {
 	 * @param array $alias_domains Array of alias domains if any.
 	 */
 	protected function init_le( $site_url, $site_fs_path, $wildcard = false, $www_or_non_www, $force = false, $alias_domains = [] ) {
-		// Serialize before register()/authorize() write the account key and order.
-		$this->acquire_ssl_lock();
+		// Serialize before register()/authorize() write the account key and order. Throws so create/update roll back instead of exiting mid-way.
+		$this->acquire_ssl_lock( true );
 		$preferred_challenge = get_preferred_ssl_challenge( $alias_domains );
 		$is_solver_dns       = ( $wildcard || 'dns' === $preferred_challenge ) ? true : false;
 		\EE::debug( 'Wildcard in init_le: ' . ( bool ) $wildcard );
