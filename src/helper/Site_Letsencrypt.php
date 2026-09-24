@@ -643,13 +643,13 @@ class Site_Letsencrypt {
 		} catch ( \Exception $e ) {
 			\EE::warning( 'A critical error occurred during certificate renewal: ' . $e->getMessage() );
 			\EE::debug( print_r( $e, true ) );
-			\EE::log( 'You can fix the issue and re-run: ee site ssl-verify ' . $domains[0] );
+			\EE::log( 'You can fix the issue and re-run: ee site ssl-verify ' . $domain );
 
 			return false;
 		} catch ( \Throwable $e ) {
 			\EE::warning( 'A critical error occurred during certificate renewal: ' . $e->getMessage() );
 			\EE::debug( print_r( $e, true ) );
-			\EE::log( 'You can fix the issue and re-run: ee site ssl-verify ' . $domains[0] );
+			\EE::log( 'You can fix the issue and re-run: ee site ssl-verify ' . $domain );
 
 			return false;
 		}
