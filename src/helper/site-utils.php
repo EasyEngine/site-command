@@ -742,6 +742,23 @@ function check_alias_in_db( $domains ) {
 }
 
 /**
+ * Splits a comma separated list of alias domains, trimming them and dropping blank entries.
+ *
+ * @param string|bool $domains Comma separated alias domains, as passed to the alias domain flags.
+ *
+ * @return array
+ */
+function split_alias_domains( $domains ) {
+
+	// A flag passed without a value is `true`, which would otherwise become the alias domain `1`.
+	if ( ! is_string( $domains ) ) {
+		return [];
+	}
+
+	return array_values( array_filter( array_map( 'trim', explode( ',', $domains ) ), 'strlen' ) );
+}
+
+/**
  * 'sysctl' parameters for docker-compose file.
  *
  * @return array of all 'sysctl' parameters.

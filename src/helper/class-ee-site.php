@@ -26,6 +26,7 @@ use function EE\Site\Utils\auto_site_name;
 use function EE\Site\Utils\get_site_info;
 use function EE\Site\Utils\reload_global_nginx_proxy;
 use function EE\Site\Utils\get_parent_of_alias;
+use function EE\Site\Utils\split_alias_domains;
 
 /**
  * Base class for Site command
@@ -502,13 +503,9 @@ abstract class EE_Site_Command {
 			$this->site_data = reset( $array_data );
 
 			// Drop blanks so that e.g. `b.com,` never stores an empty alias domain.
-			$split_domains = function ( $domains ) {
-				return array_values( array_filter( array_map( 'trim', explode( ',', (string) $domains ) ), 'strlen' ) );
-			};
-
-			$existing_alias_domains = $split_domains( $this->site_data['alias_domains'] );
-			$domains_to_add         = $split_domains( $add_domains );
-			$domains_to_delete      = $split_domains( $delete_domains );
+			$existing_alias_domains = split_alias_domains( (string) $this->site_data['alias_domains'] );
+			$domains_to_add         = split_alias_domains( $add_domains );
+			$domains_to_delete      = split_alias_domains( $delete_domains );
 
 			if ( empty( $domains_to_add ) && empty( $domains_to_delete ) ) {
 				EE::error( 'Please provide at least one alias domain to add or delete.' );

@@ -12,6 +12,7 @@ use function EE\Site\Utils\get_site_info;
 use function EE\Site\Utils\get_public_dir;
 use function EE\Site\Utils\get_webroot;
 use function EE\Site\Utils\check_alias_in_db;
+use function EE\Site\Utils\split_alias_domains;
 use function EE\Utils\get_flag_value;
 
 /**
@@ -116,9 +117,9 @@ class HTML extends EE_Site_Command {
 			\EE::error( sprintf( "Site %1\$s already exists. If you want to re-create it please delete the older one using:\n`ee site delete %1\$s`", $this->site_data['site_url'] ) );
 		}
 
-		$alias_domains = \EE\Utils\get_flag_value( $assoc_args, 'alias-domains', '' );
+		$alias_domains = split_alias_domains( \EE\Utils\get_flag_value( $assoc_args, 'alias-domains', '' ) );
 
-		$alias_domain_to_check   = explode( ',', $alias_domains );
+		$alias_domain_to_check   = $alias_domains;
 		$alias_domain_to_check[] = $this->site_data['site_url'];
 		check_alias_in_db( $alias_domain_to_check );
 
@@ -127,17 +128,7 @@ class HTML extends EE_Site_Command {
 		$this->skip_status_check                   = \EE\Utils\get_flag_value( $assoc_args, 'skip-status-check' );
 		$this->site_data['site_container_fs_path'] = get_public_dir( $assoc_args );
 
-		$this->site_data['alias_domains'] = $this->site_data['site_url'];
-		$this->site_data['alias_domains'] .= ',';
-		if ( ! empty( $alias_domains ) ) {
-			$comma_seprated_domains = explode( ',', $alias_domains );
-			foreach ( $comma_seprated_domains as $domain ) {
-				$trimmed_domain                   = trim( $domain );
-				$this->site_data['alias_domains'] .= $trimmed_domain . ',';
-			}
-		}
-    
-		$this->site_data['alias_domains'] = substr( $this->site_data['alias_domains'], 0, - 1 );
+		$this->site_data['alias_domains'] = implode( ',', array_merge( [ $this->site_data['site_url'] ], $alias_domains ) );
 		$this->site_data['site_ssl'] = get_value_if_flag_isset( $assoc_args, 'ssl', 'le' );
 
 		if ( 'custom' === $this->site_data['site_ssl'] ) {
