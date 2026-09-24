@@ -285,6 +285,11 @@ class Site_Letsencrypt {
 					\EE::debug( 'Domain Authorization Challenge for ' . $domain . ' revoked successfully' );
 				} catch ( CertificateRevocationException | AcmeCliException $e ) {
 					\EE::debug( $e->getMessage() );
+				} catch ( RateLimitedServerException $e ) {
+					// Revoking uses new-order too; stop here and let authorize() report the rate limit.
+					\EE::debug( $e->getMessage() );
+
+					return;
 				}
 			} else {
 				\EE::debug( 'Domain Authorization Challenge for ' . $domain . ' not found locally' );
