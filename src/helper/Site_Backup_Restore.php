@@ -463,6 +463,7 @@ class Site_Backup_Restore {
 			// This is optional, so we just log a warning instead of failing
 			if ( $result->return_code >= 2 ) {
 				EE::warning( 'Failed to backup custom docker-compose directory. Continuing with backup.' );
+				$this->fs->remove( $custom_docker_compose_dir_archive );
 			} elseif ( EE::launch( sprintf( '7z t %s', escapeshellarg( $custom_docker_compose_dir_archive ) ) )->return_code >= 2 ) {
 				// Optional archive: warn (and drop the corrupt zip) instead of aborting the whole backup.
 				EE::warning( 'Custom docker-compose archive failed integrity check. Excluding it from the backup.' );
