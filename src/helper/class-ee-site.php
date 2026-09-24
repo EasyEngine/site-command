@@ -2261,7 +2261,7 @@ abstract class EE_Site_Command {
 	}
 
 	/**
-	 * Assert that a PEM certificate and private key are valid, matching and not expired.
+	 * Assert that a PEM certificate and private key are valid and matching; warn if the certificate is expired or near expiry.
 	 *
 	 * @param string $crt_contents Certificate file contents (PEM).
 	 * @param string $key_contents Private key file contents (PEM).
