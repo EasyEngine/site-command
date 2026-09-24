@@ -8,8 +8,6 @@ use EE;
 use EE\Model\Cron;
 use EE\Model\Site;
 use EE\Model\Option;
-use EE\Model\Auth;
-use EE\Model\Whitelist;
 use Symfony\Component\Filesystem\Filesystem;
 use function EE\Site\Cloner\Utils\check_site_access;
 use function EE\Site\Cloner\Utils\copy_site_db;
@@ -350,45 +348,18 @@ abstract class EE_Site_Command {
 		if ( $level > 4 ) {
 			if ( $this->site_data['site_ssl'] ) {
 				\EE::log( 'Removing ssl certs and other config files.' );
-				$crt_file      = EE_ROOT_DIR . "/services/nginx-proxy/certs/$site_url.crt";
-				$key_file      = EE_ROOT_DIR . "/services/nginx-proxy/certs/$site_url.key";
-				$pem_file      = EE_ROOT_DIR . "/services/nginx-proxy/certs/$site_url.chain.pem";
-				$conf_certs    = EE_ROOT_DIR . "/services/nginx-proxy/acme-conf/certs/$site_url";
-				$conf_var      = EE_ROOT_DIR . "/services/nginx-proxy/acme-conf/var/$site_url";
-				$htpasswd_file = EE_ROOT_DIR . "/services/nginx-proxy/htpasswd/$site_url";
+				$crt_file   = EE_ROOT_DIR . "/services/nginx-proxy/certs/$site_url.crt";
+				$key_file   = EE_ROOT_DIR . "/services/nginx-proxy/certs/$site_url.key";
+				$pem_file   = EE_ROOT_DIR . "/services/nginx-proxy/certs/$site_url.chain.pem";
+				$conf_certs = EE_ROOT_DIR . "/services/nginx-proxy/acme-conf/certs/$site_url";
+				$conf_var   = EE_ROOT_DIR . "/services/nginx-proxy/acme-conf/var/$site_url";
 
-				$delete_files = [ $conf_certs, $conf_var, $crt_file, $key_file, $pem_file, $htpasswd_file ];
+				$delete_files = [ $conf_certs, $conf_var, $crt_file, $key_file, $pem_file ];
 				try {
 					$this->fs->remove( $delete_files );
 				} catch ( \Exception $e ) {
 					\EE::warning( $e );
 				}
-			}
-
-			$site_auth_file = EE_ROOT_DIR . '/services/nginx-proxy/htpasswd/' . $site_url;
-			if ( $this->fs->exists( $site_auth_file ) ) {
-				try {
-					$this->fs->remove( $site_auth_file );
-				} catch ( \Exception $e ) {
-					\EE::warning( $e );
-				}
-				reload_global_nginx_proxy();
-			}
-
-			$whitelists = Whitelist::where( [
-				'site_url' => $site_url,
-			] );
-
-			foreach ( $whitelists as $whitelist ) {
-				$whitelist->delete();
-			}
-
-			$auths = Auth::where( [
-				'site_url' => $site_url,
-			] );
-
-			foreach ( $auths as $auth ) {
-				$auth->delete();
 			}
 
 			if ( Site::find( $site_url )->delete() ) {
