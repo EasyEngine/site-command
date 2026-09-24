@@ -653,6 +653,17 @@ abstract class EE_Site_Command {
 			];
 			$this->update_proxy_cache( $args, $assoc_args );
 		}
+
+		/**
+		 * Execute after the alias domains of a site have been updated.
+		 * Note: This can be used by package commands to sync their per-domain config.
+		 *
+		 * @param string $site_url          Url of site whose alias domains changed.
+		 * @param array  $domains_to_add    Alias domains that were added.
+		 * @param array  $domains_to_delete Alias domains that were removed.
+		 */
+		\EE::do_hook( 'site_alias_domains_updated', $this->site_data['site_url'], array_values( $domains_to_add ), array_values( $domains_to_delete ) );
+
 		delem_log( 'site alias domains update end' );
 	}
 
