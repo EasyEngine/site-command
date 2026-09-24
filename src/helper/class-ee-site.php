@@ -529,25 +529,23 @@ abstract class EE_Site_Command {
 			$array_data      = (array) $this->site_data;
 			$this->site_data = reset( $array_data );
 
-			// Validate data.
-			$existing_alias_domains = [];
-			$domains_to_add         = [];
-			$domains_to_delete      = [];
+			// Drop blanks so that e.g. `b.com,` never stores an empty alias domain.
+			$split_domains = function ( $domains ) {
+				return array_values( array_filter( array_map( 'trim', explode( ',', (string) $domains ) ), 'strlen' ) );
+			};
 
-			if ( ! empty( $this->site_data['alias_domains'] ) ) {
-				$existing_alias_domains = explode( ',', $this->site_data['alias_domains'] );
-			}
-			if ( ! empty( $add_domains ) ) {
-				$domains_to_add = explode( ',', $add_domains );
-			}
-			if ( ! empty( $delete_domains ) ) {
-				$domains_to_delete = explode( ',', $delete_domains );
+			$existing_alias_domains = $split_domains( $this->site_data['alias_domains'] );
+			$domains_to_add         = $split_domains( $add_domains );
+			$domains_to_delete      = $split_domains( $delete_domains );
+
+			if ( empty( $domains_to_add ) && empty( $domains_to_delete ) ) {
+				EE::error( 'Please provide at least one alias domain to add or delete.' );
 			}
 
 			$already_added_domains = array_intersect( $existing_alias_domains, $domains_to_add );
-			$domains_to_add        = array_diff( $domains_to_add, $existing_alias_domains );
+			$domains_to_add        = array_values( array_diff( $domains_to_add, $existing_alias_domains ) );
 
-			if ( empty( $domains_to_add ) && $add_domains ) {
+			if ( empty( $domains_to_add ) && ! empty( $already_added_domains ) ) {
 				$already_added_domains = implode( ',', $already_added_domains );
 				EE::error( "Alias domains: $already_added_domains is/are already present on the site." );
 			}
@@ -662,7 +660,7 @@ abstract class EE_Site_Command {
 		 * @param array  $domains_to_add    Alias domains that were added.
 		 * @param array  $domains_to_delete Alias domains that were removed.
 		 */
-		\EE::do_hook( 'site_alias_domains_updated', $this->site_data['site_url'], array_values( $domains_to_add ), array_values( $domains_to_delete ) );
+		\EE::do_hook( 'site_alias_domains_updated', $this->site_data['site_url'], $domains_to_add, $domains_to_delete );
 
 		delem_log( 'site alias domains update end' );
 	}
