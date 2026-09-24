@@ -119,6 +119,13 @@ class Site_Letsencrypt {
 	private function setAcmeClient() {
 
 		if ( ! $this->repository->hasAccountKeyPair() ) {
+			// Missing key plus existing LE domain state means the key was lost, not a first run; warn before regenerating.
+			if ( $this->hasExistingLetsencryptState() ) {
+				\EE::warning( 'Let\'s Encrypt account key not found, but existing certificate state was detected under ' . $this->conf_dir . '. The key appears to have been lost (e.g. host migration or snapshot restore), so a new one is being generated.' );
+				\EE::warning( 'Existing certificates stay valid and will be renewed under a new Let\'s Encrypt account, but challenges still pending under the old account cannot be completed and must be restarted.' );
+				\EE::warning( 'To keep the old account, restore ' . $this->conf_dir . '/account/ from a backup before the next SSL operation.' );
+			}
+
 			\EE::debug( 'No account key pair was found, generating one.' );
 			\EE::debug( 'Generating a key pair' );
 
@@ -138,6 +145,19 @@ class Site_Letsencrypt {
 
 		$this->client = new EEAcmeClient( $secureHttpClient, 'https://acme-v02.api.letsencrypt.org/directory', $csrSigner );
 
+	}
+
+	/**
+	 * Checks for AcmePhp's per-domain dirs under acme-conf, which are only created after an account key exists.
+	 * nginx-proxy/certs/ is ignored as it also holds custom/self-signed certs.
+	 *
+	 * @return bool True if prior LE domain state exists.
+	 */
+	private function hasExistingLetsencryptState() {
+		$var_domains  = glob( $this->conf_dir . '/var/*', GLOB_ONLYDIR );
+		$cert_domains = glob( $this->conf_dir . '/certs/*', GLOB_ONLYDIR );
+
+		return ! empty( $var_domains ) || ! empty( $cert_domains );
 	}
 
 	private function setRepository( $enable_backup = false ) {
