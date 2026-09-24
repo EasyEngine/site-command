@@ -16,6 +16,7 @@ use AcmePhp\Core\Challenge\Http\SimpleHttpSolver;
 use AcmePhp\Core\Challenge\WaitingValidator;
 use AcmePhp\Core\Exception\Protocol\ChallengeNotSupportedException;
 use AcmePhp\Core\Exception\Protocol\CertificateRevocationException;
+use AcmePhp\Core\Exception\Server\RateLimitedServerException;
 use AcmePhp\Core\Protocol\AuthorizationChallenge;
 use AcmePhp\Core\Protocol\ResourcesDirectory;
 use AcmePhp\Core\Protocol\RevocationReason;
@@ -208,7 +209,12 @@ class Site_Letsencrypt {
 		try {
 			$order = $this->client->requestOrder( $domains );
 		} catch ( \Exception $e ) {
-			\EE::warning( 'It seems you\'re in local environment or using non-public domain, please check logs. Skipping letsencrypt.' );
+			// A rate-limit is a distinct failure from a non-public domain; emit a clear, actionable message for it.
+			if ( $this->is_rate_limit_exception( $e ) ) {
+				\EE::warning( 'Let\'s Encrypt rate limit hit for: ' . implode( ', ', $domains ) . '. Please wait before retrying. Ref: https://letsencrypt.org/docs/rate-limits/' );
+			} else {
+				\EE::warning( 'It seems you\'re in local environment or using non-public domain, please check logs. Skipping letsencrypt.' );
+			}
 			\EE::log( 'You can fix the issue and re-run: ee site ssl-verify ' . $domains[0] );
 
 			return false;
@@ -279,6 +285,11 @@ class Site_Letsencrypt {
 					\EE::debug( 'Domain Authorization Challenge for ' . $domain . ' revoked successfully' );
 				} catch ( CertificateRevocationException | AcmeCliException $e ) {
 					\EE::debug( $e->getMessage() );
+				} catch ( RateLimitedServerException $e ) {
+					// Revoking uses new-order too; stop here and let authorize() report the rate limit.
+					\EE::debug( $e->getMessage() );
+
+					return;
 				}
 			} else {
 				\EE::debug( 'Domain Authorization Challenge for ' . $domain . ' not found locally' );
@@ -569,6 +580,22 @@ class Site_Letsencrypt {
 	}
 
 	/**
+	 * Whether the given exception is a Let's Encrypt `rateLimited` ACME error.
+	 *
+	 * @param \Throwable $e
+	 *
+	 * @return bool
+	 */
+	private function is_rate_limit_exception( $e ) {
+		if ( $e instanceof RateLimitedServerException ) {
+			return true;
+		}
+
+		// No bare "too many" match: it also hits unrelated errors like "Too many open files".
+		return false !== stripos( $e->getMessage(), 'ratelimited' );
+	}
+
+	/**
 	 * Renew a given domain certificate.
 	 *
 	 * @param string $domain
@@ -644,7 +671,12 @@ class Site_Letsencrypt {
 			\EE::warning( 'A critical error occured during certificate renewal' );
 			\EE::debug( print_r( $e, true ) );
 
-			\EE::warning( 'Challenge Authorization failed. Check logs and check if your domain is pointed correctly to this server.' );
+			// A rate-limit is not a misconfigured-domain failure; point the user to the LE rate-limit docs instead.
+			if ( $this->is_rate_limit_exception( $e ) ) {
+				\EE::warning( 'Let\'s Encrypt rate limit hit for: ' . $domain . '. Please wait before retrying. Ref: https://letsencrypt.org/docs/rate-limits/' );
+			} else {
+				\EE::warning( 'Challenge Authorization failed. Check logs and check if your domain is pointed correctly to this server.' );
+			}
 			\EE::log( 'You can fix the issue and re-run: ee site ssl-verify ' . $domains[0] );
 
 			return false;
@@ -652,7 +684,12 @@ class Site_Letsencrypt {
 			\EE::warning( 'A critical error occured during certificate renewal' );
 			\EE::debug( print_r( $e, true ) );
 
-			\EE::warning( 'Challenge Authorization failed. Check logs and check if your domain is pointed correctly to this server.' );
+			// A rate-limit is not a misconfigured-domain failure; point the user to the LE rate-limit docs instead.
+			if ( $this->is_rate_limit_exception( $e ) ) {
+				\EE::warning( 'Let\'s Encrypt rate limit hit for: ' . $domain . '. Please wait before retrying. Ref: https://letsencrypt.org/docs/rate-limits/' );
+			} else {
+				\EE::warning( 'Challenge Authorization failed. Check logs and check if your domain is pointed correctly to this server.' );
+			}
 			\EE::log( 'You can fix the issue and re-run: ee site ssl-verify ' . $domains[0] );
 
 			return false;
