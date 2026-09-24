@@ -580,10 +580,7 @@ class Site_Letsencrypt {
 	}
 
 	/**
-	 * Whether the given exception represents a Let's Encrypt rate-limit response.
-	 *
-	 * Matches the acmephp RateLimitedServerException as well as the 'rateLimited' ACME error
-	 * type / HTTP 429 surfaced in the message, so callers can show rate-limit-specific guidance.
+	 * Whether the given exception is a Let's Encrypt `rateLimited` ACME error.
 	 *
 	 * @param \Throwable $e
 	 *
@@ -594,9 +591,8 @@ class Site_Letsencrypt {
 			return true;
 		}
 
-		$message = strtolower( $e->getMessage() );
-
-		return ( false !== strpos( $message, 'ratelimited' ) || false !== strpos( $message, 'too many' ) );
+		// No bare "too many" match: it also hits unrelated errors like "Too many open files".
+		return false !== stripos( $e->getMessage(), 'ratelimited' );
 	}
 
 	/**
