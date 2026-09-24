@@ -2286,8 +2286,13 @@ abstract class EE_Site_Command {
 		$ssl_key_dest = sprintf( '%1$s/nginx-proxy/certs/%2$s.key', remove_trailing_slash( EE_SERVICE_DIR ), $this->site_data['site_url'] );
 		$ssl_crt_dest = sprintf( '%1$s/nginx-proxy/certs/%2$s.crt', remove_trailing_slash( EE_SERVICE_DIR ), $this->site_data['site_url'] );
 
-		$this->fs->copy( $this->site_data['ssl_key'], $ssl_key_dest, true );
-		$this->fs->copy( $this->site_data['ssl_crt'], $ssl_crt_dest, true );
+		// Copying a file onto itself truncates it, e.g. when re-enabling SSL with the files already in the certs dir.
+		if ( realpath( $ssl_key_dest ) !== $this->site_data['ssl_key'] ) {
+			$this->fs->copy( $this->site_data['ssl_key'], $ssl_key_dest, true );
+		}
+		if ( realpath( $ssl_crt_dest ) !== $this->site_data['ssl_crt'] ) {
+			$this->fs->copy( $this->site_data['ssl_crt'], $ssl_crt_dest, true );
+		}
 	}
 
 	/**
