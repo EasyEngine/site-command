@@ -814,17 +814,21 @@ class Site_Backup_Restore {
 	 * @param string $backup_app  Path to the site `.zip` archive within $backup_dir.
 	 */
 	private function ensure_valid_backup_archive( $backup_dir, $backup_app ) {
-		if ( ! $this->fs->exists( $backup_app ) ) {
-			$this->rclone_download( $backup_dir );
-		} elseif ( ! $this->is_backup_archive_valid( $backup_app ) ) {
+		// pre_restore_check() normally downloads the archive already, so test it once here
+		// and only re-test after a fresh download.
+		if ( $this->is_backup_archive_valid( $backup_app ) ) {
+			return;
+		}
+
+		if ( $this->fs->exists( $backup_app ) ) {
 			// A pre-existing archive that fails verification is likely a partial
 			// download from an interrupted run; discard it and fetch a fresh copy.
 			EE::warning( 'Existing backup archive is incomplete or corrupt. Re-downloading.' );
 			$this->fs->remove( $backup_app );
-			$this->rclone_download( $backup_dir );
 		}
+		$this->rclone_download( $backup_dir );
 
-		if ( ! $this->fs->exists( $backup_app ) || ! $this->is_backup_archive_valid( $backup_app ) ) {
+		if ( ! $this->is_backup_archive_valid( $backup_app ) ) {
 			EE::error( 'Downloaded backup archive is incomplete or corrupt. Aborting restore to avoid destroying the existing site.' );
 		}
 	}
@@ -848,7 +852,8 @@ class Site_Backup_Restore {
 			return false;
 		}
 
-		return (bool) EE::exec( sprintf( 'unzip -t %s', escapeshellarg( $backup_app ) ) );
+		// -qq: don't list every entry (captured and written to the debug log).
+		return (bool) EE::exec( sprintf( 'unzip -tqq %s', escapeshellarg( $backup_app ) ) );
 	}
 
 	private function restore_site( $backup_dir ) {
