@@ -86,7 +86,7 @@ class Site {
 
 		if ( ! is_array( $list_result ) ) {
 			// An empty host has no parent to match; any other failure must surface, not be masked as "parent not found".
-			if ( 0 !== $list_run->return_code && ! $this->is_no_sites_error( $list_run ) ) {
+			if ( ! $this->is_no_sites_error( $list_run ) ) {
 				throw new \Exception( 'Unable to get site list on ' . $this->user . '@' . $this->host );
 			}
 			$list_result = [];
