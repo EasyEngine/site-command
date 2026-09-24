@@ -2271,6 +2271,11 @@ abstract class EE_Site_Command {
 		} else {
 			throw new \Exception( 'ssl-key OR ssl-crt path does not exist' );
 		}
+
+		// nginx-proxy fails its config test on an unreadable or mismatched pair, which blocks reloads for every site.
+		if ( ! openssl_x509_check_private_key( file_get_contents( $this->site_data['ssl_crt'] ), file_get_contents( $this->site_data['ssl_key'] ) ) ) {
+			throw new \Exception( 'ssl-crt is not a valid PEM certificate or does not match ssl-key' );
+		}
 	}
 
 	/**
