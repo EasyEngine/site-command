@@ -119,12 +119,11 @@ class Site_Letsencrypt {
 	private function setAcmeClient() {
 
 		if ( ! $this->repository->hasAccountKeyPair() ) {
-			// A missing account key alongside existing LE domain state means the key was lost (host migration / snapshot restore),
-			// not a first run. Generating a new one silently orphans the old LE registration, so warn before regenerating.
+			// Missing key plus existing LE domain state means the key was lost, not a first run; warn before regenerating.
 			if ( $this->hasExistingLetsencryptState() ) {
-				\EE::warning( 'Let\'s Encrypt account key not found, but existing certificate state was detected under ' . $this->conf_dir . ' — the account key appears to have been lost (e.g. host migration or snapshot restore).' );
-				\EE::warning( 'A new Let\'s Encrypt account will be registered. The previous account is now orphaned, so existing certificates will NOT renew under it until they are re-issued.' );
-				\EE::warning( 'To preserve the existing account, restore a backup of ' . $this->conf_dir . '/account/ before re-running.' );
+				\EE::warning( 'Let\'s Encrypt account key not found, but existing certificate state was detected under ' . $this->conf_dir . '. The key appears to have been lost (e.g. host migration or snapshot restore), so a new one is being generated.' );
+				\EE::warning( 'Existing certificates stay valid and will be renewed under a new Let\'s Encrypt account, but challenges still pending under the old account cannot be completed and must be restarted.' );
+				\EE::warning( 'To keep the old account, restore ' . $this->conf_dir . '/account/ from a backup before the next SSL operation.' );
 			}
 
 			\EE::debug( 'No account key pair was found, generating one.' );
@@ -149,12 +148,8 @@ class Site_Letsencrypt {
 	}
 
 	/**
-	 * Cheap, DB-free check for pre-existing Let's Encrypt state on disk.
-	 *
-	 * Looks only at AcmePhp's own per-domain dirs under acme-conf (var/{domain} = orders/challenges/DN,
-	 * certs/{domain} = LE keypairs/certs). These are written solely by AcmePhp, so their presence proves
-	 * the account key existed before. We deliberately ignore services/nginx-proxy/certs/, which also holds
-	 * custom/self-signed certs and would false-positive on a host that never used Let's Encrypt.
+	 * Checks for AcmePhp's per-domain dirs under acme-conf, which are only created after an account key exists.
+	 * nginx-proxy/certs/ is ignored as it also holds custom/self-signed certs.
 	 *
 	 * @return bool True if prior LE domain state exists.
 	 */
