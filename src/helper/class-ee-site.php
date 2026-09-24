@@ -586,7 +586,8 @@ abstract class EE_Site_Command {
 			$this->site_data['alias_domains'] = implode( ',', $final_alias_domains );
 			$is_ssl                           = $this->site_data['site_ssl'] ? true : false;
 			$preferred_ssl_challenge          = get_preferred_ssl_challenge( get_domains_of_site( $this->site_data['site_url'] ) );
-			$nohttps                          = $is_ssl && 'dns' !== $preferred_ssl_challenge;
+			// Only LE sites drop HTTPS here for the HTTP-01 challenge; the renewal below turns it back on, other SSL types keep theirs.
+			$nohttps                          = 'le' === $this->site_data['site_ssl'] && 'dns' !== $preferred_ssl_challenge;
 			$this->dump_docker_compose_yml( [ 'nohttps' => $nohttps ] );
 			\EE_DOCKER::docker_compose_up( $this->site_data['site_fs_path'], [ 'nginx' ] );
 		} catch ( \Exception $e ) {
@@ -624,7 +625,7 @@ abstract class EE_Site_Command {
 			} elseif ( 'custom' === $this->site_data['site_ssl'] ) {
 				EE::warning( 'Custom SSL certificate is not renewed automatically. Please ensure the certificate you provided covers the updated alias-domain set.' );
 			} else {
-				// self-signed certs are wildcard and inherited certs use the parent site's cert; no cert action needed.
+				// Self-signed certs cover only the site and *.site, and inherited sites use the parent's wildcard cert, so other alias domains get a mismatched cert.
 				EE::log( 'No SSL certificate action needed for ' . $this->site_data['site_ssl'] . ' SSL on alias domain change.' );
 			}
 		}
