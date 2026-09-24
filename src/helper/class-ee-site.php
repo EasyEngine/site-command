@@ -65,6 +65,11 @@ abstract class EE_Site_Command {
 	 */
 	public $site_meta;
 
+	/**
+	 * @var bool $le_renewal_started Whether this process already started an LE renewal (`ssl-renew --all` renews every site in one process).
+	 */
+	private static $le_renewal_started = false;
+
 	public function __construct() {
 
 		$this->fs = new Filesystem();
@@ -2010,6 +2015,12 @@ abstract class EE_Site_Command {
 		if ( ! $force && ! $client->isRenewalNecessary( $this->site_data['site_url'] ) ) {
 			return 0;
 		}
+
+		// Space out consecutive renewals to smooth LE API load; sites not due returned above, so they don't wait.
+		if ( self::$le_renewal_started ) {
+			sleep( random_int( 1, 5 ) );
+		}
+		self::$le_renewal_started = true;
 
 		$postfix_exists      = \EE_DOCKER::service_exists( 'postfix', $this->site_data['site_fs_path'] );
 		$containers_to_start = $postfix_exists ? [ 'nginx', 'postfix' ] : [ 'nginx' ];

@@ -104,8 +104,6 @@ class Site_Command {
 		} elseif ( in_array( reset( $args ), [ 'ssl-renew' ], true ) && array_key_exists( 'all', $assoc_args ) ) {
 			$sites = Site::all();
 			unset( $assoc_args['all'] );
-			// Spread per-site dispatches over time to avoid bursting against Let's Encrypt rate limits.
-			$dispatched = false;
 			foreach ( $sites as $site ) {
 				$type     = $site->site_type;
 				$args     = [ 'site', 'ssl-renew', $site->site_url ];
@@ -127,17 +125,11 @@ class Site_Command {
 					continue;
 				}
 
-				// Jitter between sites only (not before the first / after the last) to smooth burst load on the LE API.
-				if ( $dispatched ) {
-					sleep( random_int( 1, 5 ) );
-				}
-
 				$command      = EE::get_root_command();
 				$leaf_command = CommandFactory::create( 'site', $callback, $command );
 				$command->add_subcommand( 'site', $leaf_command );
 
 				EE::run_command( $args, $assoc_args );
-				$dispatched = true;
 			}
 			die;
 		} else {
