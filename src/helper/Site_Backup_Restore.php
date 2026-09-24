@@ -178,6 +178,8 @@ class Site_Backup_Restore {
 					self::ERROR_TYPE_NETWORK,
 					4004
 				);
+				// Don't hold the lock through the shutdown failure callback's retries.
+				$this->release_global_backup_lock();
 				$this->rollback_failed_backup();
 				EE::error( 'EasyDash success callback failed; the uploaded backup was rolled back. No backup was created.' );
 			}
