@@ -522,6 +522,10 @@ class Site_Letsencrypt {
 				throw new \Exception( sprintf( 'Failed to copy certificate file %s to %s.', $source, $temp ) );
 			}
 			$temp_files[ $temp ] = $dest;
+			// Keep the live file's mode on renewal, as the previous in-place copy() did.
+			if ( file_exists( $dest ) ) {
+				chmod( $temp, fileperms( $dest ) & 0777 );
+			}
 		}
 
 		foreach ( $temp_files as $temp => $dest ) {
