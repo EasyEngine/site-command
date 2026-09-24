@@ -324,10 +324,32 @@ class Site_Backup_Restore {
 			$shell_command .= ' --skip-plugins --skip-themes ';
 		}
 		$shell_command .= $command;
-		$output        = EE::launch( "ee shell " . $this->site_data['site_url'] . " --skip-tty --command=\"$shell_command\"" );
+		$output        = EE::launch( $this->get_ee_shell_command( $shell_command ) );
 		$clean_output  = trim( $output->stdout );
 
 		return empty( $clean_output ) ? '-' : $clean_output;
+	}
+
+	/**
+	 * Build a child `ee shell` command that runs the current EE binary, not whatever `ee` is on PATH.
+	 *
+	 * @param string $command Command to run inside the site's php container.
+	 *
+	 * @return string
+	 */
+	private function get_ee_shell_command( $command ) {
+		$ee_script = class_exists( 'Phar' ) ? \Phar::running( false ) : '';
+		if ( '' === $ee_script ) {
+			$ee_script = EE_ROOT . '/php/boot-fs.php';
+		}
+
+		return sprintf(
+			'%s %s shell %s --skip-tty --command=%s',
+			escapeshellarg( \EE\Utils\get_php_binary() ),
+			escapeshellarg( $ee_script ),
+			escapeshellarg( $this->site_data['site_url'] ),
+			escapeshellarg( $command )
+		);
 	}
 
 	private function backup_site_details( $backup_dir ) {
@@ -463,6 +485,11 @@ class Site_Backup_Restore {
 			// This is optional, so we just log a warning instead of failing
 			if ( $result->return_code >= 2 ) {
 				EE::warning( 'Failed to backup custom docker-compose directory. Continuing with backup.' );
+				$this->fs->remove( $custom_docker_compose_dir_archive );
+			} elseif ( EE::launch( sprintf( '7z t %s', escapeshellarg( $custom_docker_compose_dir_archive ) ) )->return_code >= 2 ) {
+				// Optional archive: warn (and drop the corrupt zip) instead of aborting the whole backup.
+				EE::warning( 'Custom docker-compose archive failed integrity check. Excluding it from the backup.' );
+				$this->fs->remove( $custom_docker_compose_dir_archive );
 			}
 		}
 	}
@@ -488,7 +515,31 @@ class Site_Backup_Restore {
 			EE::error( 'Failed to create backup archive. Please check disk space and file permissions.' );
 		}
 
+		$this->verify_archive_integrity( $backup_file );
+
 		return $backup_file;
+	}
+
+	/**
+	 * Run `7z t` on a freshly-created backup archive and abort if it is corrupt.
+	 *
+	 * Catches silently-truncated/corrupt archives before they are uploaded, so a
+	 * broken backup never replaces a good one in remote storage.
+	 *
+	 * @param string $archive Absolute path to the archive to test.
+	 */
+	private function verify_archive_integrity( $archive ) {
+		// 7z exit codes: 0=success, 1=warning (non-fatal), 2+=fatal error.
+		if ( EE::launch( sprintf( '7z t %s', escapeshellarg( $archive ) ) )->return_code < 2 ) {
+			return;
+		}
+
+		$this->capture_error(
+			sprintf( 'Backup archive failed integrity check: %s', $archive ),
+			self::ERROR_TYPE_FILESYSTEM,
+			3005
+		);
+		EE::error( 'Backup archive failed integrity verification. Aborting before upload to avoid overwriting a good backup.' );
 	}
 
 	private function backup_wp_content_dir( $backup_dir ) {
@@ -572,6 +623,8 @@ class Site_Backup_Restore {
 			EE::error( 'Failed to create backup archive. Please check disk space and file permissions.' );
 		}
 
+		$this->verify_archive_integrity( $backup_file );
+
 		return $backup_file;
 	}
 
@@ -593,6 +646,8 @@ class Site_Backup_Restore {
 			);
 			EE::error( 'Failed to create nginx configuration backup archive. Please check disk space and file permissions.' );
 		}
+
+		$this->verify_archive_integrity( $backup_file );
 	}
 
 	private function backup_php_conf( $backup_dir ) {
@@ -613,6 +668,8 @@ class Site_Backup_Restore {
 			);
 			EE::error( 'Failed to create PHP configuration backup archive. Please check disk space and file permissions.' );
 		}
+
+		$this->verify_archive_integrity( $backup_file );
 	}
 
 	private function backup_html( $backup_dir ) {
@@ -655,17 +712,26 @@ class Site_Backup_Restore {
 
 		$this->fs->mkdir( $backup_dir . '/sql' );
 
-		$backup_command = sprintf( 'mysqldump --skip-ssl -u %s -p%s -h %s --single-transaction %s > /var/www/htdocs/%s', $db_user, $db_password, $db_host, $db_name, $sql_filename );
-		$args           = [ 'shell', $this->site_data['site_url'] ];
-		$assoc_args     = [ 'command' => $backup_command ];
-		$options        = [ 'skip-tty' => true ];
+		// ee shell re-wraps this in bash -c "...", so a password containing ` " or $ can still break the dump.
+		$backup_command = sprintf(
+			'mysqldump --skip-ssl -u %s -p%s -h %s --single-transaction %s > /var/www/htdocs/%s',
+			escapeshellarg( $db_user ),
+			escapeshellarg( $db_password ),
+			escapeshellarg( $db_host ),
+			escapeshellarg( $db_name ),
+			$sql_filename
+		);
 
-		EE::run_command( $args, $assoc_args, $options );
+		// Launched to get the exit code: the `>` redirect leaves a 0-byte file even when mysqldump fails.
+		$dump_result = EE::launch( $this->get_ee_shell_command( $backup_command ) );
 
 		$sql_dump_path = EE_ROOT_DIR . '/sites/' . $this->site_data['site_url'] . '/app/htdocs/' . $sql_filename;
 
-		// Check if database dump was created successfully
-		if ( ! $this->fs->exists( $sql_dump_path ) ) {
+		if ( 0 !== $dump_result->return_code || ! $this->fs->exists( $sql_dump_path ) || filesize( $sql_dump_path ) <= 0 ) {
+			// EE::launch captures the dump's stderr, so show it or the cause is lost.
+			if ( '' !== trim( $dump_result->stderr ) ) {
+				EE::warning( trim( $dump_result->stderr ) );
+			}
 			$this->capture_error(
 				sprintf( 'Database backup failed for database: %s', $db_name ),
 				self::ERROR_TYPE_DATABASE,
@@ -674,7 +740,17 @@ class Site_Backup_Restore {
 			EE::error( 'Database backup failed. Please check database credentials and connectivity.' );
 		}
 
-		EE::exec( sprintf( 'mv %s %s', $sql_dump_path, $sql_file ) );
+		// If mv fails, `7z u`/`7z t` still pass on the empty sql/ dir and a DB-less backup would ship.
+		if ( ! EE::exec( sprintf( 'mv %s %s', escapeshellarg( $sql_dump_path ), escapeshellarg( $sql_file ) ) )
+			|| ! $this->fs->exists( $sql_file ) || filesize( $sql_file ) <= 0 ) {
+			$this->capture_error(
+				sprintf( 'Failed to stage database dump for database: %s', $db_name ),
+				self::ERROR_TYPE_DATABASE,
+				4005
+			);
+			EE::error( 'Database backup failed while staging the dump file.' );
+		}
+
 		$backup_command = sprintf( 'cd %s && 7z u -mx=1 %s sql', $backup_dir, $backup_file );
 
 		$result = EE::launch( $backup_command );
@@ -1209,7 +1285,7 @@ class Site_Backup_Restore {
 
 		$command = sprintf( "mysql --skip-ssl -u %s -p%s -h %s %s < /var/www/htdocs/db_size_query.sql", $user, $password, $host, $db_name );
 
-		$output = EE::launch( "ee shell " . $this->site_data['site_url'] . " --skip-tty --command=\"$command\"" );
+		$output = EE::launch( $this->get_ee_shell_command( $command ) );
 
 
 		$this->fs->remove( $query_file );
