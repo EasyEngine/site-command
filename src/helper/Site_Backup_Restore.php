@@ -537,7 +537,7 @@ class Site_Backup_Restore {
 		$this->capture_error(
 			sprintf( 'Backup archive failed integrity check: %s', $archive ),
 			self::ERROR_TYPE_FILESYSTEM,
-			3003
+			3005
 		);
 		EE::error( 'Backup archive failed integrity verification. Aborting before upload to avoid overwriting a good backup.' );
 	}
@@ -746,7 +746,7 @@ class Site_Backup_Restore {
 			$this->capture_error(
 				sprintf( 'Failed to stage database dump for database: %s', $db_name ),
 				self::ERROR_TYPE_DATABASE,
-				4003
+				4005
 			);
 			EE::error( 'Database backup failed while staging the dump file.' );
 		}
