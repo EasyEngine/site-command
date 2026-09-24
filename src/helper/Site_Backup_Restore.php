@@ -155,8 +155,6 @@ class Site_Backup_Restore {
 		$this->rclone_upload( $backup_dir );
 		$this->fs->remove( $backup_dir );
 
-		$this->release_site_backup_lock();
-
 		// Mark backup as completed and send success callback
 		$this->dash_backup_completed = true;
 		if ( $this->dash_auth_enabled ) {
@@ -175,6 +173,9 @@ class Site_Backup_Restore {
 				$this->rollback_failed_backup();
 			}
 		}
+
+		// Held until here so a same-site restore can't race the remote purges above.
+		$this->release_site_backup_lock();
 
 		// Release global backup lock (also released by shutdown handler as safety net)
 		$this->release_global_backup_lock();
