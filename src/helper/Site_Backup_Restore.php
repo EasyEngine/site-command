@@ -330,6 +330,28 @@ class Site_Backup_Restore {
 		return empty( $clean_output ) ? '-' : $clean_output;
 	}
 
+	/**
+	 * Build a child `ee shell` command that runs the current EE binary, not whatever `ee` is on PATH.
+	 *
+	 * @param string $command Command to run inside the site's php container.
+	 *
+	 * @return string
+	 */
+	private function get_ee_shell_command( $command ) {
+		$ee_script = class_exists( 'Phar' ) ? \Phar::running( false ) : '';
+		if ( '' === $ee_script ) {
+			$ee_script = EE_ROOT . '/php/boot-fs.php';
+		}
+
+		return sprintf(
+			'%s %s shell %s --skip-tty --command=%s',
+			escapeshellarg( \EE\Utils\get_php_binary() ),
+			escapeshellarg( $ee_script ),
+			escapeshellarg( $this->site_data['site_url'] ),
+			escapeshellarg( $command )
+		);
+	}
+
 	private function backup_site_details( $backup_dir ) {
 
 		$backup_data = [];
@@ -794,7 +816,7 @@ class Site_Backup_Restore {
 	 * @param string $error_message Message for EE::error() if the command fails.
 	 */
 	private function run_checked_shell_command( $command, $error_message ) {
-		$output = EE::launch( sprintf( 'ee shell %s --skip-tty --command=%s', $this->site_data['site_url'], escapeshellarg( $command ) ) );
+		$output = EE::launch( $this->get_ee_shell_command( $command ) );
 
 		if ( $output->return_code ) {
 			EE::error( $error_message . ' ' . trim( $output->stdout . ' ' . $output->stderr ) );
