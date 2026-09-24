@@ -35,6 +35,10 @@ use function EE\Site\Utils\get_parent_of_alias;
  * @package ee
  */
 abstract class EE_Site_Command {
+	// Seconds to wait for another process's SSL lock before giving up; cron renewals can wait longer.
+	const SSL_LOCK_WAIT_SECONDS       = 120;
+	const SSL_RENEW_LOCK_WAIT_SECONDS = 600;
+
 	/**
 	 * @var Filesystem $fs Symfony Filesystem object.
 	 */
@@ -54,6 +58,17 @@ abstract class EE_Site_Command {
 	 * @var string $le_mail Mail id to be used for letsencrypt registration and certificate generation.
 	 */
 	private $le_mail;
+
+	/**
+	 * @var resource $ssl_lock_handle Open file handle for the process-wide SSL lock.
+	 *
+	 * Static so the lock is held once per PHP process: `ssl-renew --all` runs every
+	 * per-site renewal in ONE process via EE::run_command, and flock denies a second
+	 * LOCK_EX on the same file from a different fd in the same process. One shared
+	 * handle lets the first acquire lock and every later acquire (any instance, nested
+	 * call, or --all iteration) see it already held and return immediately.
+	 */
+	private static $ssl_lock_handle;
 
 	/**
 	 * @var array $site_data Associative array containing essential site related information.
@@ -528,6 +543,11 @@ abstract class EE_Site_Command {
 			$site            = $this->site_data;
 			$array_data      = (array) $this->site_data;
 			$this->site_data = reset( $array_data );
+
+			// Lock before the compose dump below drops HTTPS, so a busy lock can't leave the site half-updated.
+			if ( 'le' === $this->site_data['site_ssl'] ) {
+				$this->acquire_ssl_lock();
+			}
 
 			// Validate data.
 			$existing_alias_domains = [];
@@ -1532,6 +1552,69 @@ abstract class EE_Site_Command {
 	}
 
 	/**
+	 * Acquire a process-wide lock serializing all SSL/ACME operations.
+	 *
+	 * Concurrent SSL runs (e.g. cron `ssl-renew --all` plus a manual `ee site ssl`)
+	 * read/write the same shared ACME state (certificate_order.json, account key,
+	 * acme-conf/var/{domain}/*), which corrupts JSON, duplicates ACME orders, and
+	 * overwrites the account key. This guards the three ACME entry points so only one
+	 * such operation runs per server at a time.
+	 *
+	 * Polls a non-blocking flock for up to $wait seconds, so the wait stays bounded and interruptible. The handle
+	 * is never released here; the kernel drops the flock when the process exits.
+	 *
+	 * @param bool $throw Throw an exception instead of exiting, so callers that already changed site state can roll back.
+	 * @param int  $wait  Seconds to wait for a lock held by another process.
+	 *
+	 * @throws \Exception When $throw is set and the lock can't be acquired.
+	 * @return void
+	 */
+	private function acquire_ssl_lock( $throw = false, $wait = self::SSL_LOCK_WAIT_SECONDS ) {
+		// Already held by this process (reentrant: nested ssl_verify, or --all loop).
+		if ( isset( self::$ssl_lock_handle ) ) {
+			return;
+		}
+
+		// EE_ROOT_DIR is defined at plugin load and always exists at runtime.
+		$lock_file = EE_ROOT_DIR . '/ssl-global.lock';
+		$fh        = fopen( $lock_file, 'c' );
+		$locked    = false;
+
+		if ( $fh ) {
+			$deadline = microtime( true ) + $wait;
+			$waiting  = false;
+			while ( true ) {
+				$locked = flock( $fh, LOCK_EX | LOCK_NB, $would_block );
+				if ( $locked || ! $would_block || microtime( true ) >= $deadline ) {
+					break;
+				}
+				if ( ! $waiting ) {
+					\EE::log( sprintf( 'Waiting up to %ds for another SSL operation to finish...', $wait ) );
+					$waiting = true;
+				}
+				sleep( 1 );
+				// This file has no declare(ticks), so run pending SIGINT/SIGTERM handlers here or Ctrl-C can't end the wait.
+				pcntl_signal_dispatch();
+			}
+		}
+
+		if ( ! $locked ) {
+			if ( ! $fh ) {
+				$message = 'Unable to open SSL lock file: ' . $lock_file;
+			} else {
+				fclose( $fh );
+				$message = $would_block ? 'Another SSL operation is already in progress on this server. Wait for it to finish and retry.' : 'Unable to lock SSL lock file: ' . $lock_file;
+			}
+			if ( $throw ) {
+				throw new \Exception( $message );
+			}
+			\EE::error( $message );
+		}
+
+		self::$ssl_lock_handle = $fh;
+	}
+
+	/**
 	 * Runs the acme le registration and authorization.
 	 *
 	 * @param string $site_url     Name of the site for ssl.
@@ -1542,6 +1625,8 @@ abstract class EE_Site_Command {
 	 * @param array $alias_domains Array of alias domains if any.
 	 */
 	protected function init_le( $site_url, $site_fs_path, $wildcard = false, $www_or_non_www, $force = false, $alias_domains = [] ) {
+		// Serialize before register()/authorize() write the account key and order. Throws so create/update roll back instead of exiting mid-way.
+		$this->acquire_ssl_lock( true );
 		$preferred_challenge = get_preferred_ssl_challenge( $alias_domains );
 		$is_solver_dns       = ( $wildcard || 'dns' === $preferred_challenge ) ? true : false;
 		\EE::debug( 'Wildcard in init_le: ' . ( bool ) $wildcard );
@@ -1678,6 +1763,9 @@ abstract class EE_Site_Command {
 	public function ssl_verify( $args = [], $assoc_args = [], $www_or_non_www = false ) {
 
 		EE::log( 'Starting SSL verification.' );
+
+		// Reentrant when called from init_le (lock already held); locks for standalone `ee site ssl-verify`.
+		$this->acquire_ssl_lock();
 
 		// This checks if this method was called internally by ee or by user
 		$called_by_ee   = ! empty( $this->site_data['site_url'] );
@@ -1952,6 +2040,9 @@ abstract class EE_Site_Command {
 	public function ssl_renew( $args, $assoc_args ) {
 
 		EE::log( 'Starting SSL cert renewal' );
+
+		// First call in a `ssl-renew --all` batch locks; later per-site calls are reentrant.
+		$this->acquire_ssl_lock( false, self::SSL_RENEW_LOCK_WAIT_SECONDS );
 
 		if ( ! isset( $this->le_mail ) ) {
 			$this->le_mail = EE::get_config( 'le-mail' ) ?? EE::input( 'Enter your mail id: ' );
