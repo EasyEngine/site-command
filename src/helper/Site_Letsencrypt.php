@@ -364,7 +364,7 @@ class Site_Letsencrypt {
 		// Self-heal stale orders: once LE invalidates or expires (~7 days) an authorization, the stored order can never
 		// validate, and only init_le() calls authorize(), so a retry via ssl-verify must rebuild the order here.
 		// A live (pending) order is left untouched, so the "DNS not ready yet, retry later" case is unchanged.
-		if ( $order && $this->isCertificateOrderStale( $order, $domains ) ) {
+		if ( $order && $this->isCertificateOrderStale( $order, $domains, $solver ) ) {
 			\EE::debug( 'Stored ACME order is stale/expired; requesting a fresh order.' );
 			try {
 				$this->revokeAuthorizationChallenges( $domains );
@@ -470,10 +470,11 @@ class Site_Letsencrypt {
 	 *
 	 * @param CertificateOrder $order   The loaded order to inspect.
 	 * @param array            $domains Requested domains for this order.
+	 * @param SolverInterface  $solver  Solver whose challenge type is checked, as in check().
 	 *
 	 * @return bool True if the order should be discarded and rebuilt.
 	 */
-	private function isCertificateOrderStale( $order, array $domains ) {
+	private function isCertificateOrderStale( $order, array $domains, $solver ) {
 		foreach ( $domains as $domain ) {
 			try {
 				// Throws if the order has no challenge for this requested domain (e.g. SAN set changed).
@@ -484,9 +485,12 @@ class Site_Letsencrypt {
 				return true;
 			}
 
-			// All challenges of one authorization share its status, so reloading the first is enough; the break below
-			// avoids redundant ACME round-trips (and a wider transient-error window) for the remaining challenges.
+			// Check the challenge check() will use: once one challenge is attempted, LE drops the others (404).
 			foreach ( $authorizationChallenges as $challenge ) {
+				if ( ! $solver->supports( $challenge ) ) {
+					continue;
+				}
+
 				try {
 					// reloadAuthorization refetches the challenge's live status from LE.
 					$challenge = $this->client->reloadAuthorization( $challenge );
