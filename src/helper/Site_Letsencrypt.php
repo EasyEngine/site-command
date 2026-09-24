@@ -502,17 +502,14 @@ class Site_Letsencrypt {
 		$crt_dest_file   = EE_ROOT_DIR . '/services/nginx-proxy/certs/' . $domain . '.crt';
 		$chain_dest_file = EE_ROOT_DIR . '/services/nginx-proxy/certs/' . $domain . '.chain.pem';
 
-		// Copy each source to a temp file in the destination dir, then rename into place. Each rename()
-		// is atomic per-file on the same filesystem, so a failed copy (disk full, permissions, crash)
-		// can never leave a half-written live cert/key. The renames are not collectively atomic and we do
-		// not roll back an already-renamed file; on any failure we clean up the temps and throw.
+		// Stage temps in the destination dir and rename() them in, so a failed copy never leaves a half-written live key/cert.
+		// Each rename is atomic, the set is not; an already-renamed file is not rolled back.
 		$copy_map = [
 			$key_source_file   => $key_dest_file,
 			$crt_source_file   => $crt_dest_file,
 			$chain_source_file => $chain_dest_file,
 		];
 
-		// $temp_files maps temp path => final destination path.
 		$temp_files = [];
 		foreach ( $copy_map as $source => $dest ) {
 			$temp = $dest . '.tmp';
