@@ -366,8 +366,12 @@ class Site_Letsencrypt {
 		// "DNS not ready yet, retry later" case is left untouched and never triggers a rebuild.
 		if ( $order && $this->isCertificateOrderStale( $order, $domains ) ) {
 			\EE::debug( 'Stored ACME order is stale/expired; requesting a fresh order.' );
-			$this->repository->removeCertificateOrder( $domains );
-			$this->revokeAuthorizationChallenges( $domains ); // best-effort: clears stale challenge files.
+			try {
+				$this->revokeAuthorizationChallenges( $domains );
+			} catch ( \Exception $e ) {
+				\EE::debug( 'Revoking stale authorization challenges failed: ' . $e->getMessage() );
+			}
+			// The stale order is kept until authorize() overwrites it, so a failed rebuild is retried on the next run.
 			if ( ! $this->authorize( $domains, $wildcard, $preferred_challenge ) ) {
 				return false;
 			}
