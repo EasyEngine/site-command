@@ -1584,6 +1584,8 @@ abstract class EE_Site_Command {
 					$waiting = true;
 				}
 				sleep( 1 );
+				// This file has no declare(ticks), so run pending SIGINT/SIGTERM handlers here or Ctrl-C can't end the wait.
+				pcntl_signal_dispatch();
 			}
 		}
 
