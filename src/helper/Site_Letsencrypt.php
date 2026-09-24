@@ -208,7 +208,7 @@ class Site_Letsencrypt {
 		try {
 			$order = $this->client->requestOrder( $domains );
 		} catch ( \Exception $e ) {
-			\EE::warning( 'It seems you\'re in local environment or using non-public domain, please check logs. Skipping letsencrypt.' );
+			\EE::warning( 'Let\'s Encrypt order request failed (' . $e->getMessage() . '). It seems you\'re in local environment or using non-public domain, please check logs. Skipping letsencrypt.' );
 			\EE::log( 'You can fix the issue and re-run: ee site ssl-verify ' . $domains[0] );
 
 			return false;
