@@ -926,10 +926,10 @@ class Site_Backup_Restore {
 		// under a higher limit via `php -d memory_limit=256M $(which wp)`, matching
 		// the site-creation path in site-type-wp. A failed download must abort: the
 		// restore otherwise removes wp-content with no fresh core to replace it.
-		// $(which wp) stays unescaped so escapeshellarg single-quotes it for the host
-		// and the container's `bash -c` does the substitution (EE's `wp` is the phar,
-		// invoked directly, so the WP_CLI_PHP_ARGS env var would not apply).
-		$core_download_command = sprintf( 'php -d memory_limit=256M $(which wp) core download --force --version=%s', $wp_version );
+		// Keep the `\$`: the child `ee shell` wraps the command in `bash -c "..."` on the
+		// host, so an unescaped $(which wp) would be expanded there instead of in the
+		// container. EE's `wp` is the phar, so WP_CLI_PHP_ARGS would not apply.
+		$core_download_command = sprintf( 'php -d memory_limit=256M \$(which wp) core download --force --version=%s', $wp_version );
 		$this->run_checked_shell_command( $core_download_command, 'Failed to download WordPress core for restore.' );
 
 		$this->maybe_restore_wp_config( $backup_dir );
