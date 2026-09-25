@@ -742,6 +742,71 @@ function check_alias_in_db( $domains ) {
 }
 
 /**
+ * Splits a comma separated list of alias domains, trimming them and dropping blank entries.
+ *
+ * @param string|bool $domains Comma separated alias domains, as passed to the alias domain flags.
+ *
+ * @return array
+ */
+function split_alias_domains( $domains ) {
+
+	// A flag passed without a value is `true`, which would otherwise become the alias domain `1`.
+	if ( ! is_string( $domains ) ) {
+		return [];
+	}
+
+	return array_values( array_filter( array_map( 'trim', explode( ',', $domains ) ), 'strlen' ) );
+}
+
+/**
+ * Checks whether a name is one of the global proxy file names (e.g. auth-command's htpasswd and ACL files), in any case.
+ *
+ * @param string $name File name.
+ *
+ * @return bool
+ */
+function is_reserved_proxy_file_name( $name ) {
+
+	return in_array( strtolower( (string) $name ), [ 'default', 'default_admin_tools' ], true );
+}
+
+/**
+ * Checks whether an alias domain is a plain hostname or `*.hostname` that is safe to use as a proxy file name.
+ *
+ * @param string $domain Alias domain.
+ *
+ * @return bool
+ */
+function is_valid_alias_domain( $domain ) {
+
+	// No leading `_`, so an alias can't take over the `_wildcard.<site>` files of another site.
+	$label = '[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9_])?';
+
+	return is_string( $domain )
+		&& 1 === preg_match( '/^(?:\*\.)?' . $label . '(?:\.' . $label . ')*$/D', $domain )
+		&& ! is_reserved_proxy_file_name( $domain );
+}
+
+/**
+ * Exits with an error listing the alias domains that are not a plain hostname or `*.hostname`.
+ *
+ * @param array $domains Alias domains.
+ */
+function validate_alias_domains( $domains ) {
+
+	$invalid = array_filter(
+		$domains,
+		function ( $domain ) {
+			return ! is_valid_alias_domain( $domain );
+		}
+	);
+
+	if ( ! empty( $invalid ) ) {
+		\EE::error( sprintf( 'Invalid alias domain(s): %s. An alias domain must be a hostname or `*.hostname` whose labels use letters, digits, `-` and `_`, do not start with `-` or `_` (a leading `_` is reserved for proxy files like `_wildcard.<site>`) and do not end with `-`. It can not be `default` or `default_admin_tools`.', implode( ', ', $invalid ) ) );
+	}
+}
+
+/**
  * 'sysctl' parameters for docker-compose file.
  *
  * @return array of all 'sysctl' parameters.
