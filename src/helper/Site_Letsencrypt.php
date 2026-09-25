@@ -14,6 +14,7 @@ use AcmePhp\Core\Challenge\Dns\SimpleDnsCloudflareSolver;
 use AcmePhp\Core\Challenge\Http\HttpValidator;
 use AcmePhp\Core\Challenge\Http\SimpleHttpSolver;
 use AcmePhp\Core\Challenge\WaitingValidator;
+use AcmePhp\Core\Exception\AcmeCoreServerException;
 use AcmePhp\Core\Exception\Protocol\ChallengeNotSupportedException;
 use AcmePhp\Core\Exception\Protocol\CertificateRevocationException;
 use AcmePhp\Core\Protocol\AuthorizationChallenge;
@@ -360,6 +361,35 @@ class Site_Letsencrypt {
 			\EE::debug( sprintf( 'Loading the authorization token for domains %s ...', implode( ', ', $domains ) ) );
 		}
 
+		// Self-heal stale orders: once LE invalidates or expires (~7 days) an authorization, the stored order can never
+		// validate, and only init_le() calls authorize(), so a retry via ssl-verify must rebuild the order here.
+		// A live (pending) order is left untouched, so the "DNS not ready yet, retry later" case is unchanged.
+		if ( $order && $this->isCertificateOrderStale( $order, $domains, $solver ) ) {
+			\EE::debug( 'Stored ACME order is stale/expired; requesting a fresh order.' );
+			try {
+				$this->revokeAuthorizationChallenges( $domains );
+			} catch ( \Exception $e ) {
+				\EE::debug( 'Revoking stale authorization challenges failed: ' . $e->getMessage() );
+			}
+			// The stale order is kept until authorize() overwrites it, so a failed rebuild is retried on the next run.
+			if ( ! $this->authorize( $domains, $wildcard, $preferred_challenge ) ) {
+				return false;
+			}
+
+			// Manual DNS-01 rebuild issues a brand-new TXT token that authorize() only printed above; the old record
+			// is now wrong, so validating immediately would fail confusingly. Stop and let the user publish it first.
+			// (HTTP-01 wrote the token file + reloaded nginx, and Cloudflare DNS publishes automatically — both fall through.)
+			if ( $is_solver_dns && empty( get_config_value( 'cloudflare-api-key' ) ) ) {
+				$primary_domain = str_replace( '*.', '', $domains[0] );
+				\EE::warning( "The previous ACME order for $primary_domain had expired or failed. A fresh DNS-01 challenge was issued and its new TXT record is printed above." );
+				\EE::log( "Publish the new TXT record, then re-run: ee site ssl-verify $primary_domain" );
+
+				return false;
+			}
+
+			$order = $this->repository->loadCertificateOrder( $domains );
+		}
+
 		$authorizationChallengeToCleanup = [];
 		foreach ( $domains as $domain ) {
 			if ( $order ) {
@@ -429,6 +459,68 @@ class Site_Letsencrypt {
 		}
 
 		return true;
+	}
+
+	/**
+	 * Determine whether a stored ACME order can no longer be used to validate the given domains.
+	 *
+	 * An order is stale when LE reports a challenge as `invalid`, answers 404 for it (the authorization expired, which
+	 * LE does for orders left pending for ~7 days, or was purged) or when it lacks a challenge for a requested domain.
+	 * `pending`, `processing` and `valid` challenges are still live and are NOT stale, so an in-progress retry is kept.
+	 *
+	 * @param CertificateOrder $order   The loaded order to inspect.
+	 * @param array            $domains Requested domains for this order.
+	 * @param SolverInterface  $solver  Solver whose challenge type is checked, as in check().
+	 *
+	 * @return bool True if the order should be discarded and rebuilt.
+	 */
+	private function isCertificateOrderStale( $order, array $domains, $solver ) {
+		foreach ( $domains as $domain ) {
+			try {
+				// Throws if the order has no challenge for this requested domain (e.g. SAN set changed).
+				$authorizationChallenges = $order->getAuthorizationChallenges( $domain );
+			} catch ( \Exception $e ) {
+				\EE::debug( sprintf( 'No authorization challenge in stored order for %s: %s', $domain, $e->getMessage() ) );
+
+				return true;
+			}
+
+			// Check the challenge check() will use: once one challenge is attempted, LE drops the others (404).
+			foreach ( $authorizationChallenges as $challenge ) {
+				if ( ! $solver->supports( $challenge ) ) {
+					continue;
+				}
+
+				try {
+					// reloadAuthorization refetches the challenge's live status from LE.
+					$challenge = $this->client->reloadAuthorization( $challenge );
+				} catch ( \Throwable $e ) {
+					// LE answers 404 ("Expired authorization") once the authorization has expired.
+					if ( $e instanceof AcmeCoreServerException && 404 === $e->getCode() ) {
+						\EE::debug( sprintf( 'Authorization for %s has expired or no longer exists: %s', $domain, $e->getMessage() ) );
+
+						return true;
+					}
+
+					// Any other failure (5xx, 429, timeouts) is inconclusive, NOT stale: tearing down a healthy
+					// in-flight order on a blip would hit the rate-limited newOrder endpoint.
+					\EE::debug( sprintf( 'Reloading authorization for %s failed (treating as inconclusive, keeping order): %s', $domain, $e->getMessage() ) );
+
+					return false;
+				}
+
+				// A challenge is pending, processing, valid or invalid (RFC 8555 7.1.6); only invalid is unusable.
+				if ( ! in_array( $challenge->getStatus(), [ 'pending', 'processing', 'valid' ], true ) ) {
+					\EE::debug( sprintf( 'Authorization for %s has stale status "%s".', $domain, $challenge->getStatus() ) );
+
+					return true;
+				}
+
+				break;
+			}
+		}
+
+		return false;
 	}
 
 	public function request( $domain, $altNames = [], $email, $force = false ) {
