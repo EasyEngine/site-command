@@ -393,6 +393,12 @@ abstract class EE_Site_Command {
 	 * [--wildcard]
 	 * : Enable wildcard SSL on site.
 	 *
+	 * [--ssl-key=<ssl-key-path>]
+	 * : Path to the SSL key file. Required with --ssl=custom.
+	 *
+	 * [--ssl-crt=<ssl-crt-path>]
+	 * : Path to the SSL crt file. Required with --ssl=custom.
+	 *
 	 * [--php=<php-version>]
 	 * : PHP version for site. Currently only supports PHP 5.6, 7.0, 7.2, 7.3, 7.4, 8.0, 8.1, 8.2, 8.3, 8.4, and 8.5.
 	 * ---
@@ -443,6 +449,9 @@ abstract class EE_Site_Command {
 	 *
 	 *     # Add self-signed SSL to non-ssl site
 	 *     $ ee site update example.com --ssl=self
+	 *
+	 *     # Add custom SSL to non-ssl site
+	 *     $ ee site update example.com --ssl=custom --ssl-key=/path/to/site.key --ssl-crt=/path/to/site.crt
 	 *
 	 *     # Update PHP version of site.
 	 *     $ ee site update example.com --php=8.0
@@ -950,6 +959,13 @@ abstract class EE_Site_Command {
 			$this->site_data['site_ssl'] = $ssl;
 
 			if ( $ssl ) {
+				// www_ssl_wrapper() skips cert work for custom SSL, so mirror the create
+				// path here: validate the provided key/crt and copy them into the
+				// nginx-proxy certs dir before enabling HTTPS, else the site serves a wrong cert.
+				if ( 'custom' === $ssl ) {
+					$this->validate_site_custom_ssl( get_flag_value( $assoc_args, 'ssl-key' ), get_flag_value( $assoc_args, 'ssl-crt' ) );
+					$this->custom_site_ssl();
+				}
 				$this->www_ssl_wrapper( [ 'nginx' ] );
 			} else {
 				$this->disable_ssl();
@@ -2268,6 +2284,11 @@ abstract class EE_Site_Command {
 		} else {
 			throw new \Exception( 'ssl-key OR ssl-crt path does not exist' );
 		}
+
+		// nginx-proxy fails its config test on an unreadable or mismatched pair, which blocks reloads for every site.
+		if ( ! openssl_x509_check_private_key( file_get_contents( $this->site_data['ssl_crt'] ), file_get_contents( $this->site_data['ssl_key'] ) ) ) {
+			throw new \Exception( 'ssl-crt is not a valid PEM certificate or does not match ssl-key' );
+		}
 	}
 
 	/**
@@ -2278,8 +2299,13 @@ abstract class EE_Site_Command {
 		$ssl_key_dest = sprintf( '%1$s/nginx-proxy/certs/%2$s.key', remove_trailing_slash( EE_SERVICE_DIR ), $this->site_data['site_url'] );
 		$ssl_crt_dest = sprintf( '%1$s/nginx-proxy/certs/%2$s.crt', remove_trailing_slash( EE_SERVICE_DIR ), $this->site_data['site_url'] );
 
-		$this->fs->copy( $this->site_data['ssl_key'], $ssl_key_dest, true );
-		$this->fs->copy( $this->site_data['ssl_crt'], $ssl_crt_dest, true );
+		// Copying a file onto itself truncates it, e.g. when re-enabling SSL with the files already in the certs dir.
+		if ( realpath( $ssl_key_dest ) !== $this->site_data['ssl_key'] ) {
+			$this->fs->copy( $this->site_data['ssl_key'], $ssl_key_dest, true );
+		}
+		if ( realpath( $ssl_crt_dest ) !== $this->site_data['ssl_crt'] ) {
+			$this->fs->copy( $this->site_data['ssl_crt'], $ssl_crt_dest, true );
+		}
 	}
 
 	/**
