@@ -555,11 +555,18 @@ function configure_postfix( $site_url, $site_fs_path ) {
  */
 function reload_global_nginx_proxy() {
 
-	if ( \EE::launch( sprintf( 'docker exec %s sh -c "nginx -t"', EE_PROXY_TYPE ) ) ) {
-		return \EE::launch( sprintf( 'docker exec %s sh -c "/app/docker-entrypoint.sh /usr/local/bin/docker-gen /app/nginx.tmpl /etc/nginx/conf.d/default.conf; /usr/sbin/nginx -s reload"', EE_PROXY_TYPE ) );
+	// Regenerate default.conf first so `nginx -t` validates the config that will actually be served.
+	\EE::launch( sprintf( 'docker exec %s sh -c "/app/docker-entrypoint.sh /usr/local/bin/docker-gen /app/nginx.tmpl /etc/nginx/conf.d/default.conf"', EE_PROXY_TYPE ) );
+
+	// `EE::launch()` returns a ProcessRun object (truthy), so gate on the exit code to avoid reloading a broken config.
+	$test = \EE::launch( sprintf( 'docker exec %s sh -c "nginx -t"', EE_PROXY_TYPE ) );
+	if ( 0 !== $test->return_code ) {
+		\EE::warning( 'nginx config test failed, skipping reload of ' . EE_PROXY_TYPE . ":\n" . $test->stderr );
+
+		return false;
 	}
 
-	return false;
+	return \EE::launch( sprintf( 'docker exec %s sh -c "/usr/sbin/nginx -s reload"', EE_PROXY_TYPE ) );
 }
 
 /**
@@ -731,6 +738,71 @@ function check_alias_in_db( $domains ) {
 
 	if ( $alias_error ) {
 		\EE::error( sprintf( "Site %1\$s already exists as an alias domain for site: %2\$s. Please delete it from alias domains of %2\$s if you want to create an independent site for it.", $domain_having_parent, $parent_site ) );
+	}
+}
+
+/**
+ * Splits a comma separated list of alias domains, trimming them and dropping blank entries.
+ *
+ * @param string|bool $domains Comma separated alias domains, as passed to the alias domain flags.
+ *
+ * @return array
+ */
+function split_alias_domains( $domains ) {
+
+	// A flag passed without a value is `true`, which would otherwise become the alias domain `1`.
+	if ( ! is_string( $domains ) ) {
+		return [];
+	}
+
+	return array_values( array_filter( array_map( 'trim', explode( ',', $domains ) ), 'strlen' ) );
+}
+
+/**
+ * Checks whether a name is one of the global proxy file names (e.g. auth-command's htpasswd and ACL files), in any case.
+ *
+ * @param string $name File name.
+ *
+ * @return bool
+ */
+function is_reserved_proxy_file_name( $name ) {
+
+	return in_array( strtolower( (string) $name ), [ 'default', 'default_admin_tools' ], true );
+}
+
+/**
+ * Checks whether an alias domain is a plain hostname or `*.hostname` that is safe to use as a proxy file name.
+ *
+ * @param string $domain Alias domain.
+ *
+ * @return bool
+ */
+function is_valid_alias_domain( $domain ) {
+
+	// No leading `_`, so an alias can't take over the `_wildcard.<site>` files of another site.
+	$label = '[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9_])?';
+
+	return is_string( $domain )
+		&& 1 === preg_match( '/^(?:\*\.)?' . $label . '(?:\.' . $label . ')*$/D', $domain )
+		&& ! is_reserved_proxy_file_name( $domain );
+}
+
+/**
+ * Exits with an error listing the alias domains that are not a plain hostname or `*.hostname`.
+ *
+ * @param array $domains Alias domains.
+ */
+function validate_alias_domains( $domains ) {
+
+	$invalid = array_filter(
+		$domains,
+		function ( $domain ) {
+			return ! is_valid_alias_domain( $domain );
+		}
+	);
+
+	if ( ! empty( $invalid ) ) {
+		\EE::error( sprintf( 'Invalid alias domain(s): %s. An alias domain must be a hostname or `*.hostname` whose labels use letters, digits, `-` and `_`, do not start with `-` or `_` (a leading `_` is reserved for proxy files like `_wildcard.<site>`) and do not end with `-`. It can not be `default` or `default_admin_tools`.', implode( ', ', $invalid ) ) );
 	}
 }
 

@@ -8,8 +8,6 @@ use EE;
 use EE\Model\Cron;
 use EE\Model\Site;
 use EE\Model\Option;
-use EE\Model\Auth;
-use EE\Model\Whitelist;
 use Symfony\Component\Filesystem\Filesystem;
 use function EE\Site\Cloner\Utils\check_site_access;
 use function EE\Site\Cloner\Utils\copy_site_db;
@@ -28,6 +26,8 @@ use function EE\Site\Utils\auto_site_name;
 use function EE\Site\Utils\get_site_info;
 use function EE\Site\Utils\reload_global_nginx_proxy;
 use function EE\Site\Utils\get_parent_of_alias;
+use function EE\Site\Utils\split_alias_domains;
+use function EE\Site\Utils\validate_alias_domains;
 
 /**
  * Base class for Site command
@@ -350,45 +350,18 @@ abstract class EE_Site_Command {
 		if ( $level > 4 ) {
 			if ( $this->site_data['site_ssl'] ) {
 				\EE::log( 'Removing ssl certs and other config files.' );
-				$crt_file      = EE_ROOT_DIR . "/services/nginx-proxy/certs/$site_url.crt";
-				$key_file      = EE_ROOT_DIR . "/services/nginx-proxy/certs/$site_url.key";
-				$pem_file      = EE_ROOT_DIR . "/services/nginx-proxy/certs/$site_url.chain.pem";
-				$conf_certs    = EE_ROOT_DIR . "/services/nginx-proxy/acme-conf/certs/$site_url";
-				$conf_var      = EE_ROOT_DIR . "/services/nginx-proxy/acme-conf/var/$site_url";
-				$htpasswd_file = EE_ROOT_DIR . "/services/nginx-proxy/htpasswd/$site_url";
+				$crt_file   = EE_ROOT_DIR . "/services/nginx-proxy/certs/$site_url.crt";
+				$key_file   = EE_ROOT_DIR . "/services/nginx-proxy/certs/$site_url.key";
+				$pem_file   = EE_ROOT_DIR . "/services/nginx-proxy/certs/$site_url.chain.pem";
+				$conf_certs = EE_ROOT_DIR . "/services/nginx-proxy/acme-conf/certs/$site_url";
+				$conf_var   = EE_ROOT_DIR . "/services/nginx-proxy/acme-conf/var/$site_url";
 
-				$delete_files = [ $conf_certs, $conf_var, $crt_file, $key_file, $pem_file, $htpasswd_file ];
+				$delete_files = [ $conf_certs, $conf_var, $crt_file, $key_file, $pem_file ];
 				try {
 					$this->fs->remove( $delete_files );
 				} catch ( \Exception $e ) {
 					\EE::warning( $e );
 				}
-			}
-
-			$site_auth_file = EE_ROOT_DIR . '/services/nginx-proxy/htpasswd/' . $site_url;
-			if ( $this->fs->exists( $site_auth_file ) ) {
-				try {
-					$this->fs->remove( $site_auth_file );
-				} catch ( \Exception $e ) {
-					\EE::warning( $e );
-				}
-				reload_global_nginx_proxy();
-			}
-
-			$whitelists = Whitelist::where( [
-				'site_url' => $site_url,
-			] );
-
-			foreach ( $whitelists as $whitelist ) {
-				$whitelist->delete();
-			}
-
-			$auths = Auth::where( [
-				'site_url' => $site_url,
-			] );
-
-			foreach ( $auths as $auth ) {
-				$auth->delete();
 			}
 
 			if ( Site::find( $site_url )->delete() ) {
@@ -522,6 +495,7 @@ abstract class EE_Site_Command {
 
 		$add_domains    = get_flag_value( $assoc_args, 'add-alias-domains', false );
 		$delete_domains = get_flag_value( $assoc_args, 'delete-alias-domains', false );
+		$pre_hook_fired = false;
 
 		try {
 
@@ -529,25 +503,21 @@ abstract class EE_Site_Command {
 			$array_data      = (array) $this->site_data;
 			$this->site_data = reset( $array_data );
 
-			// Validate data.
-			$existing_alias_domains = [];
-			$domains_to_add         = [];
-			$domains_to_delete      = [];
+			// Drop blanks so that e.g. `b.com,` never stores an empty alias domain.
+			$existing_alias_domains = split_alias_domains( (string) $this->site_data['alias_domains'] );
+			$domains_to_add         = split_alias_domains( $add_domains );
+			$domains_to_delete      = split_alias_domains( $delete_domains );
 
-			if ( ! empty( $this->site_data['alias_domains'] ) ) {
-				$existing_alias_domains = explode( ',', $this->site_data['alias_domains'] );
+			if ( empty( $domains_to_add ) && empty( $domains_to_delete ) ) {
+				EE::error( 'Please provide at least one alias domain to add or delete.' );
 			}
-			if ( ! empty( $add_domains ) ) {
-				$domains_to_add = explode( ',', $add_domains );
-			}
-			if ( ! empty( $delete_domains ) ) {
-				$domains_to_delete = explode( ',', $delete_domains );
-			}
+
+			validate_alias_domains( $domains_to_add );
 
 			$already_added_domains = array_intersect( $existing_alias_domains, $domains_to_add );
-			$domains_to_add        = array_diff( $domains_to_add, $existing_alias_domains );
+			$domains_to_add        = array_values( array_diff( $domains_to_add, $existing_alias_domains ) );
 
-			if ( empty( $domains_to_add ) && $add_domains ) {
+			if ( empty( $domains_to_add ) && ! empty( $already_added_domains ) ) {
 				$already_added_domains = implode( ',', $already_added_domains );
 				EE::error( "Alias domains: $already_added_domains is/are already present on the site." );
 			}
@@ -583,13 +553,36 @@ abstract class EE_Site_Command {
 			$final_alias_domains = array_merge( $existing_alias_domains, $domains_to_add );
 			$final_alias_domains = array_diff( $final_alias_domains, $domains_to_delete );
 
+			// Set before firing, so a callback that throws still gets the failure hook to undo its partial work.
+			$pre_hook_fired = true;
+
+			/**
+			 * Execute before the new alias domains of a site are served by the proxy.
+			 * Note: This can be used by package commands to set up per-domain config the proxy needs from the first request.
+			 *
+			 * @param string $site_url       Url of site whose alias domains change.
+			 * @param array  $domains_to_add Alias domains that are being added.
+			 */
+			\EE::do_hook( 'site_alias_domains_before_update', $this->site_data['site_url'], $domains_to_add );
+
 			$this->site_data['alias_domains'] = implode( ',', $final_alias_domains );
 			$is_ssl                           = $this->site_data['site_ssl'] ? true : false;
 			$preferred_ssl_challenge          = get_preferred_ssl_challenge( get_domains_of_site( $this->site_data['site_url'] ) );
-			$nohttps                          = $is_ssl && 'dns' !== $preferred_ssl_challenge;
+			// Only LE sites drop HTTPS here for the HTTP-01 challenge; the renewal below turns it back on, other SSL types keep theirs.
+			$nohttps                          = 'le' === $this->site_data['site_ssl'] && 'dns' !== $preferred_ssl_challenge;
 			$this->dump_docker_compose_yml( [ 'nohttps' => $nohttps ] );
 			\EE_DOCKER::docker_compose_up( $this->site_data['site_fs_path'], [ 'nginx' ] );
 		} catch ( \Exception $e ) {
+			if ( $pre_hook_fired ) {
+				/**
+				 * Execute when an alias domains update is aborted after `site_alias_domains_before_update`.
+				 * Note: The site keeps its old alias domains, so this can be used to undo what was set up for the new ones.
+				 *
+				 * @param string $site_url       Url of site whose alias domains update failed.
+				 * @param array  $domains_to_add Alias domains that were not added after all.
+				 */
+				\EE::do_hook( 'site_alias_domains_update_failed', $site->site_url, $domains_to_add );
+			}
 			EE::error( $e->getMessage() );
 		}
 
@@ -610,14 +603,23 @@ abstract class EE_Site_Command {
 		$old_certs = $client->loadDomainCertificates( $all_domains );
 
 		if ( $is_ssl ) {
-			// Update SSL.
-			EE::log( 'Updating and force renewing SSL certificate to accomodated alias domain changes.' );
-			try {
-				$this->ssl_renew( [ $this->site_data['site_url'] ], [ 'force' => true ] );
-			} catch ( \Exception $e ) {
-				EE::warning( 'Certificate could not be issued. Reverting back to original state.' );
-				$this->enable( [ $this->site_data['site_url'] ], [ 'refresh' => 'true' ] );
-				EE::error( $e->getMessage() );
+			// Only Let's Encrypt certs can be reissued by EE to cover the new alias-domain set.
+			if ( 'le' === $this->site_data['site_ssl'] ) {
+				// Update SSL.
+				EE::log( 'Updating and force renewing SSL certificate to accomodated alias domain changes.' );
+				try {
+					$this->ssl_renew( [ $this->site_data['site_url'] ], [ 'force' => true ] );
+				} catch ( \Exception $e ) {
+					EE::warning( 'Certificate could not be issued. Reverting back to original state.' );
+					$this->enable( [ $this->site_data['site_url'] ], [ 'refresh' => 'true' ] );
+					\EE::do_hook( 'site_alias_domains_update_failed', $site->site_url, $domains_to_add );
+					EE::error( $e->getMessage() );
+				}
+			} elseif ( 'custom' === $this->site_data['site_ssl'] ) {
+				EE::warning( 'Custom SSL certificate is not renewed automatically. Please ensure the certificate you provided covers the updated alias-domain set.' );
+			} else {
+				// Self-signed certs cover only the site and *.site, and inherited sites use the parent's wildcard cert, so other alias domains get a mismatched cert.
+				EE::log( 'No SSL certificate action needed for ' . $this->site_data['site_ssl'] . ' SSL on alias domain change.' );
 			}
 		}
 
@@ -644,6 +646,17 @@ abstract class EE_Site_Command {
 			];
 			$this->update_proxy_cache( $args, $assoc_args );
 		}
+
+		/**
+		 * Execute after the alias domains of a site have been updated.
+		 * Note: This can be used by package commands to sync their per-domain config.
+		 *
+		 * @param string $site_url          Url of site whose alias domains changed.
+		 * @param array  $domains_to_add    Alias domains that were added.
+		 * @param array  $domains_to_delete Alias domains that were removed.
+		 */
+		\EE::do_hook( 'site_alias_domains_updated', $this->site_data['site_url'], $domains_to_add, $domains_to_delete );
+
 		delem_log( 'site alias domains update end' );
 	}
 
