@@ -93,6 +93,11 @@ class Site_Backup_Restore {
 	// metadata.json of the backup being restored.
 	private $restore_metadata = [];
 
+	private $restore_in_progress = false;
+
+	// WordPress root the running backup excludes core from ('' = core is archived).
+	private $backup_wp_root = null;
+
 	// stderr of the last failed `rclone lsf`.
 	private $rclone_error = '';
 
@@ -337,6 +342,7 @@ class Site_Backup_Restore {
 		}
 
 		// Registered before the site lock's release handler so a rollback runs while the lock is still held.
+		$this->restore_in_progress = true;
 		register_shutdown_function( [ $this, 'rollback_restore_on_shutdown' ] );
 
 		$this->pre_restore_check();
@@ -351,6 +357,7 @@ class Site_Backup_Restore {
 		$this->maybe_restore_custom_docker_compose( $backup_dir );
 
 		$this->fs->remove( $backup_dir );
+		$this->restore_in_progress = false;
 
 		EE::log( 'Reloading site.' );
 		EE::run_command( [ 'site', 'reload', $this->site_data['site_url'] ], [], [] );
@@ -504,8 +511,13 @@ class Site_Backup_Restore {
 		$backup_data['backup_host_id']  = $this->get_backup_host_id();
 		$backup_data['backup_hostname'] = (string) gethostname();
 		if ( 'wp' === $this->site_data['site_type'] ) {
-			// Where restore puts WordPress core back; '' = core is in the archive (no wp-content found).
-			$backup_data['wp_root'] = (string) $this->get_wp_root_rel();
+			// Where restore puts WordPress core back; '' = core is in the archive.
+			$this->backup_wp_root = (string) $this->get_wp_root_rel();
+			if ( '' !== $this->backup_wp_root && ! preg_match( '/^\d+\.\d+[0-9A-Za-z.\-]*$/', (string) $backup_data['wp_version'] ) ) {
+				EE::warning( 'Could not read the WordPress version, so WordPress core is included in the backup.' );
+				$this->backup_wp_root = '';
+			}
+			$backup_data['wp_root'] = $this->backup_wp_root;
 		}
 
 		$backup_data = array_merge( $this->site_data, $backup_data );
@@ -639,6 +651,9 @@ class Site_Backup_Restore {
 			EE::log( 'Backing up complete site directory.' );
 
 			return $this->backup_site_dir( $backup_dir ); // Backup all if wp-content not found
+		}
+		if ( '' === $this->backup_wp_root ) {
+			return $this->backup_site_dir( $backup_dir );
 		}
 
 		$public_dir = $this->get_site_app_dir() . '/' . trim( str_replace( '/var/www/', '', $this->site_data['site_container_fs_path'] ), '/' );
@@ -821,8 +836,14 @@ class Site_Backup_Restore {
 
 		// The restored wp-config.php still has the backed-up site's credentials. Each value is read from a file in the
 		// container (`\$(cat …)` runs there), so none of them passes the host shells of `ee shell --command` (BKP-15).
-		$scratch = $this->get_restore_scratch_dir();
-		foreach ( [ 'DB_NAME' => $db_name, 'DB_USER' => $db_user, 'DB_PASSWORD' => $db_password, 'DB_HOST' => $db_host ] as $constant => $value ) {
+		$scratch   = $this->get_restore_scratch_dir();
+		$constants = [
+			'DB_NAME'     => $db_name,
+			'DB_USER'     => $db_user,
+			'DB_PASSWORD' => $db_password,
+			'DB_HOST'     => $db_host,
+		];
+		foreach ( $constants as $constant => $value ) {
 			$value_file = $scratch . '/' . strtolower( $constant );
 			$this->fs->dumpFile( $value_file, (string) $value );
 			$this->protect_container_file( $value_file );
@@ -976,7 +997,11 @@ class Site_Backup_Restore {
 			}
 			$this->plan_app_swap();
 		} else {
-			$wp_root = trim( str_replace( '/var/www/', '', $this->site_data['site_container_fs_path'] ), '/' );
+			// Where develop's backup took wp-content from (it also looked in <public dir>/current).
+			$wp_root = $this->get_wp_root_rel( false );
+			if ( null === $wp_root ) {
+				$wp_root = trim( str_replace( '/var/www/', '', $this->site_data['site_container_fs_path'] ), '/' );
+			}
 
 			$this->begin_restore_transaction( $backup_app, self::WP_CORE_SIZE_ESTIMATE );
 
@@ -1063,6 +1088,12 @@ class Site_Backup_Restore {
 
 		$this->check_restore_disk_space( $backup_app, $app_dir, $extra_bytes );
 
+		// Renaming a directory moves any mount below it along with the old files, and the cleanup would then empty it.
+		$mounts = $this->get_mount_points_under( $app_dir );
+		if ( ! empty( $mounts ) ) {
+			EE::error( sprintf( "These mount points are inside the site directory:\n%s\nUnmount them before a restore. The site was not changed.", implode( "\n", $mounts ) ) );
+		}
+
 		$this->fs->remove( [ $stage, $this->get_restore_scratch_dir() ] );
 		$this->fs->mkdir( [ $stage . '/new', $stage . '/old' ], 0700 );
 
@@ -1108,12 +1139,63 @@ class Site_Backup_Restore {
 		return $this->get_site_app_dir() . '/' . self::RESTORE_STAGE_DIR;
 	}
 
+	/**
+	 * @param string $dir Directory.
+	 *
+	 * @return string[] Mount points strictly below $dir (Linux; none elsewhere).
+	 */
+	private function get_mount_points_under( $dir ) {
+		$real   = realpath( $dir );
+		$mounts = [];
+		$info   = ( false !== $real && is_readable( '/proc/self/mountinfo' ) ) ? file( '/proc/self/mountinfo', FILE_IGNORE_NEW_LINES ) : [];
+
+		foreach ( $info as $line ) {
+			$fields = explode( ' ', $line );
+			if ( ! isset( $fields[4] ) ) {
+				continue;
+			}
+			// Spaces and friends are octal-escaped (\040).
+			$point = preg_replace_callback(
+				'/\\\\([0-7]{3})/',
+				function ( $m ) {
+					return chr( octdec( $m[1] ) );
+				},
+				$fields[4]
+			);
+			if ( 0 === strpos( $point, $real . '/' ) ) {
+				$mounts[] = $point;
+			}
+		}
+
+		return $mounts;
+	}
+
 	private function get_restore_journal_file() {
 		return EE_BACKUP_DIR . '/' . $this->site_data['site_url'] . '.restore.json';
 	}
 
 	private function write_restore_journal() {
-		$this->fs->dumpFile( $this->get_restore_journal_file(), json_encode( $this->restore_txn, JSON_PRETTY_PRINT ) );
+		$journal = json_encode( $this->restore_txn, JSON_PRETTY_PRINT );
+		$this->fs->dumpFile( $this->get_restore_journal_file(), $journal );
+		// Second copy with the files it describes, in case EE_BACKUP_DIR is cleaned by hand.
+		$this->fs->dumpFile( $this->restore_txn['stage'] . '/journal.json', $journal );
+	}
+
+	/**
+	 * Journal of an unfinished restore that changed the site, or null.
+	 *
+	 * @return array|null
+	 */
+	private function read_unfinished_restore_journal() {
+		foreach ( [ $this->get_restore_journal_file(), $this->get_restore_stage_dir() . '/journal.json' ] as $file ) {
+			$journal = is_file( $file ) ? json_decode( (string) file_get_contents( $file ), true ) : null;
+			// A journal without its stage dir is from a deleted site: nothing to roll back.
+			if ( is_array( $journal ) && isset( $journal['stage'], $journal['pairs'], $journal['db'] ) && empty( $journal['committed'] ) && is_dir( $journal['stage'] ) ) {
+				return $this->restore_has_changes( $journal ) ? $journal : null;
+			}
+		}
+
+		return null;
 	}
 
 	/**
@@ -1314,8 +1396,18 @@ class Site_Backup_Restore {
 		$core_dir = $scratch . '/core';
 		$new_root = $this->restore_txn['new'] . '/' . $wp_root;
 
+		// Check the deepest existing part first: a symlink from the archive must not make root create dirs elsewhere.
+		$real_new = realpath( $this->restore_txn['new'] );
+		$existing = $new_root;
+		while ( ! $this->path_exists( $existing ) ) {
+			$existing = dirname( $existing );
+		}
+		$real_existing = realpath( $existing );
+		if ( false === $real_existing || ( $real_existing !== $real_new && 0 !== strpos( $real_existing, $real_new . '/' ) ) ) {
+			EE::error( 'The WordPress root of the backup is outside the site. The site was not changed.' );
+		}
+
 		$this->fs->mkdir( [ $core_dir, $new_root ] );
-		$real_new  = realpath( $this->restore_txn['new'] );
 		$real_root = realpath( $new_root );
 		if ( false === $real_root || ( $real_root !== $real_new && 0 !== strpos( $real_root, $real_new . '/' ) ) ) {
 			EE::error( 'The WordPress root of the backup is outside the site. The site was not changed.' );
@@ -1417,8 +1509,10 @@ class Site_Backup_Restore {
 			EE::error( 'Could not save the current database before the restore. The site was not changed. ' . trim( $result->stderr ) );
 		}
 
-		// Out of the container's reach until a rollback needs it.
+		// Out of the container's reach; a rollback reads it through a hard link, so it never leaves the stage.
 		$this->move_db_dump( $scratch . '/db-before.sql', $this->restore_txn['stage'] . '/db-before.sql' );
+		chown( $this->restore_txn['stage'] . '/db-before.sql', 0 );
+		chmod( $this->restore_txn['stage'] . '/db-before.sql', 0600 );
 		$this->restore_txn['db'] = 'saved';
 		$this->write_restore_journal();
 	}
@@ -1521,6 +1615,10 @@ class Site_Backup_Restore {
 				$ok = $this->rename_quietly( $pair['live'], $pair['new'] ) && $ok;
 			}
 			if ( $this->path_exists( $pair['old'] ) ) {
+				// Something (a running request) recreated the live path between the two renames: move it aside.
+				if ( $this->path_exists( $pair['live'] ) ) {
+					$this->rename_quietly( $pair['live'], $txn['stage'] . '/displaced-' . $i );
+				}
 				$ok = ! $this->path_exists( $pair['live'] ) && $this->rename_quietly( $pair['old'], $pair['live'] ) && $ok;
 			}
 		}
@@ -1530,13 +1628,22 @@ class Site_Backup_Restore {
 			$this->fs->mkdir( $scratch );
 			EE::exec( sprintf( 'chown www-data:www-data %s', escapeshellarg( $scratch ) ) );
 			$result = null;
-			if ( $this->rename_quietly( $txn['stage'] . '/db-before.sql', $scratch . '/db-before.sql' ) ) {
-				EE::exec( sprintf( 'chown www-data:www-data %s', escapeshellarg( $scratch . '/db-before.sql' ) ) );
+			$saved  = $txn['stage'] . '/db-before.sql';
+			$view   = $scratch . '/db-before.sql';
+			if ( ! file_exists( $saved ) && file_exists( $view ) ) {
+				$this->rename_quietly( $view, $saved );
+			}
+			if ( file_exists( $view ) ) {
+				unlink( $view );
+			}
+			// Read-only for the container; a kill during the import still leaves the copy in the stage.
+			if ( file_exists( $saved ) && ( @link( $saved, $view ) || copy( $saved, $view ) ) ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- falls back to a copy.
+				chmod( $view, 0644 );
 				// The DB name was checked when the restore began; no EE::error() may run in a shutdown handler.
 				$command = sprintf( 'mysql --defaults-extra-file=%s --skip-ssl %s < /var/www/%s/db-before.sql 2>&1', $this->write_mysql_defaults_file(), $this->site_data['db_name'], self::RESTORE_STAGE_DIR );
 				$result  = EE::launch( $this->get_ee_shell_command( $command ) );
 				$this->remove_mysql_defaults_files();
-				$this->rename_quietly( $scratch . '/db-before.sql', $txn['stage'] . '/db-before.sql' );
+				unlink( $view );
 			}
 			if ( null === $result || $result->return_code ) {
 				EE::warning( 'Could not put back the previous database. ' . ( $result ? trim( $result->stdout . ' ' . $result->stderr ) : '' ) );
@@ -1556,6 +1663,11 @@ class Site_Backup_Restore {
 	 * Shutdown handler: a restore that exits before its commit is rolled back while the site lock is still held.
 	 */
 	public function rollback_restore_on_shutdown() {
+		// A failed restore must not leave its download behind to be taken for another backup next time.
+		if ( $this->restore_in_progress ) {
+			$this->fs->remove( EE_BACKUP_DIR . '/' . $this->site_data['site_url'] );
+		}
+
 		if ( null === $this->restore_txn ) {
 			return;
 		}
@@ -1582,9 +1694,14 @@ class Site_Backup_Restore {
 	 */
 	private function recover_interrupted_restore() {
 		$journal_file = $this->get_restore_journal_file();
-		$journal      = $this->fs->exists( $journal_file ) ? json_decode( (string) file_get_contents( $journal_file ), true ) : null;
+		$journal      = $this->read_unfinished_restore_journal();
+		$stage        = $this->get_restore_stage_dir();
 
-		if ( is_array( $journal ) && isset( $journal['stage'], $journal['pairs'], $journal['db'] ) && empty( $journal['committed'] ) && is_dir( $journal['stage'] ) && $this->restore_has_changes( $journal ) ) {
+		if ( null === $journal && ! empty( $this->list_dir( $stage . '/old' ) ) && ! is_file( $stage . '/journal.json' ) ) {
+			EE::error( sprintf( 'An earlier restore left the previous site files in %s/old without a journal. Check them, put back what is missing, remove %s and run the restore again.', $stage, $stage ) );
+		}
+
+		if ( null !== $journal ) {
 			EE::warning( 'An earlier restore of this site did not finish. Rolling it back first.' );
 			$this->restore_txn = $journal;
 			if ( ! $this->rollback_restore_transaction() ) {
@@ -1594,18 +1711,14 @@ class Site_Backup_Restore {
 			EE::log( 'The earlier restore was rolled back.' );
 		}
 
-		$this->fs->remove( [ $journal_file, $this->get_restore_stage_dir(), $this->get_restore_scratch_dir() ] );
+		$this->fs->remove( [ $journal_file, $stage, $this->get_restore_scratch_dir() ] );
 	}
 
 	/**
 	 * A backup of a site left half-restored would replace good backups through retention.
 	 */
 	private function ensure_no_interrupted_restore() {
-		$journal_file = $this->get_restore_journal_file();
-		$journal      = $this->fs->exists( $journal_file ) ? json_decode( (string) file_get_contents( $journal_file ), true ) : null;
-
-		// A journal without its stage dir is from a deleted site: nothing to roll back.
-		if ( is_array( $journal ) && isset( $journal['stage'], $journal['pairs'], $journal['db'] ) && empty( $journal['committed'] ) && is_dir( $journal['stage'] ) && $this->restore_has_changes( $journal ) ) {
+		if ( null !== $this->read_unfinished_restore_journal() ) {
 			$this->capture_error( 'An interrupted restore left the site in an inconsistent state', self::ERROR_TYPE_VALIDATION, 1004 );
 			$this->fs->remove( EE_BACKUP_DIR . '/' . $this->site_data['site_url'] . '.lock' );
 			EE::error( sprintf( 'An earlier restore of %1$s did not finish, so the site may be half restored. Run `ee site restore %1$s` (it rolls the earlier restore back first), then back up again.', $this->site_data['site_url'] ) );
@@ -1832,6 +1945,9 @@ class Site_Backup_Restore {
 
 		// A restore killed mid-way (SIGKILL, OOM) is rolled back before anything else.
 		$this->recover_interrupted_restore();
+
+		// Never reuse what a failed backup or restore left in the download dir: it may be another backup (BKP-1).
+		$this->fs->remove( EE_BACKUP_DIR . '/' . $this->site_data['site_url'] );
 
 		$remote_path = $this->get_remote_path( false );
 		$command     = sprintf( 'rclone size --json %s', escapeshellarg( $remote_path ) );
@@ -2669,7 +2785,7 @@ class Site_Backup_Restore {
 			$this->rclone_download( $backup_dir );
 		}
 
-		$restore_command = sprintf( 'cd %s && unzip -o conf.zip', $backup_dir );
+		$restore_command = sprintf( 'cd %s && unzip -o conf.zip < /dev/null', $backup_dir );
 		$this->exec_or_fail( $restore_command, 'Failed to extract the configuration from the backup.' );
 
 		if ( $this->fs->exists( $backup_dir . '/nginx' ) ) {
@@ -2687,7 +2803,7 @@ class Site_Backup_Restore {
 			$this->rclone_download( $backup_dir );
 		}
 		if ( ! $this->fs->exists( sprintf( '%s/php', $backup_dir ) ) ) {
-			$restore_command = sprintf( 'cd %s && unzip -o conf.zip', $backup_dir );
+			$restore_command = sprintf( 'cd %s && unzip -o conf.zip < /dev/null', $backup_dir );
 			$this->exec_or_fail( $restore_command, 'Failed to extract the configuration from the backup.' );
 		}
 
