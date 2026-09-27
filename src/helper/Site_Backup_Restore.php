@@ -30,7 +30,39 @@ class Site_Backup_Restore {
 	const RCLONE_MIN_VERSION_MT_WRITE_BUFFER = '1.63.0'; // --multi-thread-write-buffer-size (rclone v1.63.0)
 	const RCLONE_MIN_VERSION_MT_CHUNK_SIZE   = '1.64.0'; // --multi-thread-chunk-size (rclone v1.64.0)
 
-	const METADATA_SECRET_KEYS = [ 'db_password', 'db_root_password', 'app_admin_password', 'site_auth_password' ];
+	// 2: backups live under <rclone-path>/<site>/<host-id>/ and WP archives hold all of app/ except WP core.
+	const BACKUP_FORMAT         = 2;
+	const BACKUP_ID_PATTERN     = '/^\d+_\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}$/';
+	const DEFAULT_NO_OF_BACKUPS = 7;
+	const METADATA_SECRET_KEYS  = [ 'db_password', 'db_root_password', 'app_admin_password', 'site_auth_password' ];
+
+	// app/.ee-restore is the php container's scratch space during a restore; the staged files live next to app/ (get_restore_stage_dir()).
+	const RESTORE_STAGE_DIR = '.ee-restore';
+
+	// Root entries of a WordPress install that `wp core download` recreates.
+	const WP_CORE_ENTRIES = [
+		'wp-admin',
+		'wp-includes',
+		'index.php',
+		'license.txt',
+		'readme.html',
+		'wp-activate.php',
+		'wp-blog-header.php',
+		'wp-comments-post.php',
+		'wp-config-sample.php',
+		'wp-cron.php',
+		'wp-links-opml.php',
+		'wp-load.php',
+		'wp-login.php',
+		'wp-mail.php',
+		'wp-settings.php',
+		'wp-signup.php',
+		'wp-trackback.php',
+		'xmlrpc.php',
+	];
+
+	// Room for a WordPress core download on top of the extracted archive.
+	const WP_CORE_SIZE_ESTIMATE = 104857600;
 
 	private $fs;
 	public $site_data;
@@ -52,6 +84,21 @@ class Site_Backup_Restore {
 
 	// Global backup lock handle for serializing backups
 	private $global_backup_lock_handle = null;
+
+	private $backup_host_id = null;
+
+	// State of the running restore (see begin_restore_transaction()); null when none is in progress.
+	private $restore_txn = null;
+
+	// metadata.json of the backup being restored.
+	private $restore_metadata = [];
+
+	// stderr of the last failed `rclone lsf`.
+	private $rclone_error = '';
+
+	// MySQL option files with the site's DB credentials (write_mysql_defaults_file()).
+	private $mysql_defaults_files   = [];
+	private $mysql_defaults_cleanup = false;
 
 	public function __construct() {
 		$this->fs = new Filesystem();
@@ -120,6 +167,9 @@ class Site_Backup_Restore {
 			}
 		}
 
+		// Fails on an invalid backup-host-id before any lock is taken.
+		$this->get_backup_host_id();
+
 		// Acquire global lock to serialize backups (prevents OOM from concurrent backups)
 		$this->acquire_global_backup_lock();
 
@@ -127,6 +177,7 @@ class Site_Backup_Restore {
 		register_shutdown_function( [ $this, 'release_global_backup_lock' ] );
 
 		$this->pre_backup_check();
+		$this->ensure_no_interrupted_restore();
 		$backup_dir = EE_BACKUP_DIR . '/' . $this->site_data['site_url'];
 
 		$this->fs->remove( $backup_dir );
@@ -267,24 +318,26 @@ class Site_Backup_Restore {
 		$backup_id  = \EE\Utils\get_flag_value( $assoc_args, 'id' );
 		$backup_dir = EE_BACKUP_DIR . '/' . $this->site_data['site_url'];
 
+		// Fails on an invalid backup-host-id before any lock is taken.
+		$this->get_backup_host_id();
+
 		if ( ! $this->fs->exists( $backup_dir ) ) {
 			$this->fs->mkdir( $backup_dir );
 		}
 
 		if ( $backup_id ) {
 
-			// verify_backup_id() lists remote backups (rclone lsf) before the
+			// resolve_restore_path() lists remote backups (rclone lsf) before the
 			// pre_restore_check() preflight below, so check rclone here too --
 			// otherwise a missing rclone surfaces as a misleading "Invalid backup
 			// ID" instead of the friendly "rclone is not installed" message.
 			$this->check_rclone_available();
 
-			if ( ! $this->verify_backup_id( $backup_id ) ) {
-				EE::error( "Invalid backup ID provided.\nPlease provide a valid ID from the list using 'ee site backup --list " . $this->site_data['site_url'] . "'." );
-			}
-			// Set the config path to specified backup ID.
-			$this->rclone_config_path = \EE\Utils\trailingslashit( $this->get_rclone_config_path() ) . $backup_id;
+			$this->rclone_config_path = $this->resolve_restore_path( $backup_id );
 		}
+
+		// Registered before the site lock's release handler so a rollback runs while the lock is still held.
+		register_shutdown_function( [ $this, 'rollback_restore_on_shutdown' ] );
 
 		$this->pre_restore_check();
 
@@ -294,7 +347,7 @@ class Site_Backup_Restore {
 			$this->restore_site( $backup_dir );
 		}
 
-		// restore custom compose files
+		// Only now, with files, DB and config committed; restore_site()/restore_wp() no longer call it (BKP-13).
 		$this->maybe_restore_custom_docker_compose( $backup_dir );
 
 		$this->fs->remove( $backup_dir );
@@ -309,17 +362,6 @@ class Site_Backup_Restore {
 		delem_log( 'site restore end' );
 	}
 
-	private function verify_backup_id( $backup_id ) {
-
-		$backups = $this->list_remote_backups( true );
-
-		if ( empty( $backups ) ) {
-			return false;
-		}
-
-		return in_array( $backup_id, $backups, true );
-	}
-
 	private function run_wp_cli_command( $command, $skip_plugins_themes = false ) {
 		$shell_command = 'timeout -k 10 --preserve-status 120 wp ';
 		if ( $skip_plugins_themes ) {
@@ -330,6 +372,28 @@ class Site_Backup_Restore {
 		$clean_output  = trim( $output->stdout );
 
 		return empty( $clean_output ) ? '-' : $clean_output;
+	}
+
+	/**
+	 * Build a child `ee shell` command that runs the current EE binary, not whatever `ee` is on PATH.
+	 *
+	 * @param string $command Command to run inside the site's php container.
+	 *
+	 * @return string
+	 */
+	private function get_ee_shell_command( $command ) {
+		$ee_script = class_exists( 'Phar' ) ? \Phar::running( false ) : '';
+		if ( '' === $ee_script ) {
+			$ee_script = EE_ROOT . '/php/boot-fs.php';
+		}
+
+		return sprintf(
+			'%s %s shell %s --skip-tty --command=%s',
+			escapeshellarg( \EE\Utils\get_php_binary() ),
+			escapeshellarg( $ee_script ),
+			escapeshellarg( $this->site_data['site_url'] ),
+			escapeshellarg( $command )
+		);
 	}
 
 	private function backup_site_details( $backup_dir ) {
@@ -435,7 +499,16 @@ class Site_Backup_Restore {
 
 		$remote_path                = $this->get_remote_path();
 		$backup_data['remote_path'] = explode( ':', $remote_path )[1];
-		$backup_data                = array_merge( $this->site_data, $backup_data );
+
+		$backup_data['backup_format']   = self::BACKUP_FORMAT;
+		$backup_data['backup_host_id']  = $this->get_backup_host_id();
+		$backup_data['backup_hostname'] = (string) gethostname();
+		if ( 'wp' === $this->site_data['site_type'] ) {
+			// Where restore puts WordPress core back; '' = core is in the archive (no wp-content found).
+			$backup_data['wp_root'] = (string) $this->get_wp_root_rel();
+		}
+
+		$backup_data = array_merge( $this->site_data, $backup_data );
 		// Credentials stay out of the backup: restore uses the current site's, and the metadata is also kept unencrypted on the remote and in EE_BACKUP_DIR.
 		foreach ( self::METADATA_SECRET_KEYS as $key ) {
 			unset( $backup_data[ $key ] );
@@ -473,13 +546,23 @@ class Site_Backup_Restore {
 		}
 	}
 
-	private function backup_site_dir( $backup_dir ) {
+	private function backup_site_dir( $backup_dir, $exclude = [] ) {
 
 		EE::log( 'Backing up site files.' );
 		EE::log( 'This may take some time.' );
-		$site_dir       = EE_ROOT_DIR . '/sites/' . $this->site_data['site_url'] . '/app';
-		$backup_file    = $backup_dir . '/' . $this->site_data['site_url'] . '.zip';
-		$backup_command = sprintf( 'cd %s && 7z a -mx=1 %s .', $site_dir, $backup_file );
+		$site_dir    = $this->get_site_app_dir();
+		$backup_file = $backup_dir . '/' . $this->site_data['site_url'] . '.zip';
+
+		// -snl on every build: 7-Zip 23+ follows symlinks by default (a link to / would pull host files into the backup),
+		// p7zip 16.02 and Debian's 26.02 store them as links. Link targets inside app/ are archived at their real path (BKP-10).
+		$exclude[] = self::RESTORE_STAGE_DIR;
+		// app/ is www-data's home in the php container: its tool caches (WP-CLI keeps every downloaded package) are no site data.
+		$exclude = array_merge( $exclude, [ '.wp-cli/cache', '.composer/cache', '.cache' ] );
+		if ( ! empty( $this->site_data['db_name'] ) ) {
+			// Added before the files: a site file at this path must not replace the fresh dump.
+			$exclude[] = 'sql/' . $this->site_data['site_url'] . '.sql';
+		}
+		$backup_command = sprintf( 'cd %s && 7z a -snl -mx=1 %s . %s', escapeshellarg( $site_dir ), escapeshellarg( $backup_file ), $this->get_7z_exclude_switches( $exclude ) );
 
 		$result = EE::launch( $backup_command );
 
@@ -497,88 +580,93 @@ class Site_Backup_Restore {
 		return $backup_file;
 	}
 
+	/**
+	 * `-x!` switches for paths relative to the archived directory (anchored there by 7z on all supported builds).
+	 *
+	 * @param string[] $paths Relative paths.
+	 *
+	 * @return string
+	 */
+	private function get_7z_exclude_switches( $paths ) {
+		return implode(
+			' ',
+			array_map(
+				function ( $path ) {
+					return escapeshellarg( '-x!' . $path );
+				},
+				array_unique( $paths )
+			)
+		);
+	}
+
+	/**
+	 * WordPress root relative to app/ ('htdocs', 'htdocs/current', ...), or null when it has no wp-content.
+	 *
+	 * @param bool $real Resolve symlinks (e.g. current -> releases/<n>): 7z archives the files at their real path.
+	 *
+	 * @return string|null
+	 */
+	private function get_wp_root_rel( $real = true ) {
+		$rel     = trim( str_replace( '/var/www/', '', $this->site_data['site_container_fs_path'] ), '/' );
+		$app_dir = $this->get_site_app_dir();
+
+		foreach ( [ $rel, $rel . '/current' ] as $candidate ) {
+			if ( ! $this->fs->exists( $app_dir . '/' . $candidate . '/wp-content' ) ) {
+				continue;
+			}
+
+			$root_real = realpath( $app_dir . '/' . $candidate );
+			$app_real  = realpath( $app_dir );
+			if ( $real && false !== $root_real && false !== $app_real && 0 === strpos( $root_real, $app_real . '/' ) ) {
+				return substr( $root_real, strlen( $app_real ) + 1 );
+			}
+
+			return $candidate;
+		}
+
+		return null;
+	}
+
+	private function get_site_app_dir() {
+		return EE_ROOT_DIR . '/sites/' . $this->site_data['site_url'] . '/app';
+	}
+
 	private function backup_wp_content_dir( $backup_dir ) {
-		EE::log( 'Backing up site files.' );
-		EE::log( 'This may take some time.' );
+		$wp_root = $this->get_wp_root_rel();
 
-		$container_fs_path = $this->site_data['site_container_fs_path'];
-		$container_fs_path = str_replace( '/var/www/', '', $container_fs_path );
-		$site_dir          = EE_ROOT_DIR . '/sites/' . $this->site_data['site_url'] . '/app/' . $container_fs_path;
-		$backup_file       = $backup_dir . '/' . $this->site_data['site_url'] . '.zip';
+		if ( null === $wp_root ) {
+			EE::warning( 'wp-content directory not found in the site.' );
+			EE::log( 'Backing up complete site directory.' );
 
-		if ( ! $this->fs->exists( $site_dir . '/wp-content' ) ) {
-			if ( $this->fs->exists( $site_dir . '/current/wp-content' ) ) {
-				if ( ! $this->fs->exists( $site_dir . '/wp-cli.yml' ) ) {
-					$this->fs->dumpFile( $site_dir . '/wp-cli.yml', "path: current/" );
-				}
-				$site_dir = $site_dir . '/current';
-			} else {
-				EE::warning( 'wp-content directory not found in the site.' );
-				EE::log( 'Backing up complete site directory.' );
+			return $this->backup_site_dir( $backup_dir ); // Backup all if wp-content not found
+		}
 
-				return $this->backup_site_dir( $backup_dir ); // Backup all if wp-content not found
+		$public_dir = $this->get_site_app_dir() . '/' . trim( str_replace( '/var/www/', '', $this->site_data['site_container_fs_path'] ), '/' );
+		if ( $public_dir !== $this->get_site_app_dir() . '/' . $this->get_wp_root_rel( false ) && ! $this->fs->exists( $public_dir . '/wp-cli.yml' ) ) {
+			$this->fs->dumpFile( $public_dir . '/wp-cli.yml', 'path: current/' );
+		}
+
+		// Everything in app/ except WordPress core, which restore downloads again for meta.json's version (BKP-9).
+		// meta.json itself stays next to the archive, so it can't clash with a site file of that name.
+		$exclude = [];
+		foreach ( self::WP_CORE_ENTRIES as $entry ) {
+			$exclude[] = $wp_root . '/' . $entry;
+		}
+		// Temp files this backup writes into the webroot.
+		foreach ( [ 'query.sql', 'db_size_query.sql', $this->site_data['site_url'] . '.sql' ] as $temp_file ) {
+			$exclude[] = 'htdocs/' . $temp_file;
+		}
+
+		// Symlinks are archived as links, so a target outside app/ is not in the backup.
+		$uploads = $this->get_site_app_dir() . '/' . $wp_root . '/wp-content/uploads';
+		if ( is_link( $uploads ) ) {
+			$target = realpath( $uploads );
+			if ( false === $target || 0 !== strpos( $target, realpath( $this->get_site_app_dir() ) . '/' ) ) {
+				EE::warning( sprintf( 'wp-content/uploads links to %s, outside the site directory: only the link is backed up, not the uploaded files.', readlink( $uploads ) ) );
 			}
 		}
 
-		$backup_command = sprintf( 'cd %s && 7z a -mx=1 %s wp-config.php', $site_dir . '/../', $backup_file );
-		$result         = EE::launch( $backup_command );
-
-		// 7z exit codes: 0=success, 1=warning (non-fatal), 2+=fatal error
-		if ( $result->return_code >= 2 || ! $this->fs->exists( $backup_file ) ) {
-			$this->capture_error(
-				'Failed to create WordPress content backup archive',
-				self::ERROR_TYPE_FILESYSTEM,
-				3002
-			);
-			EE::error( 'Failed to create backup archive. Please check disk space and file permissions.' );
-		}
-
-		// meta.json path
-		$meta_file = $backup_dir . '/meta.json';
-
-		// Include meta.json in the zip archive (Corrected logic)
-		$backup_command = sprintf( 'cd %s && 7z u -snl -mx=1 %s %s wp-content', $site_dir, $backup_file, $meta_file );
-		$result         = EE::launch( $backup_command );
-		// Remove the file
-		$this->fs->remove( $meta_file );
-
-		// 7z exit codes: 0=success, 1=warning (non-fatal), 2+=fatal error
-		if ( $result->return_code >= 2 || ! $this->fs->exists( $backup_file ) ) {
-			$this->capture_error(
-				'Failed to create WordPress content backup archive',
-				self::ERROR_TYPE_FILESYSTEM,
-				3002
-			);
-			EE::error( 'Failed to create backup archive. Please check disk space and file permissions.' );
-		}
-
-		$uploads_dir = $site_dir . '/wp-content/uploads';
-		if ( is_link( $uploads_dir ) ) {
-			$backup_command = sprintf( 'cd %s && 7z u -mx=1 %s wp-content/uploads', $site_dir, $backup_file );
-			$result         = EE::launch( $backup_command );
-
-			// 7z exit codes: 0=success, 1=warning (non-fatal), 2+=fatal error
-			if ( $result->return_code >= 2 ) {
-				$this->capture_error(
-					'Failed to create WordPress content backup archive',
-					self::ERROR_TYPE_FILESYSTEM,
-					3002
-				);
-				EE::error( 'Failed to create backup archive. Please check disk space and file permissions.' );
-			}
-		}
-
-		// Final check that backup file was created successfully
-		if ( ! $this->fs->exists( $backup_file ) ) {
-			$this->capture_error(
-				'Failed to create WordPress content backup archive',
-				self::ERROR_TYPE_FILESYSTEM,
-				3002
-			);
-			EE::error( 'Failed to create backup archive. Please check disk space and file permissions.' );
-		}
-
-		return $backup_file;
+		return $this->backup_site_dir( $backup_dir, $exclude );
 	}
 
 	private function backup_nginx_conf( $backup_dir ) {
@@ -661,12 +749,13 @@ class Site_Backup_Restore {
 
 		$this->fs->mkdir( $backup_dir . '/sql' );
 
-		$backup_command = sprintf( 'mysqldump --skip-ssl -u %s -p%s -h %s --single-transaction %s > /var/www/htdocs/%s', $db_user, $db_password, $db_host, $db_name, $sql_filename );
+		$backup_command = sprintf( 'mysqldump --defaults-extra-file=%s --skip-ssl --single-transaction %s > /var/www/htdocs/%s', $this->write_mysql_defaults_file(), $this->get_shell_safe_db_name(), $sql_filename );
 		$args           = [ 'shell', $this->site_data['site_url'] ];
 		$assoc_args     = [ 'command' => $backup_command ];
 		$options        = [ 'skip-tty' => true ];
 
 		EE::run_command( $args, $assoc_args, $options );
+		$this->remove_mysql_defaults_files();
 
 		$sql_dump_path = EE_ROOT_DIR . '/sites/' . $this->site_data['site_url'] . '/app/htdocs/' . $sql_filename;
 
@@ -698,43 +787,6 @@ class Site_Backup_Restore {
 		$this->fs->remove( $backup_dir . '/sql' );
 	}
 
-	private function maybe_restore_wp_config( $backup_dir ) {
-		if ( 'wp' !== $this->site_data['site_type'] ) {
-			return false;
-		}
-
-		$backup_file       = $backup_dir . '/' . $this->site_data['site_url'] . '.zip';
-		$container_fs_path = $this->site_data['site_container_fs_path'];
-		$container_fs_path = str_replace( '/var/www/', '', $container_fs_path );
-		$site_dir          = $this->site_data['site_fs_path'] . '/app/' . $container_fs_path;
-		$wp_config_path    = $site_dir . '/../';
-
-		$unzip_command = sprintf( 'unzip -o %s wp-config.php -d %s', $backup_file, $wp_config_path );
-		EE::exec( $unzip_command );
-
-		$chown_command = sprintf( 'chown -R www-data:www-data %s', $wp_config_path );
-		EE::exec( $chown_command );
-
-		$db_name     = $this->site_data['db_name'];
-		$db_user     = $this->site_data['db_user'];
-		$db_password = $this->site_data['db_password'];
-		$db_host     = $this->site_data['db_host'];
-		$args        = [ 'shell', $this->site_data['site_url'] ];
-		$options     = [ 'skip-tty' => true ];
-
-		$command = sprintf( 'wp config set DB_NAME %s', $db_name );
-		EE::run_command( $args, [ 'command' => $command ], $options );
-
-		$command = sprintf( 'wp config set DB_USER %s', $db_user );
-		EE::run_command( $args, [ 'command' => $command ], $options );
-
-		$command = sprintf( 'wp config set DB_PASSWORD %s', $db_password );
-		EE::run_command( $args, [ 'command' => $command ], $options );
-
-		$command = sprintf( 'wp config set DB_HOST %s', $db_host );
-		EE::run_command( $args, [ 'command' => $command ], $options );
-	}
-
 	private function maybe_restore_custom_docker_compose( $backup_dir ) {
 		$custom_compose_update             = false;
 		$custom_docker_compose             = $backup_dir . '/docker-compose-custom.yml';
@@ -761,144 +813,859 @@ class Site_Backup_Restore {
 		}
 	}
 
-	private function restore_db( $sql_file, $container_path ) {
-		EE::log( 'Restoring database.' );
-
-		$site_url    = $this->site_data['site_url'];
+	private function set_wp_config_db_constants() {
+		$db_name     = $this->site_data['db_name'];
 		$db_user     = $this->site_data['db_user'];
 		$db_password = $this->site_data['db_password'];
 		$db_host     = $this->site_data['db_host'];
-		$db_name     = $this->site_data['db_name'];
-		$sql_path    = "/var/www/$container_path/" . basename( $sql_file ); // Use basename for safety
 
-		// Corrected command with proper escaping and error suppression for password
-		$restore_command = sprintf( "mysql --skip-ssl -u '%s' -p'%s' -h '%s' '%s' < '%s' 2>/dev/null", $db_user, $db_password, $db_host, $db_name, $sql_path );
-
-		$args       = [ 'shell', $site_url ];
-		$assoc_args = [ 'command' => $restore_command ];
-		$options    = [ 'skip-tty' => true ];
-		EE::run_command( $args, $assoc_args, $options );
+		// The restored wp-config.php still has the backed-up site's credentials. Each value is read from a file in the
+		// container (`\$(cat …)` runs there), so none of them passes the host shells of `ee shell --command` (BKP-15).
+		$scratch = $this->get_restore_scratch_dir();
+		foreach ( [ 'DB_NAME' => $db_name, 'DB_USER' => $db_user, 'DB_PASSWORD' => $db_password, 'DB_HOST' => $db_host ] as $constant => $value ) {
+			$value_file = $scratch . '/' . strtolower( $constant );
+			$this->fs->dumpFile( $value_file, (string) $value );
+			$this->protect_container_file( $value_file );
+			$command = sprintf( 'wp config set %s \\"\\$(cat /var/www/%s/%s)\\" --quiet', $constant, self::RESTORE_STAGE_DIR, strtolower( $constant ) );
+			$this->run_checked_shell_command( $command, sprintf( 'Failed to set %s in wp-config.', $constant ) );
+			$this->fs->remove( $value_file );
+		}
 	}
 
+	private function restore_db( $sql_file, $container_path ) {
+		EE::log( 'Restoring database.' );
+
+		$sql_path = "/var/www/$container_path/" . basename( $sql_file ); // Use basename for safety
+
+		// Keep mysql's stderr (it never echoes the password) so a failed import says why.
+		$restore_command = sprintf( 'mysql --defaults-extra-file=%s --skip-ssl %s < %s 2>&1', $this->write_mysql_defaults_file(), $this->get_shell_safe_db_name(), $sql_path );
+
+		// A failed import must abort the restore (and roll it back) instead of being reported as success.
+		$this->run_checked_shell_command( $restore_command, 'Database restore failed.' );
+		$this->remove_mysql_defaults_files();
+	}
+
+	/**
+	 * Write the site's DB credentials to a MySQL option file the php container reads, so no credential ever reaches
+	 * a shell: `ee shell --command` runs through two shells on the host, where `$(…)` in a password ran as root (BKP-15).
+	 *
+	 * @return string Path of the file inside the container.
+	 */
+	private function write_mysql_defaults_file() {
+		$name  = 'mysql-' . bin2hex( random_bytes( 6 ) ) . '.cnf';
+		$file  = $this->get_restore_scratch_dir() . '/' . $name;
+		$quote = function ( $value ) {
+			return '"' . str_replace( [ '\\', '"' ], [ '\\\\', '\\"' ], (string) $value ) . '"';
+		};
+
+		if ( ! $this->mysql_defaults_cleanup ) {
+			register_shutdown_function( [ $this, 'remove_mysql_defaults_files' ] );
+			$this->mysql_defaults_cleanup = true;
+		}
+		$this->mysql_defaults_files[] = $file;
+
+		$this->fs->dumpFile(
+			$file,
+			sprintf( "[client]\nuser=%s\npassword=%s\nhost=%s\n", $quote( $this->site_data['db_user'] ), $quote( $this->site_data['db_password'] ), $quote( $this->site_data['db_host'] ) )
+		);
+		$this->protect_container_file( $file );
+
+		return '/var/www/' . self::RESTORE_STAGE_DIR . '/' . $name;
+	}
+
+	/**
+	 * Shutdown safety net as well, so no credential file outlives the command.
+	 */
+	public function remove_mysql_defaults_files() {
+		foreach ( $this->mysql_defaults_files as $file ) {
+			if ( file_exists( $file ) ) {
+				unlink( $file );
+			}
+		}
+		$this->mysql_defaults_files = [];
+
+		// A backup leaves no empty scratch dir behind in the site.
+		$scratch = $this->get_restore_scratch_dir();
+		if ( null === $this->restore_txn && is_dir( $scratch ) && empty( $this->list_dir( $scratch ) ) ) {
+			rmdir( $scratch );
+		}
+	}
+
+	/**
+	 * Readable only by the site's own php container user.
+	 *
+	 * @param string $file Host path inside app/.
+	 */
+	private function protect_container_file( $file ) {
+		chmod( $file, 0600 );
+		EE::exec( sprintf( 'chown www-data:www-data %s %s', escapeshellarg( dirname( $file ) ), escapeshellarg( $file ) ) );
+	}
+
+	/**
+	 * The DB name goes into container commands as is, so it must not hold anything a shell would interpret.
+	 *
+	 * @return string
+	 */
+	private function get_shell_safe_db_name() {
+		$db_name = (string) $this->site_data['db_name'];
+
+		if ( ! preg_match( '/^[A-Za-z0-9_.-]+$/', $db_name ) ) {
+			EE::error( sprintf( 'The database name "%s" contains characters that are not supported for backup and restore.', $db_name ) );
+		}
+
+		return $db_name;
+	}
+
+	/**
+	 * Run a command inside the site container via `ee shell` and abort on failure.
+	 *
+	 * EE::run_command() does not surface the in-container command's exit code, so
+	 * critical restore steps are launched as a child `ee shell` process (which exits
+	 * non-zero when the command fails) and the return code is checked here.
+	 *
+	 * @param string $command       Command to run inside the container.
+	 * @param string $error_message Message for EE::error() if the command fails.
+	 */
+	private function run_checked_shell_command( $command, $error_message ) {
+		$output = EE::launch( $this->get_ee_shell_command( $command ) );
+
+		if ( $output->return_code ) {
+			EE::error( $error_message . ' ' . trim( $output->stdout . ' ' . $output->stderr ) );
+		}
+	}
+
+	/**
+	 * html and php sites: the archive is app/ as a whole (plus sql/<site>.sql), swapped in as a whole.
+	 *
+	 * @param string $backup_dir Local directory holding the downloaded backup.
+	 */
 	private function restore_site( $backup_dir ) {
+		$backup_app = $this->get_downloaded_archive( $backup_dir );
+
+		$this->begin_restore_transaction( $backup_app, 0 );
+
+		EE::log( 'Restoring site files.' );
+		$this->extract_to_stage( $backup_app, $this->restore_txn['new'] );
+		$this->stage_db_dump( $this->restore_txn['new'] . '/sql' );
+		$this->plan_app_swap();
+
+		$this->apply_restore_transaction( $backup_dir );
+	}
+
+	/**
+	 * WordPress: backup format 2 is app/ without core (swapped in as a whole, core downloaded next to it);
+	 * older backups hold only wp-config.php, wp-content and the DB, which replace just those parts.
+	 *
+	 * @param string $backup_dir Local directory holding the downloaded backup.
+	 */
+	private function restore_wp( $backup_dir ) {
+		$backup_app = $this->get_downloaded_archive( $backup_dir );
+		$wp_version = $this->get_backup_wp_version( $backup_dir, $backup_app );
+		$format     = (int) ( isset( $this->restore_metadata['backup_format'] ) ? $this->restore_metadata['backup_format'] : 1 );
+
+		if ( $format >= 2 ) {
+			$wp_root = $this->get_backup_wp_root();
+
+			$this->begin_restore_transaction( $backup_app, '' === $wp_root ? 0 : self::WP_CORE_SIZE_ESTIMATE );
+
+			EE::log( 'Restoring site files.' );
+			$this->extract_to_stage( $backup_app, $this->restore_txn['new'] );
+			$this->stage_db_dump( $this->restore_txn['new'] . '/sql' );
+			if ( '' !== $wp_root ) {
+				$this->stage_wp_core( $wp_version, $wp_root, false );
+			}
+			$this->plan_app_swap();
+		} else {
+			$wp_root = trim( str_replace( '/var/www/', '', $this->site_data['site_container_fs_path'] ), '/' );
+
+			$this->begin_restore_transaction( $backup_app, self::WP_CORE_SIZE_ESTIMATE );
+
+			EE::log( 'Restoring site files.' );
+			$this->stage_legacy_wp_archive( $backup_app, $wp_root );
+			$this->stage_wp_core( $wp_version, $wp_root, true );
+		}
+
+		$this->apply_restore_transaction( $backup_dir );
+	}
+
+	/**
+	 * @param string $backup_dir Local directory holding the downloaded backup.
+	 *
+	 * @return string Path of the site archive.
+	 */
+	private function get_downloaded_archive( $backup_dir ) {
 		$backup_app = $backup_dir . '/' . $this->site_data['site_url'] . '.zip';
 
 		if ( ! $this->fs->exists( $backup_app ) ) {
 			$this->rclone_download( $backup_dir );
 		}
-
-		EE::log( 'Restoring site files.' );
-
-		$site_app_dir = EE_ROOT_DIR . '/sites/' . $this->site_data['site_url'] . '/app';
-		// Remote the existing content inside the app directory but not the app directory itself
-		$remove_command = sprintf( 'rm -rf %s/*', $site_app_dir );
-		EE::exec( $remove_command );
-
-		$restore_command = sprintf( 'unzip -o %s -d %s', $backup_app, $site_app_dir );
-		EE::exec( $restore_command );
-
-		$chown_command = sprintf( 'chown -R www-data:www-data %s', \EE\Utils\trailingslashit( $site_app_dir ) );
-		EE::exec( $chown_command );
-
-		$backup_db = $site_app_dir . '/sql/' . $this->site_data['site_url'] . '.sql';
-		if ( $this->fs->exists( $backup_db ) ) {
-			$this->restore_db( $backup_db, 'sql' );
-			$this->fs->remove( $site_app_dir . '/sql' );
+		if ( ! $this->fs->exists( $backup_app ) ) {
+			EE::error( sprintf( 'The backup has no site archive (%s). The site was not changed.', basename( $backup_app ) ) );
 		}
 
-		$this->maybe_restore_custom_docker_compose( $backup_dir );
-		$this->restore_nginx_conf( $backup_dir );
+		return $backup_app;
+	}
 
+	/**
+	 * WordPress version of the backup, validated before anything is changed.
+	 *
+	 * @param string $backup_dir Local directory holding the downloaded backup.
+	 * @param string $backup_app Site archive.
+	 *
+	 * @return string
+	 */
+	private function get_backup_wp_version( $backup_dir, $backup_app ) {
+		$meta_file = $backup_dir . '/meta.json';
+
+		// Format 2 uploads meta.json next to the archive; older backups keep it inside.
+		if ( ! $this->fs->exists( $meta_file ) ) {
+			EE::exec( sprintf( 'unzip -o %s meta.json -d %s', escapeshellarg( $backup_app ), escapeshellarg( $backup_dir ) ) );
+		}
+
+		$meta_data = $this->fs->exists( $meta_file ) ? json_decode( (string) file_get_contents( $meta_file ), true ) : null;
+		// Only [0-9A-Za-z.-]: the version ends up in a shell command in the container.
+		$wp_version = is_array( $meta_data ) && isset( $meta_data['wordpressVersion'] ) ? preg_replace( '/[^0-9A-Za-z.\-]/', '', (string) $meta_data['wordpressVersion'] ) : '';
+
+		// '-' is what backup_site_details() stores when WP-CLI failed.
+		if ( '' === $wp_version || '-' === $wp_version ) {
+			EE::error( 'Backup metadata (meta.json) is missing or has no WordPress version. The site was not changed.' );
+		}
+
+		return $wp_version;
+	}
+
+	/**
+	 * WordPress root recorded by a format 2 backup, relative to app/ ('' = core is inside the archive).
+	 *
+	 * @return string
+	 */
+	private function get_backup_wp_root() {
+		$wp_root = trim( (string) ( isset( $this->restore_metadata['wp_root'] ) ? $this->restore_metadata['wp_root'] : '' ), '/' );
+
+		// Only used in PHP file operations (no shell), checked again with realpath() in stage_wp_core().
+		if ( preg_match( '#[\x00-\x1f]|(^|/)\.\.?(/|$)#', $wp_root ) ) {
+			EE::error( 'Backup metadata has an invalid wp_root. The site was not changed.' );
+		}
+
+		return $wp_root;
+	}
+
+	/**
+	 * Start a restore: nothing live changes until apply_restore_transaction(), and every change after that is undone
+	 * on failure (rollback_restore_on_shutdown()) or, after a kill, by the next restore (recover_interrupted_restore()).
+	 *
+	 * @param string $backup_app  Site archive.
+	 * @param int    $extra_bytes Space needed on top of the extracted archive.
+	 */
+	private function begin_restore_transaction( $backup_app, $extra_bytes ) {
+		$app_dir = $this->get_site_app_dir();
+		$stage   = $this->get_restore_stage_dir();
+
+		$this->check_restore_disk_space( $backup_app, $app_dir, $extra_bytes );
+
+		$this->fs->remove( [ $stage, $this->get_restore_scratch_dir() ] );
+		$this->fs->mkdir( [ $stage . '/new', $stage . '/old' ], 0700 );
+
+		$this->restore_txn = [
+			'stage' => $stage,
+			'new'   => $stage . '/new',
+			'pairs' => [],
+			'db'    => 'none',
+			'conf'  => false,
+		];
+		$this->write_restore_journal();
+	}
+
+	/**
+	 * Private staging dir on the filesystem of app/: on Linux the htdocs volume's own dir (root only, not in any
+	 * container), on macOS the site dir. Falls back to app/ itself when that isn't possible.
+	 *
+	 * @return string
+	 */
+	private function get_restore_stage_dir() {
+		$app_dir  = $this->get_site_app_dir();
+		$app_real = realpath( $app_dir );
+
+		if ( false !== $app_real ) {
+			$parent     = dirname( $app_real );
+			// Both exist: realpath() resolved them.
+			$parent_stat = stat( $parent );
+			$app_stat    = stat( $app_real );
+			if ( $parent_stat['dev'] === $app_stat['dev'] && is_writable( $parent ) ) {
+				return $parent . '/' . self::RESTORE_STAGE_DIR;
+			}
+		}
+
+		return $app_dir . '/' . self::RESTORE_STAGE_DIR . '/stage';
+	}
+
+	/**
+	 * Dir the php container reads and writes during a restore (core download, DB dumps); /var/www/.ee-restore inside.
+	 *
+	 * @return string
+	 */
+	private function get_restore_scratch_dir() {
+		return $this->get_site_app_dir() . '/' . self::RESTORE_STAGE_DIR;
+	}
+
+	private function get_restore_journal_file() {
+		return EE_BACKUP_DIR . '/' . $this->site_data['site_url'] . '.restore.json';
+	}
+
+	private function write_restore_journal() {
+		$this->fs->dumpFile( $this->get_restore_journal_file(), json_encode( $this->restore_txn, JSON_PRETTY_PRINT ) );
+	}
+
+	/**
+	 * Refuse to extract a backup that doesn't fit next to the current files, which stay until the restore is done (BKP-6).
+	 *
+	 * @param string $backup_app  Site archive.
+	 * @param string $app_dir     Site app/ dir.
+	 * @param int    $extra_bytes Space needed on top of the extracted archive.
+	 */
+	private function check_restore_disk_space( $backup_app, $app_dir, $extra_bytes ) {
+		$listing = EE::launch( sprintf( 'unzip -Zt %s', escapeshellarg( $backup_app ) ) );
+
+		if ( $listing->return_code || ! preg_match( '/([0-9]+) bytes uncompressed/', $listing->stdout, $matches ) ) {
+			EE::error( sprintf( 'Could not read the backup archive %s; it may be corrupt. The site was not changed.', basename( $backup_app ) ) );
+		}
+
+		$required = (float) $matches[1] + $extra_bytes;
+		if ( ! empty( $this->site_data['db_name'] ) ) {
+			$required += $this->get_db_size(); // Copy of the current DB, kept for a rollback.
+		}
+		$required = (int) ceil( $required * 1.1 );
+
+		$free_space = disk_free_space( $app_dir );
+		if ( false === $free_space ) {
+			EE::error( 'Unable to determine free disk space for the site directory.' );
+		}
+
+		EE::debug( sprintf( 'Restore needs %d bytes next to the site files, %d free.', $required, $free_space ) );
+
+		if ( $required > $free_space ) {
+			EE::error(
+				sprintf(
+					"Not enough disk space to restore the backup next to the current site files.\n" .
+					"Required: %s (%s bytes)\n" .
+					"Available: %s (%s bytes)\n" .
+					'Please free up some space and try again. The site was not changed.',
+					$this->format_bytes( $required ),
+					number_format( $required ),
+					$this->format_bytes( $free_space ),
+					number_format( $free_space )
+				)
+			);
+		}
+	}
+
+	/**
+	 * @param string   $zip      Archive.
+	 * @param string   $dest     Directory to extract into.
+	 * @param string[] $patterns Entries to extract (all when empty).
+	 * @param string[] $excludes Entries to skip.
+	 *
+	 * @return bool False when no entry matched $patterns.
+	 */
+	private function extract_to_stage( $zip, $dest, $patterns = [], $excludes = [] ) {
+		$command = sprintf( 'unzip -qq -o %s', escapeshellarg( $zip ) );
+		foreach ( $patterns as $pattern ) {
+			$command .= ' ' . escapeshellarg( $pattern );
+		}
+		if ( ! empty( $excludes ) ) {
+			$command .= ' -x';
+			foreach ( $excludes as $exclude ) {
+				$command .= ' ' . escapeshellarg( $exclude );
+			}
+		}
+		// No stdin: on a full disk unzip asks "Continue? (y/n)" and would wait on the user's terminal.
+		$command .= ' -d ' . escapeshellarg( $dest ) . ' < /dev/null';
+
+		$result = EE::launch( $command );
+
+		// unzip: 1 = warnings only, 11 = no matching entry.
+		if ( 11 === $result->return_code && ! empty( $patterns ) ) {
+			return false;
+		}
+		if ( $result->return_code > 1 ) {
+			EE::error( sprintf( 'Failed to extract the backup archive (unzip exit code %d). %s', $result->return_code, trim( $result->stdout . ' ' . $result->stderr ) ) );
+		}
+
+		return true;
+	}
+
+	/**
+	 * Move the backup's DB dump out of the staged files.
+	 *
+	 * @param string $sql_dir Directory the archive's sql/ was extracted to.
+	 */
+	private function stage_db_dump( $sql_dir ) {
+		if ( empty( $this->site_data['db_name'] ) ) {
+			return;
+		}
+
+		$dump = $sql_dir . '/' . $this->site_data['site_url'] . '.sql';
+		if ( ! $this->fs->exists( $dump ) ) {
+			EE::error( sprintf( 'The backup has no database dump (sql/%s). The site was not changed.', basename( $dump ) ) );
+		}
+
+		$this->rename_or_fail( $dump, $this->restore_txn['stage'] . '/db.sql' );
+		// Only the dump is ours; a site's own sql/ dir stays.
+		if ( is_dir( $sql_dir ) && empty( $this->list_dir( $sql_dir ) ) ) {
+			rmdir( $sql_dir );
+		}
+
+		$this->restore_txn['has_db'] = true;
+	}
+
+	/**
+	 * Swap every top-level entry of app/ (dotfiles included, BKP-14) for the staged one; entries missing from the backup go.
+	 */
+	private function plan_app_swap() {
+		$app_dir = $this->get_site_app_dir();
+		$new     = $this->restore_txn['new'];
+		$names   = array_unique( array_merge( $this->list_dir( $app_dir ), $this->list_dir( $new ) ) );
+		sort( $names );
+
+		foreach ( $names as $name ) {
+			if ( self::RESTORE_STAGE_DIR !== $name ) {
+				$this->add_restore_pair( $app_dir . '/' . $name, $new . '/' . $name );
+			}
+		}
+	}
+
+	/**
+	 * Stage a pre-format-2 WordPress archive: wp-config.php, wp-content and the DB replace only those parts of the site.
+	 *
+	 * @param string $backup_app Site archive.
+	 * @param string $wp_root    WordPress root relative to app/.
+	 */
+	private function stage_legacy_wp_archive( $backup_app, $wp_root ) {
+		$app_dir  = $this->get_site_app_dir();
+		$stage    = $this->restore_txn['stage'];
+		$new_root = $this->restore_txn['new'] . '/' . $wp_root;
+		$live_wc  = $app_dir . '/' . $wp_root . '/wp-content';
+		$live_up  = $live_wc . '/uploads';
+		$new_wc   = $new_root . '/wp-content';
+		$new_up   = $new_wc . '/uploads';
+
+		$this->fs->mkdir( $new_root );
+
+		// Never the wp-content/uploads symlink entry some 7-Zip builds stored: restoring it made an uploads/uploads loop (BKP-10).
+		if ( ! $this->extract_to_stage( $backup_app, $new_root, [ 'wp-content/*' ], [ 'wp-content/uploads' ] ) ) {
+			EE::error( 'The backup archive has no wp-content directory. The site was not changed.' );
+		}
+
+		// wp-config.php was taken from one level above the WordPress root.
+		if ( $this->extract_to_stage( $backup_app, dirname( $new_root ), [ 'wp-config.php' ] ) ) {
+			$this->add_restore_pair( dirname( $app_dir . '/' . $wp_root ) . '/wp-config.php', dirname( $new_root ) . '/wp-config.php' );
+		}
+
+		if ( ! empty( $this->site_data['db_name'] ) ) {
+			$this->extract_to_stage( $backup_app, $stage, [ 'sql/' . $this->site_data['site_url'] . '.sql' ] );
+			$this->stage_db_dump( $stage . '/sql' );
+		}
+
+		$keep_live_uploads = false;
+		if ( is_link( $live_up ) ) {
+			$keep_live_uploads = true;
+			$target            = realpath( $live_up );
+			$app_real          = realpath( $app_dir );
+			$wc_real           = realpath( $live_wc );
+
+			if ( ! $this->path_exists( $new_up ) ) {
+				EE::warning( 'The backup has no uploaded files (only the wp-content/uploads symlink); the current uploads are kept.' );
+			} elseif ( false !== $target && is_dir( $target ) && 0 === strpos( $target, $app_real . '/' ) && ( false === $wc_real || 0 !== strpos( $target . '/', $wc_real . '/' ) ) ) {
+				// The files go where the link points, swapped like the rest.
+				$this->rename_or_fail( $new_up, $stage . '/uploads' );
+				$this->add_restore_pair( $target, $stage . '/uploads' );
+			} else {
+				// Inside wp-content they are already in the archive; outside the site they are not written through the link.
+				$this->fs->remove( $new_up );
+				if ( false === $target || 0 !== strpos( $target, $app_real . '/' ) ) {
+					EE::warning( sprintf( 'wp-content/uploads links outside the site (%s); the uploaded files in the backup were not restored.', readlink( $live_up ) ) );
+				}
+			}
+		} elseif ( ! $this->path_exists( $new_up ) && $this->path_exists( $live_up ) ) {
+			$keep_live_uploads = true;
+			EE::warning( 'The backup has no uploaded files; the current uploads are kept.' );
+		}
+
+		if ( $keep_live_uploads ) {
+			// Moved aside, then back into the restored wp-content.
+			$aside = count( $this->restore_txn['pairs'] );
+			$this->add_restore_pair( $live_up );
+			$this->add_restore_pair( $live_wc, $new_wc );
+			$this->add_restore_pair( $live_up, $this->restore_txn['pairs'][ $aside ]['old'] );
+		} else {
+			$this->add_restore_pair( $live_wc, $new_wc );
+		}
+	}
+
+	/**
+	 * Download WordPress core in the container and move it into the staged WordPress root.
+	 *
+	 * @param string $wp_version Version from meta.json.
+	 * @param string $wp_root    WordPress root relative to app/.
+	 * @param bool   $legacy     Also swap each core entry of the live site (pre-format-2 backups).
+	 */
+	private function stage_wp_core( $wp_version, $wp_root, $legacy ) {
+		$scratch  = $this->get_restore_scratch_dir();
+		$core_dir = $scratch . '/core';
+		$new_root = $this->restore_txn['new'] . '/' . $wp_root;
+
+		$this->fs->mkdir( [ $core_dir, $new_root ] );
+		$real_new  = realpath( $this->restore_txn['new'] );
+		$real_root = realpath( $new_root );
+		if ( false === $real_root || ( $real_root !== $real_new && 0 !== strpos( $real_root, $real_new . '/' ) ) ) {
+			EE::error( 'The WordPress root of the backup is outside the site. The site was not changed.' );
+		}
+		$this->exec_or_fail( sprintf( 'chown -R www-data:www-data %s', escapeshellarg( $scratch ) ), 'Failed to prepare the WordPress core download.' );
+
+		// Same download, extraction and checksum gate as site creation, but into the private core dir.
+		$core_download_command = \EE\Site\Utils\get_wp_core_download_command(
+			'/var/www/' . self::RESTORE_STAGE_DIR . '/core',
+			[
+				'version' => $wp_version,
+				'force'   => true,
+			]
+		);
+		$this->run_checked_shell_command( $core_download_command, 'Failed to download WordPress core for restore. The site was not changed.' );
+
+		$core_entries = array_diff( $this->list_dir( $core_dir ), [ 'wp-content' ] );
+		if ( ! in_array( 'wp-includes', $core_entries, true ) ) {
+			EE::error( 'The WordPress core download is incomplete. The site was not changed.' );
+		}
+
+		foreach ( $core_entries as $entry ) {
+			if ( $this->path_exists( $new_root . '/' . $entry ) ) {
+				$this->fs->remove( $new_root . '/' . $entry );
+			}
+			$this->rename_or_fail( $core_dir . '/' . $entry, $new_root . '/' . $entry );
+		}
+		$this->fs->remove( $core_dir );
+
+		if ( $legacy ) {
+			$live_root = $this->get_site_app_dir() . '/' . $wp_root;
+			foreach ( array_unique( array_merge( $core_entries, self::WP_CORE_ENTRIES ) ) as $entry ) {
+				$this->add_restore_pair( $live_root . '/' . $entry, $new_root . '/' . $entry );
+			}
+		}
+	}
+
+	/**
+	 * Replace the live files, DB and config with the staged ones; any failure from here on is rolled back.
+	 *
+	 * @param string $backup_dir Local directory holding the downloaded backup.
+	 */
+	private function apply_restore_transaction( $backup_dir ) {
+		$stage = $this->restore_txn['stage'];
+
+		$this->exec_or_fail( sprintf( 'chown -R www-data:www-data %s', escapeshellarg( $this->restore_txn['new'] ) ), 'Failed to set the owner of the restored files.' );
+		if ( $this->fs->exists( $stage . '/uploads' ) ) {
+			$this->exec_or_fail( sprintf( 'chown -R www-data:www-data %s', escapeshellarg( $stage . '/uploads' ) ), 'Failed to set the owner of the restored files.' );
+		}
+
+		if ( ! empty( $this->restore_txn['has_db'] ) ) {
+			$this->snapshot_current_db();
+
+			$this->move_db_dump( $stage . '/db.sql', $this->get_restore_scratch_dir() . '/db.sql' );
+			$this->restore_txn['db'] = 'importing';
+			$this->write_restore_journal();
+			$this->restore_db( 'db.sql', self::RESTORE_STAGE_DIR );
+		}
+
+		$this->swap_in_restore_pairs();
+
+		if ( 'wp' === $this->site_data['site_type'] ) {
+			$this->ensure_wp_cli_yml();
+			$this->set_wp_config_db_constants();
+		}
+
+		$this->snapshot_site_config();
+		$this->restore_nginx_conf( $backup_dir );
 		if ( in_array( $this->site_data['site_type'], [ 'php', 'wp' ], true ) ) {
 			$this->restore_php_conf( $backup_dir );
 		}
+
+		$this->commit_restore_transaction();
+
+		if ( 'wp' === $this->site_data['site_type'] ) {
+			$flush = EE::launch( $this->get_ee_shell_command( 'wp cache flush --skip-plugins --skip-themes' ) );
+			if ( $flush->return_code ) {
+				EE::warning( 'Could not flush the WordPress object cache.' );
+			}
+		}
 	}
 
-	private function restore_wp( $backup_dir ) {
-		$backup_app = $backup_dir . '/' . $this->site_data['site_url'] . '.zip';
+	/**
+	 * Dump the current DB so a failed restore can put it back.
+	 */
+	private function snapshot_current_db() {
+		EE::log( 'Saving the current database.' );
 
-		if ( ! $this->fs->exists( $backup_app ) ) {
-			$this->rclone_download( $backup_dir );
+		$scratch = $this->get_restore_scratch_dir();
+		$this->fs->mkdir( $scratch );
+		$this->exec_or_fail( sprintf( 'chown www-data:www-data %s', escapeshellarg( $scratch ) ), 'Failed to prepare the database copy.' );
+
+		$command = sprintf( 'mysqldump --defaults-extra-file=%s --skip-ssl --single-transaction %s > /var/www/%s/db-before.sql', $this->write_mysql_defaults_file(), $this->get_shell_safe_db_name(), self::RESTORE_STAGE_DIR );
+		$result  = EE::launch( $this->get_ee_shell_command( $command ) );
+		$this->remove_mysql_defaults_files();
+
+		clearstatcache();
+		if ( $result->return_code || ! is_file( $scratch . '/db-before.sql' ) || 0 === filesize( $scratch . '/db-before.sql' ) ) {
+			EE::error( 'Could not save the current database before the restore. The site was not changed. ' . trim( $result->stderr ) );
 		}
 
-		EE::log( 'Restoring site files.' );
+		// Out of the container's reach until a rollback needs it.
+		$this->move_db_dump( $scratch . '/db-before.sql', $this->restore_txn['stage'] . '/db-before.sql' );
+		$this->restore_txn['db'] = 'saved';
+		$this->write_restore_journal();
+	}
 
-		$container_fs_path = $this->site_data['site_container_fs_path'];
-		$container_fs_path = str_replace( '/var/www/', '', $container_fs_path );
-		$site_dir          = EE_ROOT_DIR . '/sites/' . $this->site_data['site_url'] . '/app/' . $container_fs_path;
+	private function move_db_dump( $from, $to ) {
+		$this->rename_or_fail( $from, $to );
+		if ( 0 === strpos( $to, $this->get_restore_scratch_dir() . '/' ) ) {
+			EE::exec( sprintf( 'chown www-data:www-data %s', escapeshellarg( $to ) ) );
+		}
+	}
 
-		$unzip_meta_command = sprintf( 'unzip -o %s meta.json -d %s', $backup_app, $backup_dir );
-		EE::exec( $unzip_meta_command );
+	/**
+	 * Copy the site's nginx and php config so a rollback can put it back.
+	 */
+	private function snapshot_site_config() {
+		$config_dir = EE_ROOT_DIR . '/sites/' . $this->site_data['site_url'] . '/config';
+		$saved_dir  = $this->restore_txn['stage'] . '/config-before';
 
-		$meta_data  = json_decode( file_get_contents( $backup_dir . '/meta.json' ), true );
-		$wp_version = $meta_data['wordpressVersion'];
+		foreach ( [ 'nginx', 'php' ] as $dir ) {
+			if ( is_dir( $config_dir . '/' . $dir ) ) {
+				$this->fs->mkdir( $saved_dir . '/' . $dir );
+				$this->exec_or_fail( sprintf( 'rsync -a %s/ %s/', escapeshellarg( $config_dir . '/' . $dir ), escapeshellarg( $saved_dir . '/' . $dir ) ), 'Could not save the current site configuration.' );
+			}
+		}
 
-		// $wp_version is read from the backup's meta.json and interpolated into the
-		// shell command below (which runs through `bash -c` in the container), so a
-		// crafted value could otherwise inject shell tokens. A WordPress version
-		// only ever contains [0-9A-Za-z.-]; strip anything else so no shell
-		// metacharacter can survive either shell layer.
-		$wp_version = preg_replace( '/[^0-9A-Za-z.\-]/', '', (string) $wp_version );
+		$this->restore_txn['conf'] = true;
+		$this->write_restore_journal();
+	}
 
-		// Same download, extraction and checksum gate as site creation (see get_wp_core_download_command()).
-		$args       = [ 'shell', $this->site_data['site_url'] ];
-		$assoc_args = [
-			'command' => \EE\Site\Utils\get_wp_core_download_command(
-				$this->site_data['site_container_fs_path'],
-				[
-					'version' => $wp_version,
-					'force'   => true,
-				]
-			),
+	private function swap_in_restore_pairs() {
+		foreach ( $this->restore_txn['pairs'] as $i => $pair ) {
+			if ( $this->path_exists( $pair['live'] ) ) {
+				$this->set_restore_pair_state( $i, 'out' );
+				$this->rename_or_fail( $pair['live'], $pair['old'] );
+			}
+			if ( null !== $pair['new'] && $this->path_exists( $pair['new'] ) ) {
+				$this->set_restore_pair_state( $i, 'in' );
+				$this->fs->mkdir( dirname( $pair['live'] ) );
+				$this->rename_or_fail( $pair['new'], $pair['live'] );
+			}
+		}
+	}
+
+	private function set_restore_pair_state( $index, $state ) {
+		$this->restore_txn['pairs'][ $index ]['state'] = $state;
+		$this->write_restore_journal();
+	}
+
+	/**
+	 * @param string      $live Live path.
+	 * @param string|null $new  Staged replacement; none = the live entry is removed.
+	 */
+	private function add_restore_pair( $live, $new = null ) {
+		$this->restore_txn['pairs'][] = [
+			'live'  => $live,
+			'new'   => $new,
+			'old'   => $this->restore_txn['stage'] . '/old/' . count( $this->restore_txn['pairs'] ),
+			'state' => 'pending',
 		];
-		$options    = [ 'skip-tty' => true ];
-		EE::run_command( $args, $assoc_args, $options );
+	}
 
-		$this->maybe_restore_wp_config( $backup_dir );
+	private function commit_restore_transaction() {
+		$stage = $this->restore_txn['stage'];
 
-		$restore_command = sprintf( 'unzip -o %s sql/%s.sql -d %s/app/', $backup_app, $this->site_data['site_url'], $this->site_data['site_fs_path'] );
-		EE::exec( $restore_command );
+		// Marked first: a kill during the cleanup below must not roll back a finished restore.
+		$this->restore_txn['committed'] = true;
+		$this->write_restore_journal();
+		$this->restore_txn = null;
+		try {
+			$this->fs->remove( [ $this->get_restore_journal_file(), $stage, $this->get_restore_scratch_dir() ] );
+		} catch ( \Throwable $e ) {
+			EE::warning( sprintf( 'Could not remove the previous site files in %s: %s', $stage, $e->getMessage() ) );
+		}
+	}
 
-		$this->restore_db( $this->site_data['site_url'] . '.sql', 'sql' );
-		$this->fs->remove( $this->site_data['site_fs_path'] . '/app/sql' );
+	/**
+	 * Undo a restore in reverse order: config, files, then DB. Best effort; keeps the stage when anything fails.
+	 *
+	 * @return bool
+	 */
+	private function rollback_restore_transaction() {
+		$txn        = $this->restore_txn;
+		$ok         = true;
+		$config_dir = EE_ROOT_DIR . '/sites/' . $this->site_data['site_url'] . '/config';
 
-		$uploads_moved = false;
-		// if wp-content/uploads is symlink, then move it one level up
-		if ( is_link( $site_dir . '/wp-content/uploads' ) ) {
-			// move the symlink one level up for time being
-			$mv_command = sprintf( 'mv %s/wp-content/uploads %s/uploads', $site_dir, $site_dir );
-			EE::exec( $mv_command );
-			$uploads_moved = true;
+		if ( ! empty( $txn['conf'] ) ) {
+			foreach ( [ 'nginx', 'php' ] as $dir ) {
+				$saved = $txn['stage'] . '/config-before/' . $dir;
+				if ( is_dir( $saved ) && ! EE::exec( sprintf( 'rsync -a --delete %s/ %s/', escapeshellarg( $saved ), escapeshellarg( $config_dir . '/' . $dir ) ) ) ) {
+					EE::warning( sprintf( 'Could not put back the %s configuration.', $dir ) );
+					$ok = false;
+				}
+			}
 		}
 
-		// Remove all files from wp-content except uploads
-		$this->fs->remove( $site_dir . '/wp-content' );
-
-		$wp_content_command = sprintf( "unzip -o %s 'wp-content/*' -x 'wp-content/uploads/*' -d %s", $backup_app, $site_dir );
-		EE::exec( $wp_content_command );
-
-		if ( $uploads_moved ) {
-			// move the uploads directory back to wp-content
-			$mv_command = sprintf( 'mv %s/uploads %s/wp-content/uploads', $site_dir, $site_dir );
-			EE::exec( $mv_command );
+		for ( $i = count( $txn['pairs'] ) - 1; $i >= 0; $i-- ) {
+			$pair = $txn['pairs'][ $i ];
+			if ( 'in' === $pair['state'] && $this->path_exists( $pair['live'] ) && ! $this->path_exists( $pair['new'] ) ) {
+				$this->fs->mkdir( dirname( $pair['new'] ) );
+				$ok = $this->rename_quietly( $pair['live'], $pair['new'] ) && $ok;
+			}
+			if ( $this->path_exists( $pair['old'] ) ) {
+				$ok = ! $this->path_exists( $pair['live'] ) && $this->rename_quietly( $pair['old'], $pair['live'] ) && $ok;
+			}
 		}
 
-		$uploads_command = sprintf( "unzip -o %s 'wp-content/uploads/*' -d %s", $backup_app, $site_dir );
-		EE::exec( $uploads_command );
+		if ( 'importing' === $txn['db'] ) {
+			$scratch = $this->get_restore_scratch_dir();
+			$this->fs->mkdir( $scratch );
+			EE::exec( sprintf( 'chown www-data:www-data %s', escapeshellarg( $scratch ) ) );
+			$result = null;
+			if ( $this->rename_quietly( $txn['stage'] . '/db-before.sql', $scratch . '/db-before.sql' ) ) {
+				EE::exec( sprintf( 'chown www-data:www-data %s', escapeshellarg( $scratch . '/db-before.sql' ) ) );
+				// The DB name was checked when the restore began; no EE::error() may run in a shutdown handler.
+				$command = sprintf( 'mysql --defaults-extra-file=%s --skip-ssl %s < /var/www/%s/db-before.sql 2>&1', $this->write_mysql_defaults_file(), $this->site_data['db_name'], self::RESTORE_STAGE_DIR );
+				$result  = EE::launch( $this->get_ee_shell_command( $command ) );
+				$this->remove_mysql_defaults_files();
+				$this->rename_quietly( $scratch . '/db-before.sql', $txn['stage'] . '/db-before.sql' );
+			}
+			if ( null === $result || $result->return_code ) {
+				EE::warning( 'Could not put back the previous database. ' . ( $result ? trim( $result->stdout . ' ' . $result->stderr ) : '' ) );
+				$ok = false;
+			}
+		}
 
-		$this->maybe_restore_custom_docker_compose( $backup_dir );
+		if ( $ok ) {
+			$this->restore_txn = null;
+			$this->fs->remove( [ $this->get_restore_journal_file(), $txn['stage'], $this->get_restore_scratch_dir() ] );
+		}
 
-		$chown_command = sprintf( 'chown -R www-data:www-data %s/app/', $this->site_data['site_fs_path'] );
-		EE::exec( $chown_command );
+		return $ok;
+	}
 
-		$this->restore_nginx_conf( $backup_dir );
-		$this->restore_php_conf( $backup_dir );
+	/**
+	 * Shutdown handler: a restore that exits before its commit is rolled back while the site lock is still held.
+	 */
+	public function rollback_restore_on_shutdown() {
+		if ( null === $this->restore_txn ) {
+			return;
+		}
 
-		$args       = [ 'shell', $this->site_data['site_url'] ];
-		$assoc_args = [ 'command' => 'wp cache flush --skip-plugins --skip-themes' ];
-		$options    = [ 'skip-tty' => true ];
+		if ( ! $this->restore_has_changes( $this->restore_txn ) ) {
+			$this->fs->remove( [ $this->get_restore_journal_file(), $this->restore_txn['stage'], $this->get_restore_scratch_dir() ] );
+			$this->restore_txn = null;
+			EE::log( 'The site was not changed.' );
 
-		EE::run_command( $args, $assoc_args, $options );
+			return;
+		}
+
+		$stage = $this->restore_txn['stage'];
+		EE::warning( 'The restore did not complete. Rolling the site back.' );
+		if ( $this->rollback_restore_transaction() ) {
+			EE::log( 'Rolled back: the site files, database and configuration are as they were before the restore.' );
+		} else {
+			EE::warning( sprintf( 'The rollback did not complete. The previous site files are in %s/old and the previous database in %s/db-before.sql; the next `ee site restore` retries the rollback.', $stage, $stage ) );
+		}
+	}
+
+	/**
+	 * Roll back a restore that was killed before it finished (its journal is left in EE_BACKUP_DIR).
+	 */
+	private function recover_interrupted_restore() {
+		$journal_file = $this->get_restore_journal_file();
+		$journal      = $this->fs->exists( $journal_file ) ? json_decode( (string) file_get_contents( $journal_file ), true ) : null;
+
+		if ( is_array( $journal ) && isset( $journal['stage'], $journal['pairs'], $journal['db'] ) && empty( $journal['committed'] ) && is_dir( $journal['stage'] ) && $this->restore_has_changes( $journal ) ) {
+			EE::warning( 'An earlier restore of this site did not finish. Rolling it back first.' );
+			$this->restore_txn = $journal;
+			if ( ! $this->rollback_restore_transaction() ) {
+				$this->restore_txn = null;
+				EE::error( sprintf( 'Could not roll back the earlier restore; its files are in %s. Fix the problem above and run the restore again.', $journal['stage'] ) );
+			}
+			EE::log( 'The earlier restore was rolled back.' );
+		}
+
+		$this->fs->remove( [ $journal_file, $this->get_restore_stage_dir(), $this->get_restore_scratch_dir() ] );
+	}
+
+	/**
+	 * A backup of a site left half-restored would replace good backups through retention.
+	 */
+	private function ensure_no_interrupted_restore() {
+		$journal_file = $this->get_restore_journal_file();
+		$journal      = $this->fs->exists( $journal_file ) ? json_decode( (string) file_get_contents( $journal_file ), true ) : null;
+
+		// A journal without its stage dir is from a deleted site: nothing to roll back.
+		if ( is_array( $journal ) && isset( $journal['stage'], $journal['pairs'], $journal['db'] ) && empty( $journal['committed'] ) && is_dir( $journal['stage'] ) && $this->restore_has_changes( $journal ) ) {
+			$this->capture_error( 'An interrupted restore left the site in an inconsistent state', self::ERROR_TYPE_VALIDATION, 1004 );
+			$this->fs->remove( EE_BACKUP_DIR . '/' . $this->site_data['site_url'] . '.lock' );
+			EE::error( sprintf( 'An earlier restore of %1$s did not finish, so the site may be half restored. Run `ee site restore %1$s` (it rolls the earlier restore back first), then back up again.', $this->site_data['site_url'] ) );
+		}
+	}
+
+	private function restore_has_changes( $txn ) {
+		if ( ! empty( $txn['conf'] ) || 'importing' === $txn['db'] ) {
+			return true;
+		}
+		foreach ( $txn['pairs'] as $pair ) {
+			if ( 'pending' !== $pair['state'] ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	private function ensure_wp_cli_yml() {
+		$container_fs_path = rtrim( str_replace( '/var/www/', '', $this->site_data['site_container_fs_path'] ), '/' );
+		$wp_cli_yml_path   = ltrim( str_replace( 'htdocs', '', $container_fs_path ), '/' );
+
+		if ( ! empty( $wp_cli_yml_path ) ) {
+			$this->fs->dumpFile( $this->site_data['site_fs_path'] . '/app/htdocs/wp-cli.yml', "path: $wp_cli_yml_path/" );
+		}
+	}
+
+	private function exec_or_fail( $command, $error_message ) {
+		if ( ! EE::exec( $command ) ) {
+			EE::error( $error_message );
+		}
+	}
+
+	private function rename_or_fail( $from, $to ) {
+		if ( ! $this->rename_quietly( $from, $to ) ) {
+			EE::error( sprintf( 'Failed to move %s to %s.', $from, $to ) );
+		}
+	}
+
+	private function rename_quietly( $from, $to ) {
+		$renamed = @rename( $from, $to ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- callers report the failure.
+		clearstatcache();
+
+		return $renamed;
+	}
+
+	private function path_exists( $path ) {
+		return file_exists( $path ) || is_link( $path );
+	}
+
+	/**
+	 * @param string $dir Directory.
+	 *
+	 * @return string[] Entry names, dotfiles included.
+	 */
+	private function list_dir( $dir ) {
+		$entries = is_dir( $dir ) ? scandir( $dir ) : false;
+
+		return false === $entries ? [] : array_values( array_diff( $entries, [ '.', '..' ] ) );
 	}
 
 	/**
@@ -928,7 +1695,8 @@ class Site_Backup_Restore {
 		$rclone_backend = explode( ':', $rclone_path )[0];
 		$rclone_path    = $rclone_backend . ':';
 
-		if ( strpos( $output->stdout, $rclone_path ) === false ) {
+		// Exact match: `myeasyengine:` must not satisfy `easyengine:` (BKP-12). On-the-fly remotes (":s3,…:bucket") have no name to check.
+		if ( '' !== $rclone_backend && ! in_array( $rclone_path, array_map( 'trim', explode( "\n", $output->stdout ) ), true ) ) {
 			$this->capture_error(
 				sprintf( 'rclone backend "%s" is not configured. Please create it using `rclone config`', $rclone_backend ),
 				self::ERROR_TYPE_CONFIG,
@@ -1062,6 +1830,9 @@ class Site_Backup_Restore {
 
 		$this->pre_backup_restore_checks();
 
+		// A restore killed mid-way (SIGKILL, OOM) is rolled back before anything else.
+		$this->recover_interrupted_restore();
+
 		$remote_path = $this->get_remote_path( false );
 		$command     = sprintf( 'rclone size --json %s', escapeshellarg( $remote_path ) );
 		$output      = EE::launch( $command );
@@ -1118,6 +1889,14 @@ class Site_Backup_Restore {
 
 		$backup_site_data = json_decode( file_get_contents( $backup_site_info ), true );
 
+		// A missing/corrupt metadata.json (or one lacking the keys compared below)
+		// would otherwise silently bypass the site-type / public-dir match checks.
+		if ( ! is_array( $backup_site_data ) || ! isset( $backup_site_data['site_type'], $backup_site_data['site_container_fs_path'] ) ) {
+			EE::error( 'Backup metadata is missing or corrupt. Cannot safely restore this backup.' );
+		}
+
+		$this->restore_metadata = $backup_site_data;
+
 		if ( $this->site_data['site_type'] !== $backup_site_data['site_type'] ) {
 			EE::error( 'Site type does not match with the backed up site.' );
 		}
@@ -1141,14 +1920,7 @@ class Site_Backup_Restore {
 		$this->fs->chmod( $site_dir, 0755 );
 
 		if ( 'wp' === $this->site_data['site_type'] ) {
-
-			$container_fs_path = rtrim( $container_fs_path, '/' );
-			$wp_cli_yml_path   = str_replace( 'htdocs', '', $container_fs_path );
-			$wp_cli_yml_path   = ltrim( $wp_cli_yml_path, '/' );
-
-			if ( ! empty( $wp_cli_yml_path ) ) {
-				$this->fs->dumpFile( $this->site_data['site_fs_path'] . '/app/htdocs/wp-cli.yml', "path: $wp_cli_yml_path/" );
-			}
+			$this->ensure_wp_cli_yml();
 		}
 
 		$chown_command = sprintf( 'chown -R www-data:www-data %s/app/', $this->site_data['site_fs_path'] );
@@ -1193,11 +1965,6 @@ class Site_Backup_Restore {
 
 
 	private function get_db_size() {
-		$user     = escapeshellarg( $this->site_data['db_user'] );
-		$password = escapeshellarg( $this->site_data['db_password'] );
-		$host     = escapeshellarg( $this->site_data['db_host'] );
-		$db_name  = escapeshellarg( $this->site_data['db_name'] );
-
 		$query = "
 			SELECT
 				table_schema AS 'Database',
@@ -1205,7 +1972,7 @@ class Site_Backup_Restore {
 			FROM
 				information_schema.TABLES
 			WHERE
-				table_schema = '" . $this->site_data['db_name'] . "'
+				table_schema = '" . str_replace( [ '\\', "'" ], [ '\\\\', "''" ], $this->site_data['db_name'] ) . "'
 			GROUP BY
 				table_schema;
 		";
@@ -1215,12 +1982,15 @@ class Site_Backup_Restore {
 		$this->fs->dumpFile( $query_file, $query );
 
 
-		$command = sprintf( "mysql --skip-ssl -u %s -p%s -h %s %s < /var/www/htdocs/db_size_query.sql", $user, $password, $host, $db_name );
+		// No credential in the command: it passes two shells on the host (BKP-15).
+		$defaults_file = $this->write_mysql_defaults_file();
+		$command       = sprintf( 'mysql --defaults-extra-file=%s --skip-ssl < /var/www/htdocs/db_size_query.sql', $defaults_file );
 
-		$output = EE::launch( "ee shell " . $this->site_data['site_url'] . " --skip-tty --command=\"$command\"" );
+		$output = EE::launch( 'ee shell ' . $this->site_data['site_url'] . ' --skip-tty --command=' . escapeshellarg( $command ) );
 
 
 		$this->fs->remove( $query_file );
+		$this->remove_mysql_defaults_files();
 
 
 		$size        = 0;
@@ -1236,53 +2006,271 @@ class Site_Backup_Restore {
 		return (int) $size;
 	}
 
-	private function list_remote_backups( $return = false ) {
+	private function list_remote_backups() {
 
-		$remote_path = $this->get_rclone_config_path(); // Get remote path without creating a new timestamped folder
+		$backups = $this->get_remote_backups();
 
-		$command = sprintf( 'rclone lsf --dirs-only %s', escapeshellarg( $remote_path ) ); // List only directories
-		$output  = EE::launch( $command );
-
-		if ( $output->return_code !== 0 && ! $return ) {
-			EE::error( "Error listing remote backups: " . $output->stderr ); // Display specific error
-		} elseif ( $output->return_code !== 0 ) {
-			return [];
+		if ( null === $backups ) {
+			EE::error( 'Error listing remote backups: ' . $this->rclone_error ); // Display specific error
 		}
 
-		$backups = explode( PHP_EOL, trim( $output->stdout ) );  // Remove extra whitespace and split
+		// This host's backups first (restore picks the newest of them), then pre-host-id ones, then other hosts' as <host-id>/<id>.
+		$all = array_merge( $backups['own'], $backups['legacy'], $backups['foreign'] );
 
-		if ( empty( $backups ) ) {
-			if ( ! $return ) {
-				EE::log( 'No remote backups found.' );
-			}
+		if ( empty( $all ) ) {
+			EE::log( 'No remote backups found.' );
 
-			return [];
+			return;
 		}
 
-		$backups = array_map(
-			function ( $backup ) {
-				return rtrim( $backup, '/' );
-			}, $backups
-		);
-
-		$backups = array_filter(
-			$backups, function ( $backup ) {
-			return preg_match( '/\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}/', $backup );
-		}
-		);
-
-		rsort( $backups );
-
-		if ( $return ) {
-			return $backups;
-		}
-
-		foreach ( $backups as $backup ) {
+		foreach ( $all as $backup ) {
 			EE::log( $backup );
 		}
-
 	}
 
+	/**
+	 * Backups of this site on the remote, each list newest first; null when rclone failed.
+	 *
+	 * @return array{own:string[],legacy:string[],foreign:string[]}|null own: this host's ids, legacy: ids directly under
+	 *                                                                   <rclone-path>/<site>/ (before BKP-8), foreign: <host-id>/<id> of other hosts.
+	 */
+	private function get_remote_backups() {
+		$site_root = $this->get_rclone_config_path();
+		$entries   = $this->list_remote_dirs( $site_root );
+
+		if ( null === $entries ) {
+			return null;
+		}
+
+		$own     = $this->get_backup_host_id();
+		$backups = [
+			'own'     => [],
+			'legacy'  => [],
+			'foreign' => [],
+		];
+
+		foreach ( $entries as $entry ) {
+			if ( $this->is_backup_id( $entry ) ) {
+				$backups['legacy'][] = $entry;
+				continue;
+			}
+			if ( ! $this->is_valid_backup_host_id( $entry ) ) {
+				continue;
+			}
+
+			$ids = $this->list_remote_dirs( $site_root . '/' . $entry );
+			if ( null === $ids ) {
+				if ( $entry === $own ) {
+					return null;
+				}
+				// Another host's dir we can't read must not block this host's own backups.
+				EE::warning( sprintf( 'Could not list the backups of host %s: %s', $entry, $this->rclone_error ) );
+				continue;
+			}
+			$ids = array_values( array_filter( $ids, [ $this, 'is_backup_id' ] ) );
+
+			if ( $entry === $own ) {
+				$backups['own'] = $ids;
+			} else {
+				foreach ( $ids as $id ) {
+					$backups['foreign'][] = $entry . '/' . $id;
+				}
+			}
+		}
+
+		rsort( $backups['own'] );
+		rsort( $backups['legacy'] );
+		usort(
+			$backups['foreign'],
+			function ( $a, $b ) {
+				return strcmp( basename( $b ), basename( $a ) );
+			}
+		);
+
+		return $backups;
+	}
+
+	/**
+	 * Directory names directly under $remote_dir; null when rclone failed.
+	 *
+	 * @param string $remote_dir rclone path.
+	 *
+	 * @return string[]|null
+	 */
+	private function list_remote_dirs( $remote_dir ) {
+		$output = EE::launch( sprintf( 'rclone lsf --dirs-only %s', escapeshellarg( $remote_dir ) ) );
+
+		if ( $output->return_code ) {
+			// Local and SFTP remotes fail for a missing dir where bucket remotes list nothing (SC-11).
+			if ( false !== stripos( $output->stderr, 'directory not found' ) ) {
+				return [];
+			}
+			$this->rclone_error = trim( $output->stderr );
+
+			return null;
+		}
+
+		return array_values(
+			array_filter(
+				array_map(
+					function ( $line ) {
+						return rtrim( trim( $line ), '/' );
+					},
+					explode( "\n", $output->stdout )
+				),
+				'strlen'
+			)
+		);
+	}
+
+	private function is_backup_id( $name ) {
+		return 1 === preg_match( self::BACKUP_ID_PATTERN, $name );
+	}
+
+	/**
+	 * Host directory names never look like backup ids, not even to the unanchored check of older EE versions,
+	 * so those neither list nor prune them.
+	 *
+	 * @param string $id Candidate.
+	 *
+	 * @return bool
+	 */
+	private function is_valid_backup_host_id( $id ) {
+		return 1 === preg_match( '/^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/', $id ) && ! preg_match( '/\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}/', $id );
+	}
+
+	/**
+	 * Per-host directory under <rclone-path>/<site>/, so hosts sharing a remote neither restore nor prune each other's
+	 * backups (BKP-8). `backup-host-id` in config.yml overrides the id generated once and kept in the EE database.
+	 *
+	 * @return string
+	 */
+	private function get_backup_host_id() {
+		if ( null !== $this->backup_host_id ) {
+			return $this->backup_host_id;
+		}
+
+		$configured = trim( (string) get_config_value( 'backup-host-id', '' ) );
+		if ( '' !== $configured ) {
+			if ( ! $this->is_valid_backup_host_id( $configured ) ) {
+				$this->capture_error( 'Invalid backup-host-id in config.yml', self::ERROR_TYPE_CONFIG, 2012 );
+				EE::error( sprintf( 'Invalid backup-host-id "%s" in config.yml: use up to 63 letters, digits, ".", "_" or "-", starting with a letter or digit.', $configured ) );
+			}
+
+			return $this->backup_host_id = $configured;
+		}
+
+		$stored = \EE\Model\Option::get( 'backup-host-id' );
+		if ( is_string( $stored ) && $this->is_valid_backup_host_id( $stored ) ) {
+			return $this->backup_host_id = $stored;
+		}
+
+		// Concurrent first backups (cron) must agree on one id.
+		$this->fs->mkdir( EE_BACKUP_DIR );
+		$lock = fopen( EE_BACKUP_DIR . '/backup-host-id.lock', 'c' );
+		if ( $lock ) {
+			flock( $lock, LOCK_EX );
+		}
+
+		$stored = \EE\Model\Option::get( 'backup-host-id' );
+		if ( is_string( $stored ) && $this->is_valid_backup_host_id( $stored ) ) {
+			$host_id = $stored;
+		} else {
+			// Readable in the bucket; the random part keeps two hosts with the same hostname apart.
+			$hostname = trim( substr( trim( preg_replace( '/[^a-z0-9-]+/', '-', strtolower( (string) gethostname() ) ), '-' ), 0, 40 ), '-' );
+			$host_id  = ( '' === $hostname ? 'host' : $hostname ) . '-' . bin2hex( random_bytes( 4 ) );
+			if ( ! $this->is_valid_backup_host_id( $host_id ) ) {
+				$host_id = 'host-' . bin2hex( random_bytes( 4 ) );
+			}
+			\EE\Model\Option::set( 'backup-host-id', $host_id );
+		}
+
+		if ( $lock ) {
+			flock( $lock, LOCK_UN );
+			fclose( $lock );
+		}
+
+		return $this->backup_host_id = $host_id;
+	}
+
+	/**
+	 * Remote path of the backup to restore: $backup_id (own, pre-host-id, or <host-id>/<id>), else this host's newest.
+	 *
+	 * @param string|null $backup_id Value of --id.
+	 *
+	 * @return string
+	 */
+	private function resolve_restore_path( $backup_id = null ) {
+		$backups = $this->get_remote_backups();
+
+		if ( null === $backups ) {
+			EE::error( 'Error listing remote backups: ' . $this->rclone_error );
+		}
+
+		$site_root = $this->get_rclone_config_path();
+		$host_root = $this->get_host_backup_root();
+
+		if ( $backup_id ) {
+			$backup_id = trim( $backup_id, '/' );
+			$own_id    = preg_replace( '#^' . preg_quote( $this->get_backup_host_id() . '/', '#' ) . '#', '', $backup_id );
+
+			if ( in_array( $own_id, $backups['own'], true ) ) {
+				return $host_root . '/' . $own_id;
+			}
+			if ( in_array( $backup_id, $backups['legacy'], true ) || in_array( $backup_id, $backups['foreign'], true ) ) {
+				return $site_root . '/' . $backup_id;
+			}
+
+			// A bare id seen on another host (e.g. restoring onto a replacement server).
+			$matches = array_values(
+				array_filter(
+					$backups['foreign'],
+					function ( $foreign ) use ( $backup_id ) {
+						return basename( $foreign ) === $backup_id;
+					}
+				)
+			);
+			if ( 1 === count( $matches ) ) {
+				EE::warning( sprintf( 'Backup %s was made on another host; restoring %s.', $backup_id, $matches[0] ) );
+
+				return $site_root . '/' . $matches[0];
+			}
+
+			EE::error( "Invalid backup ID provided.\nPlease provide a valid ID from the list using 'ee site backup --list " . $this->site_data['site_url'] . "'." );
+		}
+
+		if ( ! empty( $backups['own'] ) ) {
+			EE::log( 'Restoring from backup: ' . $backups['own'][0] );
+
+			return $host_root . '/' . $backups['own'][0];
+		}
+
+		if ( ! empty( $backups['legacy'] ) ) {
+			EE::warning( 'This host has no backup of the site in the per-host layout yet; using the newest backup of the old shared layout, which may come from another host that uses the same rclone-path.' );
+			EE::log( 'Restoring from backup: ' . $backups['legacy'][0] );
+
+			return $site_root . '/' . $backups['legacy'][0];
+		}
+
+		if ( ! empty( $backups['foreign'] ) ) {
+			EE::error(
+				sprintf(
+					"No backup of %s was made on this host (backup host id: %s). Backups made on other hosts:\n%s\nRestore one of them with --id=<host-id>/<backup-id>.",
+					$this->site_data['site_url'],
+					$this->get_backup_host_id(),
+					implode( "\n", $backups['foreign'] )
+				)
+			);
+		}
+
+		EE::error( sprintf( 'No backups found for %s.', $this->site_data['site_url'] ) );
+	}
+
+	/**
+	 * Remote dir of every backup of the site: this layout's <host-id>/ dirs plus pre-host-id backup ids.
+	 *
+	 * @return string
+	 */
 	private function get_rclone_config_path() {
 
 		$rclone_config_path = get_config_value( 'rclone-path', 'easyengine:easyengine' );
@@ -1291,30 +2279,43 @@ class Site_Backup_Restore {
 		return $rclone_config_path;
 	}
 
+	private function get_host_backup_root() {
+		return $this->get_rclone_config_path() . '/' . $this->get_backup_host_id();
+	}
+
 	private function get_remote_path( $upload = true ) {
 		if ( ! empty( $this->rclone_config_path ) ) {
 			return $this->rclone_config_path;
 		}
 
-		$this->rclone_config_path = $this->get_rclone_config_path();
-
-		$backups   = $this->list_remote_backups( true );
-		$timestamp = time() . '_' . date( 'Y-m-d-H-i-s' );
-
-		if ( ! empty( $backups ) ) {
-
-			if ( ! $upload ) {
-				// For restore: use the most recent backup
-				$timestamp = $backups[0];
-				EE::log( 'Restoring from backup: ' . $timestamp );
-			}
+		if ( $upload ) {
+			$this->rclone_config_path = $this->get_host_backup_root() . '/' . time() . '_' . date( 'Y-m-d-H-i-s' );
+		} else {
+			// For restore: this host's most recent backup.
+			$this->rclone_config_path = $this->resolve_restore_path();
 		}
-
-		$this->rclone_config_path .= '/' . $timestamp;
 
 		return $this->rclone_config_path;
 	}
 
+	/**
+	 * `no-of-backups` from config.yml; 0, negative or non-numeric values used to delete every backup (BKP-7).
+	 *
+	 * @return int At least 1.
+	 */
+	private function get_no_of_backups() {
+		$value = get_config_value( 'no-of-backups', self::DEFAULT_NO_OF_BACKUPS );
+
+		if ( is_int( $value ) || ( is_float( $value ) && floor( $value ) === $value ) || ( is_string( $value ) && ctype_digit( trim( $value ) ) ) ) {
+			if ( (int) $value >= 1 ) {
+				return (int) $value;
+			}
+		}
+
+		EE::warning( sprintf( 'Invalid no-of-backups value %s in config.yml: it must be a whole number of at least 1. Keeping the default of %d backups.', is_scalar( $value ) ? '"' . $value . '"' : gettype( $value ), self::DEFAULT_NO_OF_BACKUPS ) );
+
+		return self::DEFAULT_NO_OF_BACKUPS;
+	}
 
 	/**
 	 * Read currently-available memory in MB.
@@ -1494,10 +2495,7 @@ class Site_Backup_Restore {
 			EE::error( 'Error uploading backup to remote storage.' );
 		} else {
 
-			$command     = sprintf( 'rclone lsf %s', escapeshellarg( $this->get_remote_path( false ) ) );
-			$output      = EE::launch( $command );
-			$remote_path = $output->stdout;
-			EE::success( 'Backup uploaded to remote storage. Remote path: ' . $remote_path );
+			EE::success( 'Backup uploaded to remote storage. Remote path: ' . $this->get_remote_path() );
 
 			// Store the new backup path for potential rollback (only when using dash-auth)
 			if ( $this->dash_auth_enabled ) {
@@ -1597,10 +2595,19 @@ class Site_Backup_Restore {
 	 * Keeps only the configured number of most recent backups.
 	 */
 	private function cleanup_old_backups() {
-		$no_of_backups = intval( get_config_value( 'no-of-backups', 7 ) );
+		$no_of_backups = $this->get_no_of_backups();
 
-		// Get fresh list of backups after the new upload
-		$backups = $this->list_remote_backups( true );
+		// Only this host's backups: pre-host-id ones and other hosts' are never pruned here (BKP-8).
+		$backups = $this->list_remote_dirs( $this->get_host_backup_root() );
+
+		if ( null === $backups ) {
+			EE::warning( 'Could not list remote backups; old backups were not cleaned up.' );
+
+			return;
+		}
+
+		$backups = array_values( array_filter( $backups, [ $this, 'is_backup_id' ] ) );
+		rsort( $backups );
 
 		if ( empty( $backups ) ) {
 			return;
@@ -1608,12 +2615,13 @@ class Site_Backup_Restore {
 
 		// Check if we have more backups than allowed
 		if ( count( $backups ) > ( $no_of_backups + 1 ) ) {
-			$backups_to_delete = array_slice( $backups, $no_of_backups );
+			// Never the backup this run just uploaded, whatever the sort order says (BKP-7).
+			$backups_to_delete = array_diff( array_slice( $backups, $no_of_backups ), [ basename( $this->get_remote_path() ) ] );
 
 			EE::log( sprintf( 'Cleaning up old backups. Keeping %d most recent backups.', $no_of_backups ) );
 			foreach ( $backups_to_delete as $backup ) {
 				EE::log( 'Deleting old backup: ' . $backup );
-				$result = EE::launch( sprintf( 'rclone purge %s/%s', escapeshellarg( $this->get_rclone_config_path() ), escapeshellarg( $backup ) ) );
+				$result = EE::launch( sprintf( 'rclone purge %s', escapeshellarg( $this->get_host_backup_root() . '/' . $backup ) ) );
 				if ( $result->return_code ) {
 					EE::warning( 'Failed to delete old backup: ' . $backup );
 				} else {
@@ -1662,11 +2670,11 @@ class Site_Backup_Restore {
 		}
 
 		$restore_command = sprintf( 'cd %s && unzip -o conf.zip', $backup_dir );
-		EE::exec( $restore_command );
+		$this->exec_or_fail( $restore_command, 'Failed to extract the configuration from the backup.' );
 
 		if ( $this->fs->exists( $backup_dir . '/nginx' ) ) {
 			$restore_command = sprintf( 'rsync -a %s/nginx/ %s/config/nginx/', $backup_dir, EE_ROOT_DIR . '/sites/' . $this->site_data['site_url'] );
-			EE::exec( $restore_command );
+			$this->exec_or_fail( $restore_command, 'Failed to restore the nginx configuration.' );
 		}
 	}
 
@@ -1680,18 +2688,18 @@ class Site_Backup_Restore {
 		}
 		if ( ! $this->fs->exists( sprintf( '%s/php', $backup_dir ) ) ) {
 			$restore_command = sprintf( 'cd %s && unzip -o conf.zip', $backup_dir );
-			EE::exec( $restore_command );
+			$this->exec_or_fail( $restore_command, 'Failed to extract the configuration from the backup.' );
 		}
 
 		if ( $this->fs->exists( sprintf( '%s/php', $backup_dir ) ) ) {
-			$restore_command = sprintf( 'rsync -a %s/php/php-fpm.d/ %s/config/php/php-fpm.d/', $backup_dir, EE_ROOT_DIR . '/sites/' . $this->site_data['site_url'] );
-			EE::exec( $restore_command );
-
-			$restore_command = sprintf( 'rsync -a %s/php/php/php.ini %s/config/php/php/php.ini', $backup_dir, EE_ROOT_DIR . '/sites/' . $this->site_data['site_url'] );
-			EE::exec( $restore_command );
-
-			$restore_command = sprintf( 'rsync -a %s/php/php/conf.d/custom.ini %s/config/php/php/conf.d/custom.ini', $backup_dir, EE_ROOT_DIR . '/sites/' . $this->site_data['site_url'] );
-			EE::exec( $restore_command );
+			$site_root = EE_ROOT_DIR . '/sites/' . $this->site_data['site_url'];
+			foreach ( [ 'php-fpm.d/', 'php/php.ini', 'php/conf.d/custom.ini' ] as $conf ) {
+				// Only what the backup has; a failed copy rolls the restore back.
+				if ( $this->fs->exists( $backup_dir . '/php/' . rtrim( $conf, '/' ) ) ) {
+					$restore_command = sprintf( 'rsync -a %s/php/%s %s/config/php/%s', $backup_dir, $conf, $site_root, $conf );
+					$this->exec_or_fail( $restore_command, 'Failed to restore the php configuration.' );
+				}
+			}
 		}
 	}
 
