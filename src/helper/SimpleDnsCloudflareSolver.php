@@ -40,7 +40,14 @@ class SimpleDnsCloudflareSolver implements SolverInterface {
 	public function __construct( DnsDataExtractor $extractor = null, OutputInterface $output = null ) {
 		$this->extractor = null === $extractor ? new DnsDataExtractor() : $extractor;
 		$this->output    = null === $output ? new NullOutput() : $output;
-		$key             = new \Cloudflare\API\Auth\APIKey( get_config_value( 'le-mail' ), get_config_value( 'cloudflare-api-key' ) );
+
+		// If user has provided cloudflare-api-token config, then use it for authentication, otherwise fallback to hte legacy API key
+		if ( !empty( get_config_value( 'cloudflare-api-token' ) ) ) {
+			$key         = new \Cloudflare\API\Auth\APIToken( get_config_value( 'cloudflare-api-token' ) );
+		} else {
+			$key         = new \Cloudflare\API\Auth\APIKey( get_config_value( 'le-mail' ), get_config_value( 'cloudflare-api-key' ) );
+		}
+
 		$adapter         = new \Cloudflare\API\Adapter\Guzzle( $key );
 		$this->dns       = new \Cloudflare\API\Endpoints\DNS( $adapter );
 		$this->zones     = new \Cloudflare\API\Endpoints\Zones( $adapter );
@@ -81,7 +88,7 @@ class SimpleDnsCloudflareSolver implements SolverInterface {
 
 		if ( $manual ) {
 
-			EE::log( "Couldn't add dns record using cloudlfare API. Re-check the config values of `le-mail` and `cloudflare-api-key`." );
+			EE::log( "Couldn't add dns record using cloudlfare API. Re-check the config values of `cloudflare-api-token` OR `le-mail` and `cloudflare-api-key`." );
 
 			$this->output->writeln(
 				sprintf(
@@ -89,11 +96,11 @@ class SimpleDnsCloudflareSolver implements SolverInterface {
 		Add the following TXT record to your DNS zone
 			Domain: %s
 			TXT value: %s
-			
+
 		<comment>Wait for the propagation before moving to the next step</comment>
 		Tips: Use the following command to check the propagation
-	
-			host -t TXT %s	
+
+			host -t TXT %s
 EOF
 					,
 					$recordName,
