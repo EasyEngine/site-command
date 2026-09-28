@@ -424,6 +424,64 @@ function create_site_root( $site_fs_path, $site_url ) {
 }
 
 /**
+ * Name docker-compose gives the project of a site directory.
+ *
+ * @param string $site_url Name of the site.
+ *
+ * @return string
+ */
+function get_compose_project_name( $site_url ) {
+
+	return ltrim( preg_replace( '/[^a-z0-9_-]/', '', strtolower( $site_url ) ), '_-' );
+}
+
+/**
+ * Exits before anything is created if a new site would reuse another site's webroot, volumes or compose project.
+ *
+ * Volume names drop `.` and `-` from the site name and the compose project drops `.`, so different names can map
+ * to the same ones (`a-b.test`, `a.b.test`, `ab.test`). Existing sites keep their names, so the create is refused.
+ *
+ * @param string $site_url     Name of the new site.
+ * @param string $site_fs_path Webroot of the new site.
+ */
+function check_site_name_conflicts( $site_url, $site_fs_path ) {
+
+	$fs = new Filesystem();
+	if ( $fs->exists( $site_fs_path ) ) {
+		EE::error( "Webroot directory for site $site_url already exists." );
+	}
+
+	$prefix  = \EE_DOCKER::get_docker_style_prefix( $site_url );
+	$project = get_compose_project_name( $site_url );
+	$reason  = 'Please use a different site name.';
+
+	foreach ( Site::all( [ 'site_url' ] ) as $site ) {
+		if ( $site->site_url !== $site_url && \EE_DOCKER::get_docker_style_prefix( $site->site_url ) === $prefix ) {
+			EE::error( sprintf( 'Site %1$s would share docker volumes (%2$s_*) with the existing site %3$s. %4$s', $site_url, $prefix, $site->site_url, $reason ) );
+		}
+	}
+
+	// Leftovers of a deleted site with a colliding name would be mounted or adopted as they are.
+	$volumes = EE::launch( 'docker volume ls --format \'{{.Name}} {{.Label "io.easyengine.site"}}\'' );
+	foreach ( array_filter( explode( "\n", trim( $volumes->stdout ) ) ) as $line ) {
+		$parts = explode( ' ', trim( $line ), 2 );
+		$owner = isset( $parts[1] ) ? $parts[1] : '';
+		if ( 0 === strpos( $parts[0], $prefix . '_' ) && $owner !== $site_url ) {
+			EE::error( sprintf( 'Docker volume %1$s already exists%2$s, and site %3$s would use it. %4$s', $parts[0], $owner ? " (site $owner)" : '', $site_url, $reason ) );
+		}
+	}
+
+	$containers = EE::launch( sprintf( 'docker ps -a --filter %s --format \'{{.Names}} {{.Label "io.easyengine.site"}}\'', escapeshellarg( 'label=com.docker.compose.project=' . $project ) ) );
+	foreach ( array_filter( explode( "\n", trim( $containers->stdout ) ) ) as $line ) {
+		$parts = explode( ' ', trim( $line ), 2 );
+		$owner = isset( $parts[1] ) ? $parts[1] : '';
+		if ( $owner !== $site_url ) {
+			EE::error( sprintf( 'Container %1$s already belongs to the docker-compose project %2$s%3$s, which site %4$s would use. %5$s', $parts[0], $project, $owner ? " (site $owner)" : '', $site_url, $reason ) );
+		}
+	}
+}
+
+/**
  * Adds www to non-www redirection to site
  *
  * @param string $site_url name of the site.
