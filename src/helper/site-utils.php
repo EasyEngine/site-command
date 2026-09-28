@@ -135,7 +135,192 @@ function get_preferred_ssl_challenge( array $domains ) {
 }
 
 /**
+ * Waits up to a minute for the global database to accept root logins.
+ */
+function wait_for_global_db() {
+
+	$health_script  = 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e"exit"';
+	$db_script_path = \EE\Utils\get_temp_dir() . 'db_exec';
+	file_put_contents( $db_script_path, $health_script );
+	$mysql_unhealthy = true;
+	EE::exec( sprintf( 'docker cp %s %s:/db_exec', $db_script_path, GLOBAL_DB_CONTAINER ) );
+	$count = 0;
+	while ( $mysql_unhealthy ) {
+		$mysql_unhealthy = ! EE::exec( sprintf( 'docker exec %s sh db_exec', GLOBAL_DB_CONTAINER ) );
+		if ( $count ++ > 60 ) {
+			break;
+		}
+		sleep( 1 );
+	}
+}
+
+/**
+ * Quotes a value as an SQL string literal.
+ *
+ * @param string $value Value to quote.
+ *
+ * @return string
+ */
+function sql_quote_string( $value ) {
+
+	return "'" . str_replace( [ '\\', "'" ], [ '\\\\', "\\'" ], $value ) . "'";
+}
+
+/**
+ * Quotes a value as an SQL identifier.
+ *
+ * @param string $value Identifier to quote.
+ *
+ * @return string
+ */
+function sql_quote_identifier( $value ) {
+
+	return '`' . str_replace( '`', '``', $value ) . '`';
+}
+
+/**
+ * Runs SQL as root on the global database.
+ *
+ * The SQL goes through a file, so names and passwords never pass through a shell.
+ *
+ * @param string $sql SQL statements to run.
+ *
+ * @return bool|object Result of EE::launch(), or false if the SQL could not be copied to the container.
+ */
+function run_global_db_sql( $sql ) {
+
+	$sql_path = tempnam( \EE\Utils\get_temp_dir(), 'ee-db-' );
+	file_put_contents( $sql_path, $sql );
+	$container_path = '/tmp/' . basename( $sql_path ) . '.sql';
+	$copied         = EE::exec( sprintf( 'docker cp %s %s:%s', escapeshellarg( $sql_path ), GLOBAL_DB_CONTAINER, $container_path ) );
+	unlink( $sql_path );
+	if ( ! $copied ) {
+		return false;
+	}
+
+	$script = sprintf( 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -N -B < %1$s; rc=$?; rm -f %1$s; exit $rc', $container_path );
+
+	return EE::launch( sprintf( 'docker exec %s sh -c %s', GLOBAL_DB_CONTAINER, escapeshellarg( $script ) ) );
+}
+
+/**
+ * Runs a single-value query on the global database and exits if it cannot be answered.
+ *
+ * @param string $sql Query to run.
+ *
+ * @return bool Whether the query returned a row.
+ */
+function global_db_query_has_row( $sql ) {
+
+	$result = run_global_db_sql( $sql );
+	if ( ! $result || 0 !== $result->return_code ) {
+		EE::error( 'Could not query the global database. Please check if it is running (`ee service status db`) and see the logs.' );
+	}
+
+	return '' !== trim( $result->stdout );
+}
+
+/**
+ * Checks whether a database exists on the global database server.
+ *
+ * @param string $db_name Database name.
+ *
+ * @return bool
+ */
+function global_db_has_database( $db_name ) {
+
+	return global_db_query_has_row( sprintf( 'SELECT 1 FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = %s;', sql_quote_string( $db_name ) ) );
+}
+
+/**
+ * Checks whether a user exists on the global database server, for any host.
+ *
+ * @param string $db_user Database user.
+ *
+ * @return bool
+ */
+function global_db_has_user( $db_user ) {
+
+	return global_db_query_has_row( sprintf( 'SELECT 1 FROM mysql.user WHERE User = %s LIMIT 1;', sql_quote_string( $db_user ) ) );
+}
+
+/**
+ * Default database name of a site, cut to MySQL's 64-character limit.
+ *
+ * @param string $site_url Name of the site.
+ *
+ * @return string
+ */
+function get_default_db_name( $site_url ) {
+
+	return substr( str_replace( [ '.', '-' ], '_', $site_url ), 0, 64 );
+}
+
+/**
+ * Picks the database name of a new global-db site and refuses a database or user that is already taken.
+ *
+ * Taken means it exists on the server or another site uses it. An explicit --dbname or --dbuser is refused, because
+ * sharing it would let one site's delete or failed create drop the other's; a taken default name gets a suffix.
+ *
+ * @param string $db_name          Requested or default database name.
+ * @param string $db_user          Database user to be created.
+ * @param bool   $explicit_db_name Whether the name was passed with --dbname.
+ *
+ * @return string Database name to create.
+ */
+function reserve_global_db_names( $db_name, $db_user, $explicit_db_name ) {
+
+	wait_for_global_db();
+
+	$names_in_use = [];
+	$users_in_use = [];
+	foreach ( Site::all( [ 'site_url', 'db_host', 'db_name', 'db_user' ] ) as $site ) {
+		if ( GLOBAL_DB === $site->db_host ) {
+			$names_in_use[ $site->db_name ] = $site->site_url;
+			$users_in_use[ $site->db_user ] = $site->site_url;
+		}
+	}
+
+	if ( isset( $users_in_use[ $db_user ] ) || global_db_has_user( $db_user ) ) {
+		$owner = isset( $users_in_use[ $db_user ] ) ? " by site {$users_in_use[ $db_user ]}" : '';
+		EE::error( sprintf( 'Database user `%s` is already used%s on the global database. Please pass a different --dbuser, or leave it out to generate one.', $db_user, $owner ) );
+	}
+
+	if ( strlen( $db_name ) > 64 ) {
+		EE::error( sprintf( 'Database name `%s` is longer than 64 characters.', $db_name ) );
+	}
+
+	$is_taken = function ( $name ) use ( $names_in_use ) {
+		return isset( $names_in_use[ $name ] ) || global_db_has_database( $name );
+	};
+
+	if ( ! $is_taken( $db_name ) ) {
+		return $db_name;
+	}
+
+	if ( $explicit_db_name ) {
+		$owner = isset( $names_in_use[ $db_name ] ) ? " by site {$names_in_use[ $db_name ]}" : '';
+		EE::error( sprintf( 'Database `%s` is already used%s on the global database. Please pass a different --dbname, or leave it out to use a free default name.', $db_name, $owner ) );
+	}
+
+	for ( $i = 2; $i <= 100; $i++ ) {
+		$suffix    = '_' . $i;
+		$candidate = substr( $db_name, 0, 64 - strlen( $suffix ) ) . $suffix;
+		if ( ! $is_taken( $candidate ) ) {
+			EE::log( sprintf( 'Database `%s` already exists, using `%s` instead.', $db_name, $candidate ) );
+
+			return $candidate;
+		}
+	}
+
+	EE::error( sprintf( 'Could not find a free database name for `%s`. Please pass one with --dbname.', $db_name ) );
+}
+
+/**
  * Create user in remote or global db.
+ *
+ * On the global db either both the database and the user are created, or neither: an object that already exists
+ * makes its CREATE fail, and only what this call created is dropped again.
  *
  * @param string $db_host Database Hostname.
  * @param string $db_name Database name to be created.
@@ -150,30 +335,29 @@ function create_user_in_db( $db_host, $db_name = '', $db_user = '', $db_pass = '
 	$db_user = empty( $db_user ) ? \EE\Utils\random_password( 5 ) : $db_user;
 	$db_pass = empty( $db_pass ) ? \EE\Utils\random_password() : $db_pass;
 
-	// TODO: Create database only if it does not exist.
-	$create_string = sprintf( 'CREATE USER "%1$s"@"%%" IDENTIFIED BY "%2$s"; CREATE DATABASE `%3$s`; GRANT ALL PRIVILEGES ON `%3$s`.* TO "%1$s"@"%%"; FLUSH PRIVILEGES;', $db_user, $db_pass, $db_name );
-
 	if ( GLOBAL_DB === $db_host ) {
 
-		$health_script  = 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e"exit"';
-		$db_script_path = \EE\Utils\get_temp_dir() . 'db_exec';
-		file_put_contents( $db_script_path, $health_script );
-		$mysql_unhealthy = true;
-		EE::exec( sprintf( 'docker cp %s %s:/db_exec', $db_script_path, GLOBAL_DB_CONTAINER ) );
-		$count = 0;
-		while ( $mysql_unhealthy ) {
-			$mysql_unhealthy = ! EE::exec( sprintf( 'docker exec %s sh db_exec', GLOBAL_DB_CONTAINER ) );
-			if ( $count ++ > 60 ) {
-				break;
-			}
-			sleep( 1 );
+		wait_for_global_db();
+
+		$user     = sql_quote_string( $db_user ) . "@'%'";
+		$database = sql_quote_identifier( $db_name );
+		$ok       = function ( $sql ) {
+			$result = run_global_db_sql( $sql );
+
+			return $result && 0 === $result->return_code;
+		};
+
+		if ( ! $ok( sprintf( 'CREATE USER %s IDENTIFIED BY %s;', $user, sql_quote_string( $db_pass ) ) ) ) {
+			return false;
 		}
+		if ( ! $ok( sprintf( 'CREATE DATABASE %s;', $database ) ) ) {
+			$ok( sprintf( 'DROP USER %s;', $user ) );
 
-		$db_script_path = \EE\Utils\get_temp_dir() . 'db_exec';
-		file_put_contents( $db_script_path, sprintf( 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e\'%s\'', $create_string ) );
+			return false;
+		}
+		if ( ! $ok( sprintf( 'GRANT ALL PRIVILEGES ON %s.* TO %s; FLUSH PRIVILEGES;', $database, $user ) ) ) {
+			$ok( sprintf( 'DROP DATABASE %s; DROP USER %s;', $database, $user ) );
 
-		EE::exec( sprintf( 'docker cp %s %s:/db_exec', $db_script_path, GLOBAL_DB_CONTAINER ) );
-		if ( ! EE::exec( sprintf( 'docker exec %s sh db_exec', GLOBAL_DB_CONTAINER ) ) ) {
 			return false;
 		}
 	} else {
@@ -197,14 +381,8 @@ function create_user_in_db( $db_host, $db_name = '', $db_user = '', $db_pass = '
  */
 function cleanup_db( $db_host, $db_name, $db_user = '', $db_pass = '' ) {
 
-	$cleanup_string = sprintf( 'DROP DATABASE `%s`;', $db_name );
-
 	if ( GLOBAL_DB === $db_host ) {
-		$db_script_path = \EE\Utils\get_temp_dir() . 'db_exec';
-		file_put_contents( $db_script_path, sprintf( 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e\'%s\'', $cleanup_string ) );
-
-		EE::exec( sprintf( 'docker cp %s %s:/db_exec', $db_script_path, GLOBAL_DB_CONTAINER ) );
-		EE::exec( sprintf( 'docker exec %s sh db_exec', GLOBAL_DB_CONTAINER ) );
+		run_global_db_sql( sprintf( 'DROP DATABASE %s;', sql_quote_identifier( $db_name ) ) );
 	}
 
 }
@@ -219,14 +397,8 @@ function cleanup_db( $db_host, $db_name, $db_user = '', $db_pass = '' ) {
  */
 function cleanup_db_user( $db_host, $db_user_to_be_cleaned, $db_privileged_pass = '', $db_privileged_user = 'root' ) {
 
-	$cleanup_string = sprintf( 'DROP USER \'%s\'@\'%%\';', $db_user_to_be_cleaned );
-
 	if ( GLOBAL_DB === $db_host ) {
-		$db_script_path = \EE\Utils\get_temp_dir() . 'db_exec';
-		file_put_contents( $db_script_path, sprintf( 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e"%s"', $cleanup_string ) );
-
-		EE::exec( sprintf( 'docker cp %s %s:/db_exec', $db_script_path, GLOBAL_DB_CONTAINER ) );
-		EE::exec( sprintf( 'docker exec %s sh db_exec', GLOBAL_DB_CONTAINER ) );
+		run_global_db_sql( sprintf( "DROP USER %s@'%%';", sql_quote_string( $db_user_to_be_cleaned ) ) );
 	}
 }
 
