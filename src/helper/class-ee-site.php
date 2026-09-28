@@ -204,6 +204,25 @@ abstract class EE_Site_Command {
 			'db_name' => $this->site_data['db_name'],
 		];
 
+		// Never drop a database or user that another site still uses.
+		if ( ! empty( $db_data ) ) {
+			$db_labels = [
+				'db_name' => 'database',
+				'db_user' => 'database user',
+			];
+			foreach ( Site::all( [ 'site_url', 'db_host', 'db_name', 'db_user' ] ) as $site ) {
+				if ( $site->site_url === $this->site_data['site_url'] || $site->db_host !== $db_data['db_host'] ) {
+					continue;
+				}
+				foreach ( $db_labels as $key => $label ) {
+					if ( ! empty( $db_data[ $key ] ) && $site->$key === $db_data[ $key ] ) {
+						\EE::warning( sprintf( 'Keeping %s `%s`: site %s uses it too.', $label, $db_data[ $key ], $site->site_url ) );
+						$db_data[ $key ] = '';
+					}
+				}
+			}
+		}
+
 		\EE::confirm( sprintf( 'Are you sure you want to delete %s?', $this->site_data['site_url'] ), $assoc_args );
 
 		if ( $this->site_data['site_ssl'] ) {
@@ -234,14 +253,14 @@ abstract class EE_Site_Command {
 	 * Function to delete the given site.
 	 *
 	 * @param int $level           Level of deletion.
-	 *                             Level - 0: No need of clean-up.
+	 *                             Level - 0: Nothing on disk was created; the site root is kept.
 	 *                             Level - 1: Clean-up only the site-root.
 	 *                             Level - 2: Try to remove network. The network may or may not have been created.
 	 *                             Level - 3: Disconnect & remove network and try to remove containers. The containers
 	 *                             may not have been created. Level - 4: Remove containers. Level - 5: Remove db entry.
 	 * @param string $site_url     Name of the site to be deleted.
 	 * @param string $site_fs_path Webroot of the site.
-	 * @param array $db_data       Database host, user and password to cleanup db.
+	 * @param array $db_data       Database host, name and user to drop; an empty name or user is kept.
 	 *
 	 * @throws \EE\ExitException
 	 */
@@ -276,11 +295,16 @@ abstract class EE_Site_Command {
 		}
 
 		if ( ! empty( $db_data['db_host'] ) ) {
-			\EE\Site\Utils\cleanup_db( $db_data['db_host'], $db_data['db_name'] );
-			\EE\Site\Utils\cleanup_db_user( $db_data['db_host'], $db_data['db_user'] );
+			if ( ! empty( $db_data['db_name'] ) ) {
+				\EE\Site\Utils\cleanup_db( $db_data['db_host'], $db_data['db_name'] );
+			}
+			if ( ! empty( $db_data['db_user'] ) ) {
+				\EE\Site\Utils\cleanup_db_user( $db_data['db_host'], $db_data['db_user'] );
+			}
 		}
 
-		if ( $this->fs->exists( $site_fs_path ) ) {
+		// At level 0 the webroot was not created by this run: it may belong to someone else.
+		if ( $level > 0 && $this->fs->exists( $site_fs_path ) ) {
 			try {
 				$this->fs->remove( $site_fs_path );
 			} catch ( \Exception $e ) {
