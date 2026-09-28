@@ -559,6 +559,11 @@ abstract class EE_Site_Command {
 				}
 			}
 
+			// Resolve le-mail before the site drops HTTPS; the renewal below would otherwise exit mid-update without reverting.
+			if ( 'le' === $this->site_data['site_ssl'] && ! isset( $this->le_mail ) ) {
+				$this->le_mail = $this->get_validated_le_mail( \EE::get_runner()->config['le-mail'] ?? null );
+			}
+
 			$final_alias_domains = array_merge( $existing_alias_domains, $domains_to_add );
 			$final_alias_domains = array_diff( $final_alias_domains, $domains_to_delete );
 
@@ -1567,7 +1572,10 @@ abstract class EE_Site_Command {
 		$this->site_data['site_fs_path']      = $site_fs_path;
 		$this->site_data['site_ssl_wildcard'] = $wildcard;
 		$client                               = new Site_Letsencrypt();
-		$this->le_mail                        = \EE::get_runner()->config['le-mail'] ?? \EE::input( 'Enter your mail id: ' );
+		if ( ! isset( $this->le_mail ) ) {
+			// Throws instead of exiting so site create/update can roll back.
+			$this->le_mail = $this->get_validated_le_mail( \EE::get_runner()->config['le-mail'] ?? null );
+		}
 		\EE::get_runner()->ensure_present_in_config( 'le-mail', $this->le_mail );
 		if ( ! $client->register( $this->le_mail ) ) {
 			$this->site_data['site_ssl'] = null;
@@ -1602,6 +1610,31 @@ abstract class EE_Site_Command {
 				return;
 			}
 		}
+	}
+
+	/**
+	 * Resolves and validates the Let's Encrypt account email.
+	 *
+	 * `??` only guards null/unset, so an empty/garbage le-mail (e.g. an empty STDIN
+	 * read during non-interactive cron runs) used to slip through to ACME and fail
+	 * with an opaque error. Validate here so callers always get a real email.
+	 *
+	 * @param string|null $config_mail Email resolved from config by the caller, if any.
+	 *
+	 * @return string A non-empty, valid email address.
+	 * @throws \Exception If no valid email can be resolved.
+	 */
+	private function get_validated_le_mail( $config_mail = null ) {
+		$mail = $config_mail;
+		if ( empty( $mail ) || ! filter_var( $mail, FILTER_VALIDATE_EMAIL ) ) {
+			// One re-prompt for interactive users; on non-interactive runs STDIN is empty and this stays empty.
+			$mail = \EE::input( 'Enter your mail id: ' );
+		}
+		if ( empty( $mail ) || ! filter_var( $mail, FILTER_VALIDATE_EMAIL ) ) {
+			throw new \Exception( 'A valid Let\'s Encrypt email is required. Set it with `ee config set le-mail <email>`.' );
+		}
+
+		return $mail;
 	}
 
 	/**
@@ -1717,7 +1750,11 @@ abstract class EE_Site_Command {
 		}
 
 		if ( ! isset( $this->le_mail ) ) {
-			$this->le_mail = \EE::get_config( 'le-mail' ) ?? \EE::input( 'Enter your mail id: ' );
+			try {
+				$this->le_mail = $this->get_validated_le_mail( \EE::get_config( 'le-mail' ) );
+			} catch ( \Exception $e ) {
+				EE::error( $e->getMessage() );
+			}
 		}
 
 		$force         = \EE\Utils\get_flag_value( $assoc_args, 'force' );
@@ -1982,10 +2019,6 @@ abstract class EE_Site_Command {
 
 		EE::log( 'Starting SSL cert renewal' );
 
-		if ( ! isset( $this->le_mail ) ) {
-			$this->le_mail = EE::get_config( 'le-mail' ) ?? EE::input( 'Enter your mail id: ' );
-		}
-
 		$force = get_flag_value( $assoc_args, 'force', false );
 		$all   = get_flag_value( $assoc_args, 'all', false );
 
@@ -2035,6 +2068,15 @@ abstract class EE_Site_Command {
 
 		if ( 'le' !== $this->site_data['site_ssl'] ) {
 			EE::error( 'Only Letsencrypt certificate renewal is supported.' );
+		}
+
+		// Resolve le-mail only after confirming the site is LE, so non-LE sites hit the site-type error first.
+		if ( ! isset( $this->le_mail ) ) {
+			try {
+				$this->le_mail = $this->get_validated_le_mail( EE::get_config( 'le-mail' ) );
+			} catch ( \Exception $e ) {
+				EE::error( $e->getMessage() );
+			}
 		}
 
 		$client              = new Site_Letsencrypt();
