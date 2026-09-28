@@ -351,6 +351,8 @@ class HTML extends EE_Site_Command {
 				$this->check_parent_site_certs( $this->site_data['site_url'] );
 			}
 
+			// Raised before the call: a signal during it is only handled once it returns.
+			$this->level = 1;
 			\EE\Site\Utils\create_site_root( $this->site_data['site_fs_path'], $this->site_data['site_url'] );
 			$this->level = 3;
 			$this->configure_site_files();

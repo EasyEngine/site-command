@@ -259,8 +259,7 @@ function get_default_db_name( $site_url ) {
 /**
  * Picks the database name of a new global-db site and refuses a database or user that is already taken.
  *
- * Taken means it exists on the server or another site uses it. An explicit --dbname or --dbuser is refused, because
- * sharing it would let one site's delete or failed create drop the other's; a taken default name gets a suffix.
+ * Taken means it exists on the server or another site uses it. A taken user or --dbname is refused, because sharing it would let one site's delete or failed create drop the other's; a taken default name gets a suffix.
  *
  * @param string $db_name          Requested or default database name.
  * @param string $db_user          Database user to be created.
@@ -319,8 +318,7 @@ function reserve_global_db_names( $db_name, $db_user, $explicit_db_name ) {
 /**
  * Create user in remote or global db.
  *
- * On the global db either both the database and the user are created, or neither: an object that already exists
- * makes its CREATE fail, and only what this call created is dropped again.
+ * On the global db either both the database and the user are created, or neither: an object that already exists makes its CREATE fail, and only what this call created is dropped again.
  *
  * @param string $db_host Database Hostname.
  * @param string $db_name Database name to be created.
@@ -355,8 +353,12 @@ function create_user_in_db( $db_host, $db_name = '', $db_user = '', $db_pass = '
 
 			return false;
 		}
-		if ( ! $ok( sprintf( 'GRANT ALL PRIVILEGES ON %s.* TO %s; FLUSH PRIVILEGES;', $database, $user ) ) ) {
-			$ok( sprintf( 'DROP DATABASE %s; DROP USER %s;', $database, $user ) );
+		// `_` and `%` are wildcards in a GRANT's database name: unescaped, `a_b` would also grant on `axb`.
+		$grant_on = sql_quote_identifier( addcslashes( $db_name, '\\_%' ) );
+		if ( ! $ok( sprintf( 'GRANT ALL PRIVILEGES ON %s.* TO %s; FLUSH PRIVILEGES;', $grant_on, $user ) ) ) {
+			// Separate calls: a batch stops at its first error.
+			$ok( sprintf( 'DROP DATABASE %s;', $database ) );
+			$ok( sprintf( 'DROP USER %s;', $user ) );
 
 			return false;
 		}
@@ -438,8 +440,7 @@ function get_compose_project_name( $site_url ) {
 /**
  * Exits before anything is created if a new site would reuse another site's webroot, volumes or compose project.
  *
- * Volume names drop `.` and `-` from the site name and the compose project drops `.`, so different names can map
- * to the same ones (`a-b.test`, `a.b.test`, `ab.test`). Existing sites keep their names, so the create is refused.
+ * Volume names drop `.` and `-` from the site name and the compose project keeps only `a-z0-9_-`, so different names can map to the same ones (`a-b.test`, `a.b.test`, `ab.test`, `_ab.test`). Existing sites keep their names, so the create is refused.
  *
  * @param string $site_url     Name of the new site.
  * @param string $site_fs_path Webroot of the new site.
@@ -456,8 +457,15 @@ function check_site_name_conflicts( $site_url, $site_fs_path ) {
 	$reason  = 'Please use a different site name.';
 
 	foreach ( Site::all( [ 'site_url' ] ) as $site ) {
-		if ( $site->site_url !== $site_url && \EE_DOCKER::get_docker_style_prefix( $site->site_url ) === $prefix ) {
+		if ( $site->site_url === $site_url ) {
+			continue;
+		}
+		if ( \EE_DOCKER::get_docker_style_prefix( $site->site_url ) === $prefix ) {
 			EE::error( sprintf( 'Site %1$s would share docker volumes (%2$s_*) with the existing site %3$s. %4$s', $site_url, $prefix, $site->site_url, $reason ) );
+		}
+		// A disabled site has no containers for the check below to find.
+		if ( get_compose_project_name( $site->site_url ) === $project ) {
+			EE::error( sprintf( 'Site %1$s would share the docker-compose project %2$s with the existing site %3$s. %4$s', $site_url, $project, $site->site_url, $reason ) );
 		}
 	}
 
