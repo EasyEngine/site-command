@@ -60,13 +60,9 @@ abstract class EE_Site_Command {
 	private $le_mail;
 
 	/**
-	 * @var resource $ssl_lock_handle Open file handle for the process-wide SSL lock.
+	 * @var resource $ssl_lock_handle Handle of the process-wide SSL lock.
 	 *
-	 * Static so the lock is held once per PHP process: `ssl-renew --all` runs every
-	 * per-site renewal in ONE process via EE::run_command, and flock denies a second
-	 * LOCK_EX on the same file from a different fd in the same process. One shared
-	 * handle lets the first acquire lock and every later acquire (any instance, nested
-	 * call, or --all iteration) see it already held and return immediately.
+	 * Static because `ssl-renew --all` renews every site in one process, and flock refuses a second handle there.
 	 */
 	private static $ssl_lock_handle;
 
@@ -1558,14 +1554,8 @@ abstract class EE_Site_Command {
 	/**
 	 * Acquire a process-wide lock serializing all SSL/ACME operations.
 	 *
-	 * Concurrent SSL runs (e.g. cron `ssl-renew --all` plus a manual `ee site ssl`)
-	 * read/write the same shared ACME state (certificate_order.json, account key,
-	 * acme-conf/var/{domain}/*), which corrupts JSON, duplicates ACME orders, and
-	 * overwrites the account key. This guards the three ACME entry points so only one
-	 * such operation runs per server at a time.
-	 *
-	 * Polls a non-blocking flock for up to $wait seconds, so the wait stays bounded and interruptible. The handle
-	 * is never released here; the kernel drops the flock when the process exits.
+	 * Concurrent runs share the HTTP-01 challenge files and vhost.d/default (wiped by cleanup()), proxy reloads and per-domain ACME state.
+	 * Polls for up to $wait seconds; the kernel drops the lock when the process exits.
 	 *
 	 * @param bool $throw Throw an exception instead of exiting, so callers that already changed site state can roll back.
 	 * @param int  $wait  Seconds to wait for a lock held by another process.
