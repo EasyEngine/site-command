@@ -502,9 +502,35 @@ class Site_Letsencrypt {
 		$crt_dest_file   = EE_ROOT_DIR . '/services/nginx-proxy/certs/' . $domain . '.crt';
 		$chain_dest_file = EE_ROOT_DIR . '/services/nginx-proxy/certs/' . $domain . '.chain.pem';
 
-		copy( $key_source_file, $key_dest_file );
-		copy( $crt_source_file, $crt_dest_file );
-		copy( $chain_source_file, $chain_dest_file );
+		// Stage temps in the destination dir and rename() them in, so a failed copy never leaves a half-written live key/cert.
+		// Each rename is atomic, the set is not; an already-renamed file is not rolled back.
+		$copy_map = [
+			$key_source_file   => $key_dest_file,
+			$crt_source_file   => $crt_dest_file,
+			$chain_source_file => $chain_dest_file,
+		];
+
+		$temp_files = [];
+		foreach ( $copy_map as $source => $dest ) {
+			$temp = $dest . '.tmp';
+			if ( ! copy( $source, $temp ) ) {
+				// Include the current temp: a failed copy may still have created a partial file.
+				array_map( 'unlink', array_filter( array_merge( array_keys( $temp_files ), [ $temp ] ), 'file_exists' ) );
+				throw new \Exception( sprintf( 'Failed to copy certificate file %s to %s.', $source, $temp ) );
+			}
+			$temp_files[ $temp ] = $dest;
+			// Keep the live file's mode on renewal, as the previous in-place copy() did.
+			if ( file_exists( $dest ) ) {
+				chmod( $temp, fileperms( $dest ) & 0777 );
+			}
+		}
+
+		foreach ( $temp_files as $temp => $dest ) {
+			if ( ! rename( $temp, $dest ) ) {
+				array_map( 'unlink', array_filter( array_keys( $temp_files ), 'file_exists' ) );
+				throw new \Exception( sprintf( 'Failed to move certificate file %s to %s.', $temp, $dest ) );
+			}
+		}
 	}
 
 	/**
