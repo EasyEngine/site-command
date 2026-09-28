@@ -946,9 +946,7 @@ abstract class EE_Site_Command {
 			$this->site_data['site_ssl'] = $ssl;
 
 			if ( $ssl ) {
-				// www_ssl_wrapper() skips cert work for custom SSL, so mirror the create
-				// path here: validate the provided key/crt and copy them into the
-				// nginx-proxy certs dir before enabling HTTPS, else the site serves a wrong cert.
+				// www_ssl_wrapper() skips cert work for custom SSL, so validate and copy the provided pair first.
 				if ( 'custom' === $ssl ) {
 					$this->validate_site_custom_ssl( get_flag_value( $assoc_args, 'ssl-key' ), get_flag_value( $assoc_args, 'ssl-crt' ) );
 					$this->custom_site_ssl();
