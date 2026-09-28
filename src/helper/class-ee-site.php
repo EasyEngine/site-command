@@ -580,6 +580,11 @@ abstract class EE_Site_Command {
 				}
 			}
 
+			// Resolve le-mail before the site drops HTTPS; the renewal below would otherwise exit mid-update without reverting.
+			if ( 'le' === $this->site_data['site_ssl'] && ! isset( $this->le_mail ) ) {
+				$this->le_mail = $this->get_validated_le_mail( \EE::get_runner()->config['le-mail'] ?? null );
+			}
+
 			$final_alias_domains = array_merge( $existing_alias_domains, $domains_to_add );
 			$final_alias_domains = array_diff( $final_alias_domains, $domains_to_delete );
 
