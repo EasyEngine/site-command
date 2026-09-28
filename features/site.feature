@@ -31,6 +31,17 @@ Feature: Site Command
     site.test
     """
 
+  Scenario: Add alias domain
+    When I run 'bin/ee site update site.test --add-alias-domains=alias.site.test '
+    And I run '/bin/bash -c 'echo "127.0.0.1 alias.site.test" >> /etc/hosts''
+    Then STDOUT should return exactly
+    """
+    Success: Alias domains updated on site site.test.
+    """
+      And Request on 'alias.site.test' should contain following headers:
+        | header           |
+        | HTTP/1.1 200 OK  |
+
   Scenario: Delete the sites
     When I run 'bin/ee site delete site.test --yes'
     Then STDOUT should return something like
@@ -45,3 +56,4 @@ Feature: Site Command
       And Following containers of site 'site.test' should be removed:
         | container  |
         | nginx      |
+
