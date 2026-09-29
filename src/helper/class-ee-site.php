@@ -1055,10 +1055,14 @@ abstract class EE_Site_Command {
 
 		EE::log( 'Starting SSL update for: ' . $this->site_data->site_url );
 		try {
+			$old_ssl                   = $this->site_data->site_ssl;
 			$this->site_data->site_ssl = $ssl;
 			// Keep the stored wildcard flag when turning SSL off, so the same SSL can be enabled again.
 			if ( $ssl ) {
 				$this->site_data->site_ssl_wildcard = $wildcard ? 1 : 0;
+			} elseif ( 'self' === $old_ssl && 'subdom' !== $this->site_data->app_sub_type ) {
+				// Self-signed certs are always wildcard, so the kept flag would refuse `--ssl=self` or `--ssl=le` without --wildcard.
+				$this->site_data->site_ssl_wildcard = 0;
 			}
 
 			$site                        = $this->site_data;
