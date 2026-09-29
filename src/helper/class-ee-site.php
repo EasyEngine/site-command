@@ -836,13 +836,19 @@ abstract class EE_Site_Command {
 				$written_files = $force ? $location_files : array_merge( [ $proxy_conf_location ], $location_files );
 				$backup        = \EE\Site\Utils\backup_files( $written_files );
 
-				if ( ! $force ) {
-					$this->fs->dumpFile( $proxy_conf_location, $proxy_conf_content );
-				}
+				try {
+					if ( ! $force ) {
+						$this->fs->dumpFile( $proxy_conf_location, $proxy_conf_content );
+					}
 
-				$proxy_vhost_content = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx-proxy/vhost_location.conf.mustache', $data );
-				foreach ( $location_files as $location_file ) {
-					$this->fs->dumpFile( $location_file, $proxy_vhost_content );
+					$proxy_vhost_content = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx-proxy/vhost_location.conf.mustache', $data );
+					foreach ( $location_files as $location_file ) {
+						$this->fs->dumpFile( $location_file, $proxy_vhost_content );
+					}
+				} catch ( \Exception $e ) {
+					// A write that fails part-way must not leave the files already written for the next reload.
+					\EE\Site\Utils\restore_files( $backup );
+					throw $e;
 				}
 			} else {
 				$reload = false;
