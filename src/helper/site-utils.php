@@ -1238,7 +1238,7 @@ function get_subnet_range( $ip, $mask ) {
  *
  * WP-CLI <= 2.12 extracts .tar.gz packages with PharData, which truncates paths longer than 100 bytes in the PAX headers of WordPress >= 6.7.2 en_US packages (wp-cli/wp-cli#6320). So WP-CLI only resolves, downloads and md5-checks the package here, and tar/unzip extract it. WP-CLI >= 3.0 saves a .zip instead (wp-cli/core-command#333).
  *
- * @return string Unescaped bash that defines wp_cli, ee_wp_fetch, ee_wp_extract and ee_wp_verify.
+ * @return string Unescaped bash that enables set -e and defines wp_cli, ee_wp_fetch, ee_wp_extract and ee_wp_verify.
  */
 function get_wp_core_shell_functions() {
 	return <<<'BASH'
@@ -1277,17 +1277,19 @@ ee_wp_extract() {
 			;;
 	esac
 }
-# ee_wp_verify <wp-root>: fails on missing or modified core files, only warns when checksums can't be checked.
+# ee_wp_verify <wp-root>: fails unless core verifies, but only warns when the checksums can't be fetched from WordPress.org.
 ee_wp_verify() {
 	local out
 	out=$(wp_cli core verify-checksums --path="$1" 2>&1) && return 0
 	case "$out" in
-		*"File doesn't exist:"* | *"File doesn't verify against checksum:"*)
-			printf '%s\n' "$out" >&2
-			return 1
+		*"File doesn't exist:"* | *"File doesn't verify against checksum:"*) ;;
+		*"Couldn't get checksums"* | *"api.wordpress.org"* | *"Failed to decode JSON"*)
+			printf 'Warning: Could not verify WordPress core checksums: %s\n' "$out" >&2
+			return 0
 			;;
 	esac
-	printf 'Warning: Could not verify WordPress core checksums: %s\n' "$out" >&2
+	printf '%s\n' "$out" >&2
+	return 1
 }
 
 BASH;
@@ -1319,13 +1321,23 @@ function get_wp_core_download_command( string $path, array $args = [] ) {
 			. ( empty( $args['skip-content'] ) ? '' : ' --skip-content' )
 			. ( empty( $args['force'] ) ? '' : ' --force' ) . "\n";
 	} else {
-		$script .= "tmp=\$(mktemp -d)\ntrap 'rm -rf \"\$tmp\"' EXIT\n"
-			. "pkg=\$(ee_wp_fetch \"\$tmp\"$download_args)\n";
+		if ( empty( $args['force'] ) ) {
+			// WP-CLI's own check only sees the temp dir it downloads into.
+			$script .= "if [ -e \"\$dest/wp-load.php\" ]; then echo 'Error: WordPress files seem to already be present here.' >&2; exit 1; fi\n";
+		}
+		// Extract into the temp dir first, so a failure leaves the existing core untouched.
+		$script .= "tmp=\$(mktemp -d)\ntrap 'rm -rf \"\$tmp\"' EXIT\nmkdir \"\$tmp/dl\"\n"
+			. "pkg=\$(ee_wp_fetch \"\$tmp/dl\"$download_args)\n"
+			. "if ! ee_wp_extract \"\$pkg\" \"\$tmp/wp\"; then\n"
+			// A package from WP-CLI's cache isn't md5-checked again, so fetch a fresh copy once.
+			. "\trm -rf \"\$tmp/dl\" \"\$tmp/wp\"\n\tmkdir \"\$tmp/dl\"\n"
+			. "\tpkg=\$(WP_CLI_CACHE_DIR=\"\$tmp/cache\" ee_wp_fetch \"\$tmp/dl\"$download_args)\n"
+			. "\tee_wp_extract \"\$pkg\" \"\$tmp/wp\"\nfi\n";
 		if ( ! empty( $args['force'] ) ) {
-			// Don't leave files of the previous core version behind.
+			// Drop wp-admin and wp-includes files of the previous core version.
 			$script .= "rm -rf \"\${dest:?}/wp-admin\" \"\${dest:?}/wp-includes\"\n";
 		}
-		$script .= "ee_wp_extract \"\$pkg\" \"\$dest\"\n";
+		$script .= "mkdir -p \"\$dest\"\ncp -R \"\$tmp/wp/.\" \"\$dest/\"\n";
 	}
 	// Nightly builds have no published checksums.
 	if ( ! $is_nightly ) {
