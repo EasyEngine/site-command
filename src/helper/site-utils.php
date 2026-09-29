@@ -3,7 +3,6 @@
 namespace EE\Site\Utils;
 
 use AcmePhp\Ssl\Certificate;
-use AcmePhp\Ssl\Parser\CertificateParser;
 use EE;
 use EE\Model\Option;
 use EE\Model\Site;
@@ -793,11 +792,8 @@ function configure_postfix( $site_url, $site_fs_path ) {
  */
 function reload_global_nginx_proxy() {
 
-	// Regenerate default.conf first so `nginx -t` validates the config that will actually be served.
-	\EE::launch( sprintf( 'docker exec %s sh -c "/app/docker-entrypoint.sh /usr/local/bin/docker-gen /app/nginx.tmpl /etc/nginx/conf.d/default.conf"', EE_PROXY_TYPE ) );
-
 	// `EE::launch()` returns a ProcessRun object (truthy), so gate on the exit code to avoid reloading a broken config.
-	$test = \EE::launch( sprintf( 'docker exec %s sh -c "nginx -t"', EE_PROXY_TYPE ) );
+	$test = test_global_nginx_proxy_config();
 	if ( 0 !== $test->return_code ) {
 		\EE::warning( 'nginx config test failed, skipping reload of ' . EE_PROXY_TYPE . ":\n" . $test->stderr );
 
@@ -805,6 +801,161 @@ function reload_global_nginx_proxy() {
 	}
 
 	return \EE::launch( sprintf( 'docker exec %s sh -c "/usr/sbin/nginx -s reload"', EE_PROXY_TYPE ) );
+}
+
+/**
+ * Regenerates the global proxy's default.conf and runs `nginx -t` on it.
+ *
+ * @param bool $retry_any_failure Retry once on any failure, not only on one reported in default.conf.
+ *
+ * @return \EE\ProcessRun Result of the last `nginx -t`.
+ */
+function test_global_nginx_proxy_config( $retry_any_failure = false ) {
+
+	$regenerate = sprintf( 'docker exec %s sh -c "/app/docker-entrypoint.sh /usr/local/bin/docker-gen /app/nginx.tmpl /etc/nginx/conf.d/default.conf"', EE_PROXY_TYPE );
+	$test_cmd   = sprintf( 'docker exec %s sh -c "nginx -t"', EE_PROXY_TYPE );
+
+	// Regenerate first so `nginx -t` validates the config that will actually be served.
+	\EE::launch( $regenerate );
+	$test = \EE::launch( $test_cmd );
+
+	// The proxy's own docker-gen rewrites default.conf in place after container events, so a test racing it can read a partial file.
+	if ( 0 !== $test->return_code && ( $retry_any_failure || false !== strpos( $test->stderr, '/etc/nginx/conf.d/default.conf' ) ) ) {
+		\EE::debug( "nginx config test failed, retrying once:\n" . $test->stderr );
+		sleep( 1 );
+		\EE::launch( $regenerate );
+		$test = \EE::launch( $test_cmd );
+	}
+
+	return $test;
+}
+
+/**
+ * Reads files so that they can be put back with `restore_files()`.
+ *
+ * @param array $paths Absolute file paths.
+ *
+ * @return array Path => content, or null for a file that does not exist.
+ *
+ * @throws \Exception When an existing file can't be read.
+ */
+function backup_files( array $paths ) {
+
+	$backup = [];
+	foreach ( array_unique( $paths ) as $path ) {
+		$content = is_file( $path ) ? file_get_contents( $path ) : null;
+		// Restoring a failed read would overwrite the file with an empty one.
+		if ( false === $content ) {
+			throw new \Exception( "Could not read $path to back it up." );
+		}
+		$backup[ $path ] = $content;
+	}
+
+	return $backup;
+}
+
+/**
+ * Puts files back as `backup_files()` found them: rewrites the ones that existed and removes the others.
+ *
+ * @param array $backup Return value of `backup_files()`.
+ */
+function restore_files( array $backup ) {
+
+	$fs = new Filesystem();
+	foreach ( $backup as $path => $content ) {
+		if ( null === $content ) {
+			if ( file_exists( $path ) ) {
+				$fs->remove( $path );
+			}
+		} else {
+			$fs->dumpFile( $path, $content );
+		}
+	}
+}
+
+/**
+ * Paths of the files a failed LE issuance must not leave changed: the served certificate, its ACME key pair, certificates and DN, and the www redirect.
+ *
+ * Authorization and order state is left out: the next order revokes and replaces it.
+ *
+ * @param string $site_url Name of the site.
+ *
+ * @return array Absolute file paths.
+ */
+function get_site_ssl_file_paths( $site_url ) {
+
+	$proxy_dir = EE_ROOT_DIR . '/services/nginx-proxy';
+	$acme_dir  = "$proxy_dir/acme-conf";
+
+	return [
+		"$proxy_dir/certs/$site_url.crt",
+		"$proxy_dir/certs/$site_url.key",
+		"$proxy_dir/certs/$site_url.chain.pem",
+		"$proxy_dir/conf.d/$site_url-redirect.conf",
+		"$acme_dir/certs/$site_url/private/key.public.pem",
+		"$acme_dir/certs/$site_url/private/key.private.pem",
+		"$acme_dir/certs/$site_url/private/combined.pem",
+		"$acme_dir/certs/$site_url/public/cert.pem",
+		"$acme_dir/certs/$site_url/public/chain.pem",
+		"$acme_dir/certs/$site_url/public/fullchain.pem",
+		"$acme_dir/var/$site_url/distinguished_name.json",
+	];
+}
+
+/**
+ * Removes a site's certificate files from nginx-proxy and its ACME state, whatever the site's current SSL type.
+ *
+ * @param string $site_url Name of the site.
+ * @param array  $domains  Other domains of the site (alias domains, www variant) whose ACME state goes too.
+ * @param array  $keep     Files to leave in place, e.g. a custom pair the user keeps in the certs dir.
+ */
+function remove_site_ssl_files( $site_url, array $domains = [], array $keep = [] ) {
+
+	$proxy_dir = EE_ROOT_DIR . '/services/nginx-proxy';
+	$paths     = [
+		"$proxy_dir/certs/$site_url.crt",
+		"$proxy_dir/certs/$site_url.key",
+		"$proxy_dir/certs/$site_url.chain.pem",
+		"$proxy_dir/acme-conf/certs/$site_url",
+	];
+
+	foreach ( array_unique( array_merge( [ $site_url ], $domains ) ) as $domain ) {
+		if ( '' !== $domain && false === strpos( $domain, '/' ) ) {
+			$paths[] = "$proxy_dir/acme-conf/var/$domain";
+		}
+	}
+
+	$keep  = array_filter( array_map( 'realpath', array_filter( $keep ) ) );
+	$paths = array_values(
+		array_filter(
+			$paths,
+			function ( $path ) use ( $keep ) {
+				return file_exists( $path ) && ! in_array( realpath( $path ), $keep, true );
+			}
+		)
+	);
+	if ( empty( $paths ) ) {
+		return;
+	}
+
+	\EE::log( 'Removing ssl certs and other config files.' );
+	try {
+		( new Filesystem() )->remove( $paths );
+	} catch ( \Exception $e ) {
+		\EE::warning( $e->getMessage() );
+	}
+}
+
+/**
+ * The www or non-www counterpart of a domain.
+ *
+ * @param string $domain Domain name.
+ *
+ * @return string
+ */
+function get_www_counterpart( $domain ) {
+
+	return 0 === strpos( $domain, 'www.' ) ? substr( $domain, 4 ) : 'www.' . $domain;
 }
 
 /**
@@ -1105,7 +1256,7 @@ function ssl_needs_creation( $site_url ) {
 
 	if ( file_exists( $certificatePath ) ) {
 		$certificate = new Certificate( file_get_contents( $certificatePath ) );
-		$certificateParser = new CertificateParser();
+		$certificateParser = new \EE\Site\Type\EECertificateParser();
 		$parsedCertificate = $certificateParser->parse( $certificate );
 
 		// 3024000 = 35 days.

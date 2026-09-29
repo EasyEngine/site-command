@@ -19,14 +19,17 @@ use AcmePhp\Core\Exception\Protocol\ChallengeNotSupportedException;
 use AcmePhp\Core\Exception\Protocol\CertificateRevocationException;
 use AcmePhp\Core\Exception\Server\RateLimitedServerException;
 use AcmePhp\Core\Protocol\AuthorizationChallenge;
+use AcmePhp\Core\Protocol\CertificateOrder;
 use AcmePhp\Core\Protocol\ResourcesDirectory;
 use AcmePhp\Core\Protocol\RevocationReason;
 use AcmePhp\Core\Http\Base64SafeEncoder;
 use AcmePhp\Core\Http\SecureHttpClient;
 use AcmePhp\Core\Http\ServerErrorHandler;
+use AcmePhp\Ssl\Certificate;
 use AcmePhp\Ssl\CertificateRequest;
 use AcmePhp\Ssl\DistinguishedName;
 use AcmePhp\Ssl\Generator\KeyPairGenerator;
+use AcmePhp\Ssl\ParsedCertificate;
 use AcmePhp\Ssl\Parser\CertificateParser;
 use AcmePhp\Ssl\Parser\KeyParser;
 use AcmePhp\Ssl\Signer\CertificateRequestSigner;
@@ -70,6 +73,65 @@ class EEAcmeClient extends AcmeClient {
 		return $this->account;
 	}
 
+	/**
+	 * Same as acmephp's requestOrder(), but skips challenges it can't represent.
+	 *
+	 * acmephp 1.3 reads a token from every challenge, so one without a token (the draft dns-persist-01 that Pebble 2.10 offers) made the whole order throw. Other types are kept as before: authorize() picks the one its solver supports, or a valid one.
+	 *
+	 * @param array $domains Domains to order a certificate for.
+	 *
+	 * @return CertificateOrder
+	 */
+	public function requestOrder( array $domains ) {
+		\Webmozart\Assert\Assert::allStringNotEmpty( $domains, 'requestOrder::$domains expected a list of strings. Got: %s' );
+
+		$payload = [
+			'identifiers' => array_map(
+				function ( $domain ) {
+					return [
+						'type'  => 'dns',
+						'value' => $domain,
+					];
+				},
+				array_values( $domains )
+			),
+		];
+
+		$client      = $this->getHttpClient();
+		$resourceUrl = $this->getResourceUrl( ResourcesDirectory::NEW_ORDER );
+		$response    = $client->request( 'POST', $resourceUrl, $client->signKidPayload( $resourceUrl, $this->getResourceAccount(), $payload ) );
+		if ( ! isset( $response['authorizations'] ) || ! $response['authorizations'] ) {
+			throw new ChallengeNotSupportedException();
+		}
+
+		$orderEndpoint            = $client->getLastLocation();
+		$authorizationsChallenges = [];
+		$base64encoder            = $client->getBase64Encoder();
+		foreach ( $response['authorizations'] as $authorizationEndpoint ) {
+			$authorizationsResponse = $client->request( 'POST', $authorizationEndpoint, $client->signKidPayload( $authorizationEndpoint, $this->getResourceAccount(), null ) );
+			$domain                 = ( empty( $authorizationsResponse['wildcard'] ) ? '' : '*.' ) . $authorizationsResponse['identifier']['value'];
+
+			// An empty list still reaches authorize(), which reports the domain as unsupported.
+			$authorizationsChallenges[ $domain ] = [];
+			foreach ( $authorizationsResponse['challenges'] as $challenge ) {
+				if ( empty( $challenge['token'] ) || ! is_string( $challenge['token'] ) || ! isset( $challenge['type'], $challenge['status'], $challenge['url'] ) ) {
+					\EE::debug( 'Skipping ACME challenge without a token: ' . ( $challenge['type'] ?? '(no type)' ) . ' for ' . $domain );
+					continue;
+				}
+				$authorizationsChallenges[ $domain ][] = new AuthorizationChallenge(
+					$authorizationsResponse['identifier']['value'],
+					$challenge['status'],
+					$challenge['type'],
+					$challenge['url'],
+					$challenge['token'],
+					$challenge['token'] . '.' . $base64encoder->encode( $client->getJWKThumbprint() )
+				);
+			}
+		}
+
+		return new CertificateOrder( $authorizationsChallenges, $orderEndpoint );
+	}
+
 	public function revokeAuthorizationChallenge(AuthorizationChallenge $challenge)
 	{
 		$payload = [
@@ -96,6 +158,42 @@ class EEAcmeClient extends AcmeClient {
 	}
 }
 
+
+/**
+ * acmephp's parser requires a subject CN, which certificates from LE's newer profiles (and Pebble's default one) don't have.
+ */
+class EECertificateParser extends CertificateParser {
+
+	public function parse( Certificate $certificate ) {
+		$rawData = openssl_x509_parse( $certificate->getPEM() );
+
+		if ( ! is_array( $rawData ) || isset( $rawData['subject']['CN'] ) || ! isset( $rawData['extensions']['subjectAltName'], $rawData['serialNumber'], $rawData['validFrom_time_t'], $rawData['validTo_time_t'] ) ) {
+			return parent::parse( $certificate );
+		}
+
+		$san = [];
+		foreach ( explode( ',', $rawData['extensions']['subjectAltName'] ) as $item ) {
+			if ( false !== strpos( $item, ':' ) ) {
+				$san[] = explode( ':', trim( $item ), 2 )[1];
+			}
+		}
+		if ( empty( $san ) ) {
+			return parent::parse( $certificate );
+		}
+
+		// Use the first SAN as the subject, as LE's classic profile does.
+		return new ParsedCertificate(
+			$certificate,
+			$san[0],
+			isset( $rawData['issuer']['CN'] ) ? $rawData['issuer']['CN'] : null,
+			$rawData['subject'] === $rawData['issuer'],
+			new \DateTime( '@' . $rawData['validFrom_time_t'] ),
+			new \DateTime( '@' . $rawData['validTo_time_t'] ),
+			$rawData['serialNumber'],
+			$san
+		);
+	}
+}
 
 class Site_Letsencrypt {
 
@@ -668,7 +766,7 @@ class Site_Letsencrypt {
 			\EE::log( "Loading current certificate for $domain" );
 
 			$certificate       = $this->repository->loadDomainCertificate( $domain );
-			$certificateParser = new CertificateParser();
+			$certificateParser = new EECertificateParser();
 			$parsedCertificate = $certificateParser->parse( $certificate );
 
 			if ( $parsedCertificate->getValidTo()->format( 'U' ) - time() < 0 ) {
@@ -699,7 +797,7 @@ class Site_Letsencrypt {
 		\EE::log( "Loading current certificate for $domain" );
 
 		$certificate       = $this->repository->loadDomainCertificate( $domain );
-		$certificateParser = new CertificateParser();
+		$certificateParser = new EECertificateParser();
 		$parsedCertificate = $certificateParser->parse( $certificate );
 
 		// 3024000 = 35 days.
@@ -749,7 +847,7 @@ class Site_Letsencrypt {
 			$certificate = $this->repository->loadDomainCertificate( $domain );
 
 			if ( ! $force ) {
-				$certificateParser = new CertificateParser();
+				$certificateParser = new EECertificateParser();
 				$parsedCertificate = $certificateParser->parse( $certificate );
 
 				// 3024000 = 35 days.
