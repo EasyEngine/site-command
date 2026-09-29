@@ -836,12 +836,19 @@ function test_global_nginx_proxy_config( $retry_any_failure = false ) {
  * @param array $paths Absolute file paths.
  *
  * @return array Path => content, or null for a file that does not exist.
+ *
+ * @throws \Exception When an existing file can't be read.
  */
 function backup_files( array $paths ) {
 
 	$backup = [];
 	foreach ( array_unique( $paths ) as $path ) {
-		$backup[ $path ] = is_file( $path ) ? file_get_contents( $path ) : null;
+		$content = is_file( $path ) ? file_get_contents( $path ) : null;
+		// Restoring a failed read would overwrite the file with an empty one.
+		if ( false === $content ) {
+			throw new \Exception( "Could not read $path to back it up." );
+		}
+		$backup[ $path ] = $content;
 	}
 
 	return $backup;
