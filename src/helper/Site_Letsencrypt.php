@@ -25,9 +25,11 @@ use AcmePhp\Core\Protocol\RevocationReason;
 use AcmePhp\Core\Http\Base64SafeEncoder;
 use AcmePhp\Core\Http\SecureHttpClient;
 use AcmePhp\Core\Http\ServerErrorHandler;
+use AcmePhp\Ssl\Certificate;
 use AcmePhp\Ssl\CertificateRequest;
 use AcmePhp\Ssl\DistinguishedName;
 use AcmePhp\Ssl\Generator\KeyPairGenerator;
+use AcmePhp\Ssl\ParsedCertificate;
 use AcmePhp\Ssl\Parser\CertificateParser;
 use AcmePhp\Ssl\Parser\KeyParser;
 use AcmePhp\Ssl\Signer\CertificateRequestSigner;
@@ -156,6 +158,42 @@ class EEAcmeClient extends AcmeClient {
 	}
 }
 
+
+/**
+ * acmephp's parser requires a subject CN, which certificates from LE's newer profiles (and Pebble's default one) don't have.
+ */
+class EECertificateParser extends CertificateParser {
+
+	public function parse( Certificate $certificate ) {
+		$rawData = openssl_x509_parse( $certificate->getPEM() );
+
+		if ( ! is_array( $rawData ) || isset( $rawData['subject']['CN'] ) || ! isset( $rawData['extensions']['subjectAltName'], $rawData['serialNumber'], $rawData['validFrom_time_t'], $rawData['validTo_time_t'] ) ) {
+			return parent::parse( $certificate );
+		}
+
+		$san = [];
+		foreach ( explode( ',', $rawData['extensions']['subjectAltName'] ) as $item ) {
+			if ( false !== strpos( $item, ':' ) ) {
+				$san[] = explode( ':', trim( $item ), 2 )[1];
+			}
+		}
+		if ( empty( $san ) ) {
+			return parent::parse( $certificate );
+		}
+
+		// Use the first SAN as the subject, as LE's classic profile does.
+		return new ParsedCertificate(
+			$certificate,
+			$san[0],
+			isset( $rawData['issuer']['CN'] ) ? $rawData['issuer']['CN'] : null,
+			$rawData['subject'] === $rawData['issuer'],
+			new \DateTime( '@' . $rawData['validFrom_time_t'] ),
+			new \DateTime( '@' . $rawData['validTo_time_t'] ),
+			$rawData['serialNumber'],
+			$san
+		);
+	}
+}
 
 class Site_Letsencrypt {
 
@@ -728,7 +766,7 @@ class Site_Letsencrypt {
 			\EE::log( "Loading current certificate for $domain" );
 
 			$certificate       = $this->repository->loadDomainCertificate( $domain );
-			$certificateParser = new CertificateParser();
+			$certificateParser = new EECertificateParser();
 			$parsedCertificate = $certificateParser->parse( $certificate );
 
 			if ( $parsedCertificate->getValidTo()->format( 'U' ) - time() < 0 ) {
@@ -759,7 +797,7 @@ class Site_Letsencrypt {
 		\EE::log( "Loading current certificate for $domain" );
 
 		$certificate       = $this->repository->loadDomainCertificate( $domain );
-		$certificateParser = new CertificateParser();
+		$certificateParser = new EECertificateParser();
 		$parsedCertificate = $certificateParser->parse( $certificate );
 
 		// 3024000 = 35 days.
@@ -809,7 +847,7 @@ class Site_Letsencrypt {
 			$certificate = $this->repository->loadDomainCertificate( $domain );
 
 			if ( ! $force ) {
-				$certificateParser = new CertificateParser();
+				$certificateParser = new EECertificateParser();
 				$parsedCertificate = $certificateParser->parse( $certificate );
 
 				// 3024000 = 35 days.

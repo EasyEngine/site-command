@@ -3,7 +3,6 @@
 namespace EE\Site\Utils;
 
 use AcmePhp\Ssl\Certificate;
-use AcmePhp\Ssl\Parser\CertificateParser;
 use EE;
 use EE\Model\Option;
 use EE\Model\Site;
@@ -1239,7 +1238,7 @@ function ssl_needs_creation( $site_url ) {
 
 	if ( file_exists( $certificatePath ) ) {
 		$certificate = new Certificate( file_get_contents( $certificatePath ) );
-		$certificateParser = new CertificateParser();
+		$certificateParser = new \EE\Site\Type\EECertificateParser();
 		$parsedCertificate = $certificateParser->parse( $certificate );
 
 		// 3024000 = 35 days.

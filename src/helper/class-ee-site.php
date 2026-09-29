@@ -2085,7 +2085,7 @@ abstract class EE_Site_Command {
 
 		try {
 			$certificate       = new \AcmePhp\Ssl\Certificate( file_get_contents( $crt_file ) );
-			$certificateParser = new \AcmePhp\Ssl\Parser\CertificateParser();
+			$certificateParser = new \EE\Site\Type\EECertificateParser();
 			$parsedCertificate = $certificateParser->parse( $certificate );
 
 			$issuer    = $parsedCertificate->getIssuer();
