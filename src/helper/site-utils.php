@@ -3,7 +3,6 @@
 namespace EE\Site\Utils;
 
 use AcmePhp\Ssl\Certificate;
-use AcmePhp\Ssl\Parser\CertificateParser;
 use EE;
 use EE\Model\Option;
 use EE\Model\Site;
@@ -135,7 +134,190 @@ function get_preferred_ssl_challenge( array $domains ) {
 }
 
 /**
+ * Waits up to a minute for the global database to accept root logins.
+ */
+function wait_for_global_db() {
+
+	$health_script  = 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e"exit"';
+	$db_script_path = \EE\Utils\get_temp_dir() . 'db_exec';
+	file_put_contents( $db_script_path, $health_script );
+	$mysql_unhealthy = true;
+	EE::exec( sprintf( 'docker cp %s %s:/db_exec', $db_script_path, GLOBAL_DB_CONTAINER ) );
+	$count = 0;
+	while ( $mysql_unhealthy ) {
+		$mysql_unhealthy = ! EE::exec( sprintf( 'docker exec %s sh db_exec', GLOBAL_DB_CONTAINER ) );
+		if ( $count ++ > 60 ) {
+			break;
+		}
+		sleep( 1 );
+	}
+}
+
+/**
+ * Quotes a value as an SQL string literal.
+ *
+ * @param string $value Value to quote.
+ *
+ * @return string
+ */
+function sql_quote_string( $value ) {
+
+	return "'" . str_replace( [ '\\', "'" ], [ '\\\\', "\\'" ], $value ) . "'";
+}
+
+/**
+ * Quotes a value as an SQL identifier.
+ *
+ * @param string $value Identifier to quote.
+ *
+ * @return string
+ */
+function sql_quote_identifier( $value ) {
+
+	return '`' . str_replace( '`', '``', $value ) . '`';
+}
+
+/**
+ * Runs SQL as root on the global database.
+ *
+ * The SQL goes through a file, so names and passwords never pass through a shell.
+ *
+ * @param string $sql SQL statements to run.
+ *
+ * @return bool|object Result of EE::launch(), or false if the SQL could not be copied to the container.
+ */
+function run_global_db_sql( $sql ) {
+
+	$sql_path = tempnam( \EE\Utils\get_temp_dir(), 'ee-db-' );
+	file_put_contents( $sql_path, $sql );
+	$container_path = '/tmp/' . basename( $sql_path ) . '.sql';
+	$copied         = EE::exec( sprintf( 'docker cp %s %s:%s', escapeshellarg( $sql_path ), GLOBAL_DB_CONTAINER, $container_path ) );
+	unlink( $sql_path );
+	if ( ! $copied ) {
+		return false;
+	}
+
+	$script = sprintf( 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -N -B < %1$s; rc=$?; rm -f %1$s; exit $rc', $container_path );
+
+	return EE::launch( sprintf( 'docker exec %s sh -c %s', GLOBAL_DB_CONTAINER, escapeshellarg( $script ) ) );
+}
+
+/**
+ * Runs a single-value query on the global database and exits if it cannot be answered.
+ *
+ * @param string $sql Query to run.
+ *
+ * @return bool Whether the query returned a row.
+ */
+function global_db_query_has_row( $sql ) {
+
+	$result = run_global_db_sql( $sql );
+	if ( ! $result || 0 !== $result->return_code ) {
+		EE::error( 'Could not query the global database. Please check if it is running (`ee service status db`) and see the logs.' );
+	}
+
+	return '' !== trim( $result->stdout );
+}
+
+/**
+ * Checks whether a database exists on the global database server.
+ *
+ * @param string $db_name Database name.
+ *
+ * @return bool
+ */
+function global_db_has_database( $db_name ) {
+
+	return global_db_query_has_row( sprintf( 'SELECT 1 FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = %s;', sql_quote_string( $db_name ) ) );
+}
+
+/**
+ * Checks whether a user exists on the global database server, for any host.
+ *
+ * @param string $db_user Database user.
+ *
+ * @return bool
+ */
+function global_db_has_user( $db_user ) {
+
+	return global_db_query_has_row( sprintf( 'SELECT 1 FROM mysql.user WHERE User = %s LIMIT 1;', sql_quote_string( $db_user ) ) );
+}
+
+/**
+ * Default database name of a site, cut to MySQL's 64-character limit.
+ *
+ * @param string $site_url Name of the site.
+ *
+ * @return string
+ */
+function get_default_db_name( $site_url ) {
+
+	return substr( str_replace( [ '.', '-' ], '_', $site_url ), 0, 64 );
+}
+
+/**
+ * Picks the database name of a new global-db site and refuses a database or user that is already taken.
+ *
+ * Taken means it exists on the server or another site uses it. A taken user or --dbname is refused, because sharing it would let one site's delete or failed create drop the other's; a taken default name gets a suffix.
+ *
+ * @param string $db_name          Requested or default database name.
+ * @param string $db_user          Database user to be created.
+ * @param bool   $explicit_db_name Whether the name was passed with --dbname.
+ *
+ * @return string Database name to create.
+ */
+function reserve_global_db_names( $db_name, $db_user, $explicit_db_name ) {
+
+	wait_for_global_db();
+
+	$names_in_use = [];
+	$users_in_use = [];
+	foreach ( Site::all( [ 'site_url', 'db_host', 'db_name', 'db_user' ] ) as $site ) {
+		if ( GLOBAL_DB === $site->db_host ) {
+			$names_in_use[ $site->db_name ] = $site->site_url;
+			$users_in_use[ $site->db_user ] = $site->site_url;
+		}
+	}
+
+	if ( isset( $users_in_use[ $db_user ] ) || global_db_has_user( $db_user ) ) {
+		$owner = isset( $users_in_use[ $db_user ] ) ? " by site {$users_in_use[ $db_user ]}" : '';
+		EE::error( sprintf( 'Database user `%s` is already used%s on the global database. Please pass a different --dbuser, or leave it out to generate one.', $db_user, $owner ) );
+	}
+
+	if ( strlen( $db_name ) > 64 ) {
+		EE::error( sprintf( 'Database name `%s` is longer than 64 characters.', $db_name ) );
+	}
+
+	$is_taken = function ( $name ) use ( $names_in_use ) {
+		return isset( $names_in_use[ $name ] ) || global_db_has_database( $name );
+	};
+
+	if ( ! $is_taken( $db_name ) ) {
+		return $db_name;
+	}
+
+	if ( $explicit_db_name ) {
+		$owner = isset( $names_in_use[ $db_name ] ) ? " by site {$names_in_use[ $db_name ]}" : '';
+		EE::error( sprintf( 'Database `%s` is already used%s on the global database. Please pass a different --dbname, or leave it out to use a free default name.', $db_name, $owner ) );
+	}
+
+	for ( $i = 2; $i <= 100; $i++ ) {
+		$suffix    = '_' . $i;
+		$candidate = substr( $db_name, 0, 64 - strlen( $suffix ) ) . $suffix;
+		if ( ! $is_taken( $candidate ) ) {
+			EE::log( sprintf( 'Database `%s` already exists, using `%s` instead.', $db_name, $candidate ) );
+
+			return $candidate;
+		}
+	}
+
+	EE::error( sprintf( 'Could not find a free database name for `%s`. Please pass one with --dbname.', $db_name ) );
+}
+
+/**
  * Create user in remote or global db.
+ *
+ * On the global db either both the database and the user are created, or neither: an object that already exists makes its CREATE fail, and only what this call created is dropped again.
  *
  * @param string $db_host Database Hostname.
  * @param string $db_name Database name to be created.
@@ -150,30 +332,33 @@ function create_user_in_db( $db_host, $db_name = '', $db_user = '', $db_pass = '
 	$db_user = empty( $db_user ) ? \EE\Utils\random_password( 5 ) : $db_user;
 	$db_pass = empty( $db_pass ) ? \EE\Utils\random_password() : $db_pass;
 
-	// TODO: Create database only if it does not exist.
-	$create_string = sprintf( 'CREATE USER "%1$s"@"%%" IDENTIFIED BY "%2$s"; CREATE DATABASE `%3$s`; GRANT ALL PRIVILEGES ON `%3$s`.* TO "%1$s"@"%%"; FLUSH PRIVILEGES;', $db_user, $db_pass, $db_name );
-
 	if ( GLOBAL_DB === $db_host ) {
 
-		$health_script  = 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e"exit"';
-		$db_script_path = \EE\Utils\get_temp_dir() . 'db_exec';
-		file_put_contents( $db_script_path, $health_script );
-		$mysql_unhealthy = true;
-		EE::exec( sprintf( 'docker cp %s %s:/db_exec', $db_script_path, GLOBAL_DB_CONTAINER ) );
-		$count = 0;
-		while ( $mysql_unhealthy ) {
-			$mysql_unhealthy = ! EE::exec( sprintf( 'docker exec %s sh db_exec', GLOBAL_DB_CONTAINER ) );
-			if ( $count ++ > 60 ) {
-				break;
-			}
-			sleep( 1 );
+		wait_for_global_db();
+
+		$user     = sql_quote_string( $db_user ) . "@'%'";
+		$database = sql_quote_identifier( $db_name );
+		$ok       = function ( $sql ) {
+			$result = run_global_db_sql( $sql );
+
+			return $result && 0 === $result->return_code;
+		};
+
+		if ( ! $ok( sprintf( 'CREATE USER %s IDENTIFIED BY %s;', $user, sql_quote_string( $db_pass ) ) ) ) {
+			return false;
 		}
+		if ( ! $ok( sprintf( 'CREATE DATABASE %s;', $database ) ) ) {
+			$ok( sprintf( 'DROP USER %s;', $user ) );
 
-		$db_script_path = \EE\Utils\get_temp_dir() . 'db_exec';
-		file_put_contents( $db_script_path, sprintf( 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e\'%s\'', $create_string ) );
+			return false;
+		}
+		// `_` and `%` are wildcards in a GRANT's database name: unescaped, `a_b` would also grant on `axb`.
+		$grant_on = sql_quote_identifier( addcslashes( $db_name, '\\_%' ) );
+		if ( ! $ok( sprintf( 'GRANT ALL PRIVILEGES ON %s.* TO %s; FLUSH PRIVILEGES;', $grant_on, $user ) ) ) {
+			// Separate calls: a batch stops at its first error.
+			$ok( sprintf( 'DROP DATABASE %s;', $database ) );
+			$ok( sprintf( 'DROP USER %s;', $user ) );
 
-		EE::exec( sprintf( 'docker cp %s %s:/db_exec', $db_script_path, GLOBAL_DB_CONTAINER ) );
-		if ( ! EE::exec( sprintf( 'docker exec %s sh db_exec', GLOBAL_DB_CONTAINER ) ) ) {
 			return false;
 		}
 	} else {
@@ -197,14 +382,8 @@ function create_user_in_db( $db_host, $db_name = '', $db_user = '', $db_pass = '
  */
 function cleanup_db( $db_host, $db_name, $db_user = '', $db_pass = '' ) {
 
-	$cleanup_string = sprintf( 'DROP DATABASE `%s`;', $db_name );
-
 	if ( GLOBAL_DB === $db_host ) {
-		$db_script_path = \EE\Utils\get_temp_dir() . 'db_exec';
-		file_put_contents( $db_script_path, sprintf( 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e\'%s\'', $cleanup_string ) );
-
-		EE::exec( sprintf( 'docker cp %s %s:/db_exec', $db_script_path, GLOBAL_DB_CONTAINER ) );
-		EE::exec( sprintf( 'docker exec %s sh db_exec', GLOBAL_DB_CONTAINER ) );
+		run_global_db_sql( sprintf( 'DROP DATABASE %s;', sql_quote_identifier( $db_name ) ) );
 	}
 
 }
@@ -219,14 +398,8 @@ function cleanup_db( $db_host, $db_name, $db_user = '', $db_pass = '' ) {
  */
 function cleanup_db_user( $db_host, $db_user_to_be_cleaned, $db_privileged_pass = '', $db_privileged_user = 'root' ) {
 
-	$cleanup_string = sprintf( 'DROP USER \'%s\'@\'%%\';', $db_user_to_be_cleaned );
-
 	if ( GLOBAL_DB === $db_host ) {
-		$db_script_path = \EE\Utils\get_temp_dir() . 'db_exec';
-		file_put_contents( $db_script_path, sprintf( 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e"%s"', $cleanup_string ) );
-
-		EE::exec( sprintf( 'docker cp %s %s:/db_exec', $db_script_path, GLOBAL_DB_CONTAINER ) );
-		EE::exec( sprintf( 'docker exec %s sh db_exec', GLOBAL_DB_CONTAINER ) );
+		run_global_db_sql( sprintf( "DROP USER %s@'%%';", sql_quote_string( $db_user_to_be_cleaned ) ) );
 	}
 }
 
@@ -249,6 +422,70 @@ function create_site_root( $site_fs_path, $site_url ) {
 
 	$fs->mkdir( $site_fs_path );
 	$fs->chown( $site_fs_path, $terminal_username );
+}
+
+/**
+ * Name docker-compose gives the project of a site directory.
+ *
+ * @param string $site_url Name of the site.
+ *
+ * @return string
+ */
+function get_compose_project_name( $site_url ) {
+
+	return ltrim( preg_replace( '/[^a-z0-9_-]/', '', strtolower( $site_url ) ), '_-' );
+}
+
+/**
+ * Exits before anything is created if a new site would reuse another site's webroot, volumes or compose project.
+ *
+ * Volume names drop `.` and `-` from the site name and the compose project keeps only `a-z0-9_-`, so different names can map to the same ones (`a-b.test`, `a.b.test`, `ab.test`, `_ab.test`). Existing sites keep their names, so the create is refused.
+ *
+ * @param string $site_url     Name of the new site.
+ * @param string $site_fs_path Webroot of the new site.
+ */
+function check_site_name_conflicts( $site_url, $site_fs_path ) {
+
+	$fs = new Filesystem();
+	if ( $fs->exists( $site_fs_path ) ) {
+		EE::error( "Webroot directory for site $site_url already exists." );
+	}
+
+	$prefix  = \EE_DOCKER::get_docker_style_prefix( $site_url );
+	$project = get_compose_project_name( $site_url );
+	$reason  = 'Please use a different site name.';
+
+	foreach ( Site::all( [ 'site_url' ] ) as $site ) {
+		if ( $site->site_url === $site_url ) {
+			continue;
+		}
+		if ( \EE_DOCKER::get_docker_style_prefix( $site->site_url ) === $prefix ) {
+			EE::error( sprintf( 'Site %1$s would share docker volumes (%2$s_*) with the existing site %3$s. %4$s', $site_url, $prefix, $site->site_url, $reason ) );
+		}
+		// A disabled site has no containers for the check below to find.
+		if ( get_compose_project_name( $site->site_url ) === $project ) {
+			EE::error( sprintf( 'Site %1$s would share the docker-compose project %2$s with the existing site %3$s. %4$s', $site_url, $project, $site->site_url, $reason ) );
+		}
+	}
+
+	// Leftovers of a deleted site with a colliding name would be mounted or adopted as they are.
+	$volumes = EE::launch( 'docker volume ls --format \'{{.Name}} {{.Label "io.easyengine.site"}}\'' );
+	foreach ( array_filter( explode( "\n", trim( $volumes->stdout ) ) ) as $line ) {
+		$parts = explode( ' ', trim( $line ), 2 );
+		$owner = isset( $parts[1] ) ? $parts[1] : '';
+		if ( 0 === strpos( $parts[0], $prefix . '_' ) && $owner !== $site_url ) {
+			EE::error( sprintf( 'Docker volume %1$s already exists%2$s, and site %3$s would use it. %4$s', $parts[0], $owner ? " (site $owner)" : '', $site_url, $reason ) );
+		}
+	}
+
+	$containers = EE::launch( sprintf( 'docker ps -a --filter %s --format \'{{.Names}} {{.Label "io.easyengine.site"}}\'', escapeshellarg( 'label=com.docker.compose.project=' . $project ) ) );
+	foreach ( array_filter( explode( "\n", trim( $containers->stdout ) ) ) as $line ) {
+		$parts = explode( ' ', trim( $line ), 2 );
+		$owner = isset( $parts[1] ) ? $parts[1] : '';
+		if ( $owner !== $site_url ) {
+			EE::error( sprintf( 'Container %1$s already belongs to the docker-compose project %2$s%3$s, which site %4$s would use. %5$s', $parts[0], $project, $owner ? " (site $owner)" : '', $site_url, $reason ) );
+		}
+	}
 }
 
 /**
@@ -555,11 +792,8 @@ function configure_postfix( $site_url, $site_fs_path ) {
  */
 function reload_global_nginx_proxy() {
 
-	// Regenerate default.conf first so `nginx -t` validates the config that will actually be served.
-	\EE::launch( sprintf( 'docker exec %s sh -c "/app/docker-entrypoint.sh /usr/local/bin/docker-gen /app/nginx.tmpl /etc/nginx/conf.d/default.conf"', EE_PROXY_TYPE ) );
-
 	// `EE::launch()` returns a ProcessRun object (truthy), so gate on the exit code to avoid reloading a broken config.
-	$test = \EE::launch( sprintf( 'docker exec %s sh -c "nginx -t"', EE_PROXY_TYPE ) );
+	$test = test_global_nginx_proxy_config();
 	if ( 0 !== $test->return_code ) {
 		\EE::warning( 'nginx config test failed, skipping reload of ' . EE_PROXY_TYPE . ":\n" . $test->stderr );
 
@@ -567,6 +801,161 @@ function reload_global_nginx_proxy() {
 	}
 
 	return \EE::launch( sprintf( 'docker exec %s sh -c "/usr/sbin/nginx -s reload"', EE_PROXY_TYPE ) );
+}
+
+/**
+ * Regenerates the global proxy's default.conf and runs `nginx -t` on it.
+ *
+ * @param bool $retry_any_failure Retry once on any failure, not only on one reported in default.conf.
+ *
+ * @return \EE\ProcessRun Result of the last `nginx -t`.
+ */
+function test_global_nginx_proxy_config( $retry_any_failure = false ) {
+
+	$regenerate = sprintf( 'docker exec %s sh -c "/app/docker-entrypoint.sh /usr/local/bin/docker-gen /app/nginx.tmpl /etc/nginx/conf.d/default.conf"', EE_PROXY_TYPE );
+	$test_cmd   = sprintf( 'docker exec %s sh -c "nginx -t"', EE_PROXY_TYPE );
+
+	// Regenerate first so `nginx -t` validates the config that will actually be served.
+	\EE::launch( $regenerate );
+	$test = \EE::launch( $test_cmd );
+
+	// The proxy's own docker-gen rewrites default.conf in place after container events, so a test racing it can read a partial file.
+	if ( 0 !== $test->return_code && ( $retry_any_failure || false !== strpos( $test->stderr, '/etc/nginx/conf.d/default.conf' ) ) ) {
+		\EE::debug( "nginx config test failed, retrying once:\n" . $test->stderr );
+		sleep( 1 );
+		\EE::launch( $regenerate );
+		$test = \EE::launch( $test_cmd );
+	}
+
+	return $test;
+}
+
+/**
+ * Reads files so that they can be put back with `restore_files()`.
+ *
+ * @param array $paths Absolute file paths.
+ *
+ * @return array Path => content, or null for a file that does not exist.
+ *
+ * @throws \Exception When an existing file can't be read.
+ */
+function backup_files( array $paths ) {
+
+	$backup = [];
+	foreach ( array_unique( $paths ) as $path ) {
+		$content = is_file( $path ) ? file_get_contents( $path ) : null;
+		// Restoring a failed read would overwrite the file with an empty one.
+		if ( false === $content ) {
+			throw new \Exception( "Could not read $path to back it up." );
+		}
+		$backup[ $path ] = $content;
+	}
+
+	return $backup;
+}
+
+/**
+ * Puts files back as `backup_files()` found them: rewrites the ones that existed and removes the others.
+ *
+ * @param array $backup Return value of `backup_files()`.
+ */
+function restore_files( array $backup ) {
+
+	$fs = new Filesystem();
+	foreach ( $backup as $path => $content ) {
+		if ( null === $content ) {
+			if ( file_exists( $path ) ) {
+				$fs->remove( $path );
+			}
+		} else {
+			$fs->dumpFile( $path, $content );
+		}
+	}
+}
+
+/**
+ * Paths of the files a failed LE issuance must not leave changed: the served certificate, its ACME key pair, certificates and DN, and the www redirect.
+ *
+ * Authorization and order state is left out: the next order revokes and replaces it.
+ *
+ * @param string $site_url Name of the site.
+ *
+ * @return array Absolute file paths.
+ */
+function get_site_ssl_file_paths( $site_url ) {
+
+	$proxy_dir = EE_ROOT_DIR . '/services/nginx-proxy';
+	$acme_dir  = "$proxy_dir/acme-conf";
+
+	return [
+		"$proxy_dir/certs/$site_url.crt",
+		"$proxy_dir/certs/$site_url.key",
+		"$proxy_dir/certs/$site_url.chain.pem",
+		"$proxy_dir/conf.d/$site_url-redirect.conf",
+		"$acme_dir/certs/$site_url/private/key.public.pem",
+		"$acme_dir/certs/$site_url/private/key.private.pem",
+		"$acme_dir/certs/$site_url/private/combined.pem",
+		"$acme_dir/certs/$site_url/public/cert.pem",
+		"$acme_dir/certs/$site_url/public/chain.pem",
+		"$acme_dir/certs/$site_url/public/fullchain.pem",
+		"$acme_dir/var/$site_url/distinguished_name.json",
+	];
+}
+
+/**
+ * Removes a site's certificate files from nginx-proxy and its ACME state, whatever the site's current SSL type.
+ *
+ * @param string $site_url Name of the site.
+ * @param array  $domains  Other domains of the site (alias domains, www variant) whose ACME state goes too.
+ * @param array  $keep     Files to leave in place, e.g. a custom pair the user keeps in the certs dir.
+ */
+function remove_site_ssl_files( $site_url, array $domains = [], array $keep = [] ) {
+
+	$proxy_dir = EE_ROOT_DIR . '/services/nginx-proxy';
+	$paths     = [
+		"$proxy_dir/certs/$site_url.crt",
+		"$proxy_dir/certs/$site_url.key",
+		"$proxy_dir/certs/$site_url.chain.pem",
+		"$proxy_dir/acme-conf/certs/$site_url",
+	];
+
+	foreach ( array_unique( array_merge( [ $site_url ], $domains ) ) as $domain ) {
+		if ( '' !== $domain && false === strpos( $domain, '/' ) ) {
+			$paths[] = "$proxy_dir/acme-conf/var/$domain";
+		}
+	}
+
+	$keep  = array_filter( array_map( 'realpath', array_filter( $keep ) ) );
+	$paths = array_values(
+		array_filter(
+			$paths,
+			function ( $path ) use ( $keep ) {
+				return file_exists( $path ) && ! in_array( realpath( $path ), $keep, true );
+			}
+		)
+	);
+	if ( empty( $paths ) ) {
+		return;
+	}
+
+	\EE::log( 'Removing ssl certs and other config files.' );
+	try {
+		( new Filesystem() )->remove( $paths );
+	} catch ( \Exception $e ) {
+		\EE::warning( $e->getMessage() );
+	}
+}
+
+/**
+ * The www or non-www counterpart of a domain.
+ *
+ * @param string $domain Domain name.
+ *
+ * @return string
+ */
+function get_www_counterpart( $domain ) {
+
+	return 0 === strpos( $domain, 'www.' ) ? substr( $domain, 4 ) : 'www.' . $domain;
 }
 
 /**
@@ -867,7 +1256,7 @@ function ssl_needs_creation( $site_url ) {
 
 	if ( file_exists( $certificatePath ) ) {
 		$certificate = new Certificate( file_get_contents( $certificatePath ) );
-		$certificateParser = new CertificateParser();
+		$certificateParser = new \EE\Site\Type\EECertificateParser();
 		$parsedCertificate = $certificateParser->parse( $certificate );
 
 		// 3024000 = 35 days.
@@ -993,4 +1382,119 @@ function get_subnet_range( $ip, $mask ) {
 	$range_end = $ipl | ~$maskl;
 
 	return [ $range_start, $range_end ];
+}
+
+/**
+ * Bash helpers for fetching and checking WordPress core inside a site's php container.
+ *
+ * WP-CLI <= 2.12 extracts .tar.gz packages with PharData, which truncates paths longer than 100 bytes in the PAX headers of WordPress >= 6.7.2 en_US packages (wp-cli/wp-cli#6320). So WP-CLI only resolves, downloads and md5-checks the package here, and tar/unzip extract it. WP-CLI >= 3.0 saves a .zip instead (wp-cli/core-command#333).
+ *
+ * @return string Unescaped bash that enables set -e and defines wp_cli, ee_wp_fetch, ee_wp_extract and ee_wp_verify.
+ */
+function get_wp_core_shell_functions() {
+	return <<<'BASH'
+set -e
+wp_cli() { php -d memory_limit=256M "$(command -v wp)" "$@"; }
+# ee_wp_fetch <empty-dir> [core download args]: prints the path of the downloaded package.
+ee_wp_fetch() {
+	local dir=$1 pkg
+	shift
+	wp_cli core download --no-extract --path="$dir" "$@" >&2 || return 1
+	pkg=$(find "$dir" -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.tgz' -o -name '*.zip' \) | head -n 1)
+	if [ -z "$pkg" ]; then
+		echo 'Error: WordPress package not found after download.' >&2
+		return 1
+	fi
+	printf '%s\n' "$pkg"
+}
+# ee_wp_extract <package> <wp-root> [<subdir>]: extracts wordpress/<subdir> (default: all) into <wp-root>/<subdir>.
+ee_wp_extract() {
+	local pkg=$1 dest=${2%/} sub=${3:-} strip=1 x
+	mkdir -p "$dest/$sub" || return 1
+	case "$pkg" in
+		*.zip)
+			x="${pkg%/*}/x"
+			mkdir -p "$x" || return 1
+			if command -v unzip >/dev/null 2>&1; then
+				unzip -q -o "$pkg" ${sub:+"wordpress/$sub/*"} -d "$x" || return 1
+			else
+				php -r '$z = new ZipArchive(); if ( true !== $z->open( $argv[1] ) || ! $z->extractTo( $argv[2] ) ) { fwrite( STDERR, "Error: Could not extract $argv[1].\n" ); exit( 1 ); }' "$pkg" "$x" || return 1
+			fi
+			cp -R "$x/wordpress/$sub/." "$dest/$sub/" || return 1
+			;;
+		*)
+			[ -z "$sub" ] || strip=$(( $(printf '%s' "$sub" | tr -cd '/' | wc -c) + 2 ))
+			tar -xzf "$pkg" --no-same-owner --strip-components="$strip" -C "$dest/$sub" "wordpress/$sub" || return 1
+			;;
+	esac
+}
+# ee_wp_verify <wp-root>: fails unless core verifies, but only warns when the checksums can't be fetched from WordPress.org.
+ee_wp_verify() {
+	local out
+	out=$(wp_cli core verify-checksums --path="$1" 2>&1) && return 0
+	case "$out" in
+		*"File doesn't exist:"* | *"File doesn't verify against checksum:"*) ;;
+		*"Couldn't get checksums"* | *"api.wordpress.org"* | *"Failed to decode JSON"*)
+			printf 'Warning: Could not verify WordPress core checksums: %s\n' "$out" >&2
+			return 0
+			;;
+	esac
+	printf '%s\n' "$out" >&2
+	return 1
+}
+
+BASH;
+}
+
+/**
+ * Build the in-container command that downloads WordPress core into a site.
+ *
+ * @param string $path WordPress root inside the php container.
+ * @param array  $args Optional `version`, `locale`, `skip-content` and `force` (replace an existing install).
+ *
+ * @return string Command escaped for EE_DOCKER::docker_compose_exec() with $shell_wrapper = true.
+ */
+function get_wp_core_download_command( string $path, array $args = [] ) {
+	$version    = isset( $args['version'] ) ? (string) $args['version'] : '';
+	$is_nightly = in_array( strtolower( $version ), [ 'nightly', 'trunk' ], true );
+
+	$download_args = '';
+	foreach ( [ 'locale', 'version' ] as $key ) {
+		if ( isset( $args[ $key ] ) && '' !== (string) $args[ $key ] ) {
+			$download_args .= " --$key=" . escapeshellarg( (string) $args[ $key ] );
+		}
+	}
+
+	$script = get_wp_core_shell_functions() . 'dest=' . escapeshellarg( $path ) . "\n";
+	if ( ! empty( $args['skip-content'] ) || $is_nightly ) {
+		// WP-CLI downloads the .zip here and extracts it with ZipArchive, which isn't affected.
+		$script .= 'wp_cli core download --path="$dest"' . $download_args
+			. ( empty( $args['skip-content'] ) ? '' : ' --skip-content' )
+			. ( empty( $args['force'] ) ? '' : ' --force' ) . "\n";
+	} else {
+		if ( empty( $args['force'] ) ) {
+			// WP-CLI's own check only sees the temp dir it downloads into.
+			$script .= "if [ -e \"\$dest/wp-load.php\" ]; then echo 'Error: WordPress files seem to already be present here.' >&2; exit 1; fi\n";
+		}
+		// Extract into the temp dir first, so a failure leaves the existing core untouched.
+		$script .= "tmp=\$(mktemp -d)\ntrap 'rm -rf \"\$tmp\"' EXIT\nmkdir \"\$tmp/dl\"\n"
+			. "pkg=\$(ee_wp_fetch \"\$tmp/dl\"$download_args)\n"
+			. "if ! ee_wp_extract \"\$pkg\" \"\$tmp/wp\"; then\n"
+			// A package from WP-CLI's cache isn't md5-checked again, so fetch a fresh copy once.
+			. "\trm -rf \"\$tmp/dl\" \"\$tmp/wp\"\n\tmkdir \"\$tmp/dl\"\n"
+			. "\tpkg=\$(WP_CLI_CACHE_DIR=\"\$tmp/cache\" ee_wp_fetch \"\$tmp/dl\"$download_args)\n"
+			. "\tee_wp_extract \"\$pkg\" \"\$tmp/wp\"\nfi\n";
+		if ( ! empty( $args['force'] ) ) {
+			// Drop wp-admin and wp-includes files of the previous core version.
+			$script .= "rm -rf \"\${dest:?}/wp-admin\" \"\${dest:?}/wp-includes\"\n";
+		}
+		$script .= "mkdir -p \"\$dest\"\ncp -R \"\$tmp/wp/.\" \"\$dest/\"\n";
+	}
+	// Nightly builds have no published checksums.
+	if ( ! $is_nightly ) {
+		$script .= "ee_wp_verify \"\$dest\"\n";
+	}
+
+	// docker_compose_exec() wraps the command in bash -c "...".
+	return addcslashes( $script, '"$`\\' );
 }

@@ -14,17 +14,22 @@ use AcmePhp\Core\Challenge\Dns\SimpleDnsCloudflareSolver;
 use AcmePhp\Core\Challenge\Http\HttpValidator;
 use AcmePhp\Core\Challenge\Http\SimpleHttpSolver;
 use AcmePhp\Core\Challenge\WaitingValidator;
+use AcmePhp\Core\Exception\AcmeCoreServerException;
 use AcmePhp\Core\Exception\Protocol\ChallengeNotSupportedException;
 use AcmePhp\Core\Exception\Protocol\CertificateRevocationException;
+use AcmePhp\Core\Exception\Server\RateLimitedServerException;
 use AcmePhp\Core\Protocol\AuthorizationChallenge;
+use AcmePhp\Core\Protocol\CertificateOrder;
 use AcmePhp\Core\Protocol\ResourcesDirectory;
 use AcmePhp\Core\Protocol\RevocationReason;
 use AcmePhp\Core\Http\Base64SafeEncoder;
 use AcmePhp\Core\Http\SecureHttpClient;
 use AcmePhp\Core\Http\ServerErrorHandler;
+use AcmePhp\Ssl\Certificate;
 use AcmePhp\Ssl\CertificateRequest;
 use AcmePhp\Ssl\DistinguishedName;
 use AcmePhp\Ssl\Generator\KeyPairGenerator;
+use AcmePhp\Ssl\ParsedCertificate;
 use AcmePhp\Ssl\Parser\CertificateParser;
 use AcmePhp\Ssl\Parser\KeyParser;
 use AcmePhp\Ssl\Signer\CertificateRequestSigner;
@@ -68,6 +73,65 @@ class EEAcmeClient extends AcmeClient {
 		return $this->account;
 	}
 
+	/**
+	 * Same as acmephp's requestOrder(), but skips challenges it can't represent.
+	 *
+	 * acmephp 1.3 reads a token from every challenge, so one without a token (the draft dns-persist-01 that Pebble 2.10 offers) made the whole order throw. Other types are kept as before: authorize() picks the one its solver supports, or a valid one.
+	 *
+	 * @param array $domains Domains to order a certificate for.
+	 *
+	 * @return CertificateOrder
+	 */
+	public function requestOrder( array $domains ) {
+		\Webmozart\Assert\Assert::allStringNotEmpty( $domains, 'requestOrder::$domains expected a list of strings. Got: %s' );
+
+		$payload = [
+			'identifiers' => array_map(
+				function ( $domain ) {
+					return [
+						'type'  => 'dns',
+						'value' => $domain,
+					];
+				},
+				array_values( $domains )
+			),
+		];
+
+		$client      = $this->getHttpClient();
+		$resourceUrl = $this->getResourceUrl( ResourcesDirectory::NEW_ORDER );
+		$response    = $client->request( 'POST', $resourceUrl, $client->signKidPayload( $resourceUrl, $this->getResourceAccount(), $payload ) );
+		if ( ! isset( $response['authorizations'] ) || ! $response['authorizations'] ) {
+			throw new ChallengeNotSupportedException();
+		}
+
+		$orderEndpoint            = $client->getLastLocation();
+		$authorizationsChallenges = [];
+		$base64encoder            = $client->getBase64Encoder();
+		foreach ( $response['authorizations'] as $authorizationEndpoint ) {
+			$authorizationsResponse = $client->request( 'POST', $authorizationEndpoint, $client->signKidPayload( $authorizationEndpoint, $this->getResourceAccount(), null ) );
+			$domain                 = ( empty( $authorizationsResponse['wildcard'] ) ? '' : '*.' ) . $authorizationsResponse['identifier']['value'];
+
+			// An empty list still reaches authorize(), which reports the domain as unsupported.
+			$authorizationsChallenges[ $domain ] = [];
+			foreach ( $authorizationsResponse['challenges'] as $challenge ) {
+				if ( empty( $challenge['token'] ) || ! is_string( $challenge['token'] ) || ! isset( $challenge['type'], $challenge['status'], $challenge['url'] ) ) {
+					\EE::debug( 'Skipping ACME challenge without a token: ' . ( $challenge['type'] ?? '(no type)' ) . ' for ' . $domain );
+					continue;
+				}
+				$authorizationsChallenges[ $domain ][] = new AuthorizationChallenge(
+					$authorizationsResponse['identifier']['value'],
+					$challenge['status'],
+					$challenge['type'],
+					$challenge['url'],
+					$challenge['token'],
+					$challenge['token'] . '.' . $base64encoder->encode( $client->getJWKThumbprint() )
+				);
+			}
+		}
+
+		return new CertificateOrder( $authorizationsChallenges, $orderEndpoint );
+	}
+
 	public function revokeAuthorizationChallenge(AuthorizationChallenge $challenge)
 	{
 		$payload = [
@@ -95,6 +159,42 @@ class EEAcmeClient extends AcmeClient {
 }
 
 
+/**
+ * acmephp's parser requires a subject CN, which certificates from LE's newer profiles (and Pebble's default one) don't have.
+ */
+class EECertificateParser extends CertificateParser {
+
+	public function parse( Certificate $certificate ) {
+		$rawData = openssl_x509_parse( $certificate->getPEM() );
+
+		if ( ! is_array( $rawData ) || isset( $rawData['subject']['CN'] ) || ! isset( $rawData['extensions']['subjectAltName'], $rawData['serialNumber'], $rawData['validFrom_time_t'], $rawData['validTo_time_t'] ) ) {
+			return parent::parse( $certificate );
+		}
+
+		$san = [];
+		foreach ( explode( ',', $rawData['extensions']['subjectAltName'] ) as $item ) {
+			if ( false !== strpos( $item, ':' ) ) {
+				$san[] = explode( ':', trim( $item ), 2 )[1];
+			}
+		}
+		if ( empty( $san ) ) {
+			return parent::parse( $certificate );
+		}
+
+		// Use the first SAN as the subject, as LE's classic profile does.
+		return new ParsedCertificate(
+			$certificate,
+			$san[0],
+			isset( $rawData['issuer']['CN'] ) ? $rawData['issuer']['CN'] : null,
+			$rawData['subject'] === $rawData['issuer'],
+			new \DateTime( '@' . $rawData['validFrom_time_t'] ),
+			new \DateTime( '@' . $rawData['validTo_time_t'] ),
+			$rawData['serialNumber'],
+			$san
+		);
+	}
+}
+
 class Site_Letsencrypt {
 
 	private $accountKeyPair;
@@ -119,6 +219,13 @@ class Site_Letsencrypt {
 	private function setAcmeClient() {
 
 		if ( ! $this->repository->hasAccountKeyPair() ) {
+			// Missing key plus existing LE domain state means the key was lost, not a first run; warn before regenerating.
+			if ( $this->hasExistingLetsencryptState() ) {
+				\EE::warning( 'Let\'s Encrypt account key not found, but existing certificate state was detected under ' . $this->conf_dir . '. The key appears to have been lost (e.g. host migration or snapshot restore), so a new one is being generated.' );
+				\EE::warning( 'Existing certificates stay valid and will be renewed under a new Let\'s Encrypt account, but challenges still pending under the old account cannot be completed and must be restarted.' );
+				\EE::warning( 'To keep the old account, restore ' . $this->conf_dir . '/account/ from a backup before the next SSL operation.' );
+			}
+
 			\EE::debug( 'No account key pair was found, generating one.' );
 			\EE::debug( 'Generating a key pair' );
 
@@ -138,6 +245,19 @@ class Site_Letsencrypt {
 
 		$this->client = new EEAcmeClient( $secureHttpClient, 'https://acme-v02.api.letsencrypt.org/directory', $csrSigner );
 
+	}
+
+	/**
+	 * Checks for AcmePhp's per-domain dirs under acme-conf, which are only created after an account key exists.
+	 * nginx-proxy/certs/ is ignored as it also holds custom/self-signed certs.
+	 *
+	 * @return bool True if prior LE domain state exists.
+	 */
+	private function hasExistingLetsencryptState() {
+		$var_domains  = glob( $this->conf_dir . '/var/*', GLOB_ONLYDIR );
+		$cert_domains = glob( $this->conf_dir . '/certs/*', GLOB_ONLYDIR );
+
+		return ! empty( $var_domains ) || ! empty( $cert_domains );
 	}
 
 	private function setRepository( $enable_backup = false ) {
@@ -208,7 +328,12 @@ class Site_Letsencrypt {
 		try {
 			$order = $this->client->requestOrder( $domains );
 		} catch ( \Exception $e ) {
-			\EE::warning( 'It seems you\'re in local environment or using non-public domain, please check logs. Skipping letsencrypt.' );
+			// A rate limit is a distinct failure from a non-public domain; emit a clear, actionable message for it.
+			if ( $this->is_rate_limit_exception( $e ) ) {
+				\EE::warning( 'Let\'s Encrypt rate limit hit for: ' . implode( ', ', $domains ) . ' (' . $e->getMessage() . '). Please wait before retrying. Ref: https://letsencrypt.org/docs/rate-limits/' );
+			} else {
+				\EE::warning( 'Let\'s Encrypt order request failed (' . $e->getMessage() . '). It seems you\'re in local environment or using non-public domain, please check logs. Skipping letsencrypt.' );
+			}
 			\EE::log( 'You can fix the issue and re-run: ee site ssl-verify ' . $domains[0] );
 
 			return false;
@@ -279,6 +404,11 @@ class Site_Letsencrypt {
 					\EE::debug( 'Domain Authorization Challenge for ' . $domain . ' revoked successfully' );
 				} catch ( CertificateRevocationException | AcmeCliException $e ) {
 					\EE::debug( $e->getMessage() );
+				} catch ( RateLimitedServerException $e ) {
+					// Revoking uses new-order too; stop here and let authorize() report the rate limit.
+					\EE::debug( $e->getMessage() );
+
+					return;
 				}
 			} else {
 				\EE::debug( 'Domain Authorization Challenge for ' . $domain . ' not found locally' );
@@ -360,6 +490,35 @@ class Site_Letsencrypt {
 			\EE::debug( sprintf( 'Loading the authorization token for domains %s ...', implode( ', ', $domains ) ) );
 		}
 
+		// Self-heal stale orders: once LE invalidates or expires (~7 days) an authorization, the stored order can never
+		// validate, and only init_le() calls authorize(), so a retry via ssl-verify must rebuild the order here.
+		// A live (pending) order is left untouched, so the "DNS not ready yet, retry later" case is unchanged.
+		if ( $order && $this->isCertificateOrderStale( $order, $domains, $solver ) ) {
+			\EE::debug( 'Stored ACME order is stale/expired; requesting a fresh order.' );
+			try {
+				$this->revokeAuthorizationChallenges( $domains );
+			} catch ( \Exception $e ) {
+				\EE::debug( 'Revoking stale authorization challenges failed: ' . $e->getMessage() );
+			}
+			// The stale order is kept until authorize() overwrites it, so a failed rebuild is retried on the next run.
+			if ( ! $this->authorize( $domains, $wildcard, $preferred_challenge ) ) {
+				return false;
+			}
+
+			// Manual DNS-01 rebuild issues a brand-new TXT token that authorize() only printed above; the old record
+			// is now wrong, so validating immediately would fail confusingly. Stop and let the user publish it first.
+			// (HTTP-01 wrote the token file + reloaded nginx, and Cloudflare DNS publishes automatically — both fall through.)
+			if ( $is_solver_dns && empty( get_config_value( 'cloudflare-api-key' ) ) ) {
+				$primary_domain = str_replace( '*.', '', $domains[0] );
+				\EE::warning( "The previous ACME order for $primary_domain had expired or failed. A fresh DNS-01 challenge was issued and its new TXT record is printed above." );
+				\EE::log( "Publish the new TXT record, then re-run: ee site ssl-verify $primary_domain" );
+
+				return false;
+			}
+
+			$order = $this->repository->loadCertificateOrder( $domains );
+		}
+
 		$authorizationChallengeToCleanup = [];
 		foreach ( $domains as $domain ) {
 			if ( $order ) {
@@ -405,7 +564,7 @@ class Site_Letsencrypt {
 					$authorizationChallengeToCleanup[] = $authorizationChallenge;
 				} catch ( \Exception $e ) {
 					\EE::debug( $e->getMessage() );
-					\EE::warning( 'Challenge Authorization failed. Check logs and check if your domain is pointed correctly to this server.' );
+					\EE::warning( 'Challenge Authorization failed (' . $e->getMessage() . '). Check logs and check if your domain is pointed correctly to this server.' );
 
 					$site_name = $domains[0];
 					$site_name = str_replace( '*.', '', $site_name );
@@ -431,6 +590,68 @@ class Site_Letsencrypt {
 		return true;
 	}
 
+	/**
+	 * Determine whether a stored ACME order can no longer be used to validate the given domains.
+	 *
+	 * An order is stale when LE reports a challenge as `invalid`, answers 404 for it (the authorization expired, which
+	 * LE does for orders left pending for ~7 days, or was purged) or when it lacks a challenge for a requested domain.
+	 * `pending`, `processing` and `valid` challenges are still live and are NOT stale, so an in-progress retry is kept.
+	 *
+	 * @param CertificateOrder $order   The loaded order to inspect.
+	 * @param array            $domains Requested domains for this order.
+	 * @param SolverInterface  $solver  Solver whose challenge type is checked, as in check().
+	 *
+	 * @return bool True if the order should be discarded and rebuilt.
+	 */
+	private function isCertificateOrderStale( $order, array $domains, $solver ) {
+		foreach ( $domains as $domain ) {
+			try {
+				// Throws if the order has no challenge for this requested domain (e.g. SAN set changed).
+				$authorizationChallenges = $order->getAuthorizationChallenges( $domain );
+			} catch ( \Exception $e ) {
+				\EE::debug( sprintf( 'No authorization challenge in stored order for %s: %s', $domain, $e->getMessage() ) );
+
+				return true;
+			}
+
+			// Check the challenge check() will use: once one challenge is attempted, LE drops the others (404).
+			foreach ( $authorizationChallenges as $challenge ) {
+				if ( ! $solver->supports( $challenge ) ) {
+					continue;
+				}
+
+				try {
+					// reloadAuthorization refetches the challenge's live status from LE.
+					$challenge = $this->client->reloadAuthorization( $challenge );
+				} catch ( \Throwable $e ) {
+					// LE answers 404 ("Expired authorization") once the authorization has expired.
+					if ( $e instanceof AcmeCoreServerException && 404 === $e->getCode() ) {
+						\EE::debug( sprintf( 'Authorization for %s has expired or no longer exists: %s', $domain, $e->getMessage() ) );
+
+						return true;
+					}
+
+					// Any other failure (5xx, 429, timeouts) is inconclusive, NOT stale: tearing down a healthy
+					// in-flight order on a blip would hit the rate-limited newOrder endpoint.
+					\EE::debug( sprintf( 'Reloading authorization for %s failed (treating as inconclusive, keeping order): %s', $domain, $e->getMessage() ) );
+
+					return false;
+				}
+
+				// A challenge is pending, processing, valid or invalid (RFC 8555 7.1.6); only invalid is unusable.
+				if ( ! in_array( $challenge->getStatus(), [ 'pending', 'processing', 'valid' ], true ) ) {
+					\EE::debug( sprintf( 'Authorization for %s has stale status "%s".', $domain, $challenge->getStatus() ) );
+
+					return true;
+				}
+
+				break;
+			}
+		}
+
+		return false;
+	}
+
 	public function request( $domain, $altNames = [], $email, $force = false ) {
 		$alternativeNames = array_unique( $altNames );
 		sort( $alternativeNames );
@@ -439,7 +660,7 @@ class Site_Letsencrypt {
 		if ( $this->hasValidCertificate( $domain, $alternativeNames ) ) {
 			\EE::debug( "Certificate found for $domain, executing renewal" );
 
-			return $this->executeRenewal( $domain, $alternativeNames, $force );
+			return $this->executeRenewal( $domain, $alternativeNames, $email, $force );
 		}
 
 		\EE::debug( "No certificate found, executing first request for $domain" );
@@ -457,18 +678,7 @@ class Site_Letsencrypt {
 	private function executeFirstRequest( $domain, array $alternativeNames, $email ) {
 		\EE::log( 'Executing first request.' );
 
-		// Generate domain key pair
-		$keygen        = new KeyPairGenerator();
-		$domainKeyPair = $keygen->generateKeyPair();
-		$this->repository->storeDomainKeyPair( $domain, $domainKeyPair );
-
-		\EE::debug( "$domain Domain key pair generated and stored" );
-
-		$distinguishedName = $this->getOrCreateDistinguishedName( $domain, $alternativeNames, $email );
-		// TODO: ask them ;)
-		\EE::debug( 'Distinguished name informations have been stored locally for this domain (they won\'t be asked on renewal).' );
-
-		// Order
+		// Order first, so a missing order can't replace the key of the certificate that is still served.
 		$domains = array_merge( [ $domain ], $alternativeNames );
 		\EE::debug( sprintf( 'Loading the order related to the domains %s .', implode( ', ', $domains ) ) );
 		if ( ! $this->repository->hasCertificateOrder( $domains ) ) {
@@ -476,11 +686,46 @@ class Site_Letsencrypt {
 		}
 		$order = $this->repository->loadCertificateOrder( $domains );
 
-		// Request
-		\EE::log( sprintf( 'Requesting first certificate for domain %s.', $domain ) );
-		$csr      = new CertificateRequest( $distinguishedName, $domainKeyPair );
-		$response = $this->client->finalizeOrder( $order, $csr );
-		\EE::log( 'Certificate received' );
+		// Restored if no certificate is stored below: they belong to the stored certificate, if there is one.
+		$previous_key_pair = $this->repository->hasDomainKeyPair( $domain ) ? $this->repository->loadDomainKeyPair( $domain ) : null;
+		$previous_dn       = $this->repository->hasDomainDistinguishedName( $domain ) ? $this->repository->loadDomainDistinguishedName( $domain ) : null;
+
+		try {
+			// Generate domain key pair
+			$keygen        = new KeyPairGenerator();
+			$domainKeyPair = $keygen->generateKeyPair();
+			$this->repository->storeDomainKeyPair( $domain, $domainKeyPair );
+
+			\EE::debug( "$domain Domain key pair generated and stored" );
+
+			$distinguishedName = $this->getOrCreateDistinguishedName( $domain, $alternativeNames, $email );
+			// TODO: ask them ;)
+			\EE::debug( 'Distinguished name informations have been stored locally for this domain (they won\'t be asked on renewal).' );
+
+			// Request
+			\EE::log( sprintf( 'Requesting first certificate for domain %s.', $domain ) );
+			$csr      = new CertificateRequest( $distinguishedName, $domainKeyPair );
+			$response = $this->client->finalizeOrder( $order, $csr );
+			\EE::log( 'Certificate received' );
+
+			// finalizeOrder() skips the CSR for an already-finalized order and returns that order's certificate, issued for another key.
+			if ( ! openssl_x509_check_private_key( $response->getCertificate()->getPEM(), $domainKeyPair->getPrivateKey()->getPEM() ) ) {
+				throw new \Exception( 'the returned certificate does not match the new domain key (the stored order was already finalized)' );
+			}
+		} catch ( \Throwable $e ) {
+			// Logged first, so a restore that fails too doesn't hide the reason. Not print_r(): its trace args hold the new private key.
+			\EE::debug( (string) $e );
+			if ( $previous_key_pair ) {
+				$this->repository->storeDomainKeyPair( $domain, $previous_key_pair );
+			}
+			if ( $previous_dn ) {
+				$this->repository->storeDomainDistinguishedName( $domain, $previous_dn );
+			}
+			$kept = $this->repository->hasDomainCertificate( $domain ) ? ' The current certificate is kept.' : '';
+			\EE::warning( sprintf( 'Certificate request for %s failed: %s.%s', $domain, $e->getMessage(), $kept ) );
+
+			return false;
+		}
 
 		// Store
 		$this->repository->storeDomainCertificate( $domain, $response->getCertificate() );
@@ -502,9 +747,40 @@ class Site_Letsencrypt {
 		$crt_dest_file   = EE_ROOT_DIR . '/services/nginx-proxy/certs/' . $domain . '.crt';
 		$chain_dest_file = EE_ROOT_DIR . '/services/nginx-proxy/certs/' . $domain . '.chain.pem';
 
-		copy( $key_source_file, $key_dest_file );
-		copy( $crt_source_file, $crt_dest_file );
-		copy( $chain_source_file, $chain_dest_file );
+		// A mismatched pair fails nginx -t, which blocks every later reload of the shared proxy.
+		if ( is_readable( $crt_source_file ) && is_readable( $key_source_file ) && ! openssl_x509_check_private_key( file_get_contents( $crt_source_file ), file_get_contents( $key_source_file ) ) ) {
+			throw new \Exception( sprintf( 'Certificate %s does not match its private key; not deploying it.', $crt_source_file ) );
+		}
+
+		// Stage temps in the destination dir and rename() them in, so a failed copy never leaves a half-written live key/cert.
+		// Each rename is atomic, the set is not; an already-renamed file is not rolled back.
+		$copy_map = [
+			$key_source_file   => $key_dest_file,
+			$crt_source_file   => $crt_dest_file,
+			$chain_source_file => $chain_dest_file,
+		];
+
+		$temp_files = [];
+		foreach ( $copy_map as $source => $dest ) {
+			$temp = $dest . '.tmp';
+			if ( ! copy( $source, $temp ) ) {
+				// Include the current temp: a failed copy may still have created a partial file.
+				array_map( 'unlink', array_filter( array_merge( array_keys( $temp_files ), [ $temp ] ), 'file_exists' ) );
+				throw new \Exception( sprintf( 'Failed to copy certificate file %s to %s.', $source, $temp ) );
+			}
+			$temp_files[ $temp ] = $dest;
+			// Keep the live file's mode on renewal, as the previous in-place copy() did.
+			if ( file_exists( $dest ) ) {
+				chmod( $temp, fileperms( $dest ) & 0777 );
+			}
+		}
+
+		foreach ( $temp_files as $temp => $dest ) {
+			if ( ! rename( $temp, $dest ) ) {
+				array_map( 'unlink', array_filter( array_keys( $temp_files ), 'file_exists' ) );
+				throw new \Exception( sprintf( 'Failed to move certificate file %s to %s.', $temp, $dest ) );
+			}
+		}
 	}
 
 	/**
@@ -519,7 +795,7 @@ class Site_Letsencrypt {
 			\EE::log( "Loading current certificate for $domain" );
 
 			$certificate       = $this->repository->loadDomainCertificate( $domain );
-			$certificateParser = new CertificateParser();
+			$certificateParser = new EECertificateParser();
 			$parsedCertificate = $certificateParser->parse( $certificate );
 
 			if ( $parsedCertificate->getValidTo()->format( 'U' ) - time() < 0 ) {
@@ -550,7 +826,7 @@ class Site_Letsencrypt {
 		\EE::log( "Loading current certificate for $domain" );
 
 		$certificate       = $this->repository->loadDomainCertificate( $domain );
-		$certificateParser = new CertificateParser();
+		$certificateParser = new EECertificateParser();
 		$parsedCertificate = $certificateParser->parse( $certificate );
 
 		// 3024000 = 35 days.
@@ -569,13 +845,30 @@ class Site_Letsencrypt {
 	}
 
 	/**
+	 * Whether the given exception is a Let's Encrypt `rateLimited` ACME error.
+	 *
+	 * @param \Throwable $e
+	 *
+	 * @return bool
+	 */
+	private function is_rate_limit_exception( $e ) {
+		if ( $e instanceof RateLimitedServerException ) {
+			return true;
+		}
+
+		// No bare "too many" match: it also hits unrelated errors like "Too many open files".
+		return false !== stripos( $e->getMessage(), 'ratelimited' );
+	}
+
+	/**
 	 * Renew a given domain certificate.
 	 *
 	 * @param string $domain
 	 * @param array $alternativeNames
+	 * @param string $email
 	 * @param bool $force
 	 */
-	private function executeRenewal( $domain, array $alternativeNames, $force = false ) {
+	private function executeRenewal( $domain, array $alternativeNames, $email, $force = false ) {
 		try {
 			// Check expiration date to avoid too much renewal
 			\EE::log( "Loading current certificate for $domain" );
@@ -583,7 +876,7 @@ class Site_Letsencrypt {
 			$certificate = $this->repository->loadDomainCertificate( $domain );
 
 			if ( ! $force ) {
-				$certificateParser = new CertificateParser();
+				$certificateParser = new EECertificateParser();
 				$parsedCertificate = $certificateParser->parse( $certificate );
 
 				// 3024000 = 35 days.
@@ -601,7 +894,7 @@ class Site_Letsencrypt {
 
 				\EE::log(
 					sprintf(
-						'Current certificate will expire in less than 25 days (%s), renewal is required.',
+						'Current certificate will expire in less than 35 days (%s), renewal is required.',
 						$parsedCertificate->getValidTo()->format( 'Y-m-d H:i:s' )
 					)
 				);
@@ -615,7 +908,7 @@ class Site_Letsencrypt {
 
 			// Distinguished name
 			\EE::debug( 'Loading domain distinguished name...' );
-			$distinguishedName = $this->getOrCreateDistinguishedName( $domain, $alternativeNames, \EE\Utils\get_config_value( 'le-mail' ) );
+			$distinguishedName = $this->getOrCreateDistinguishedName( $domain, $alternativeNames, $email );
 
 			// Order
 			$domains = array_merge( [ $domain ], $alternativeNames );
@@ -641,19 +934,23 @@ class Site_Letsencrypt {
 			return true;
 
 		} catch ( \Exception $e ) {
-			\EE::warning( 'A critical error occured during certificate renewal' );
-			\EE::debug( print_r( $e, true ) );
-
-			\EE::warning( 'Challenge Authorization failed. Check logs and check if your domain is pointed correctly to this server.' );
-			\EE::log( 'You can fix the issue and re-run: ee site ssl-verify ' . $domains[0] );
+			\EE::warning( 'A critical error occurred during certificate renewal: ' . $e->getMessage() );
+			\EE::debug( (string) $e );
+			// A rate limit is not a misconfigured-domain failure; point the user to the LE rate-limit docs.
+			if ( $this->is_rate_limit_exception( $e ) ) {
+				\EE::warning( 'Let\'s Encrypt rate limit hit for: ' . $domain . '. Please wait before retrying. Ref: https://letsencrypt.org/docs/rate-limits/' );
+			}
+			\EE::log( 'You can fix the issue and re-run: ee site ssl-verify ' . $domain );
 
 			return false;
 		} catch ( \Throwable $e ) {
-			\EE::warning( 'A critical error occured during certificate renewal' );
-			\EE::debug( print_r( $e, true ) );
-
-			\EE::warning( 'Challenge Authorization failed. Check logs and check if your domain is pointed correctly to this server.' );
-			\EE::log( 'You can fix the issue and re-run: ee site ssl-verify ' . $domains[0] );
+			\EE::warning( 'A critical error occurred during certificate renewal: ' . $e->getMessage() );
+			\EE::debug( (string) $e );
+			// A rate limit is not a misconfigured-domain failure; point the user to the LE rate-limit docs.
+			if ( $this->is_rate_limit_exception( $e ) ) {
+				\EE::warning( 'Let\'s Encrypt rate limit hit for: ' . $domain . '. Please wait before retrying. Ref: https://letsencrypt.org/docs/rate-limits/' );
+			}
+			\EE::log( 'You can fix the issue and re-run: ee site ssl-verify ' . $domain );
 
 			return false;
 		}
@@ -691,6 +988,9 @@ class Site_Letsencrypt {
 		if ( $this->repository->hasDomainDistinguishedName( $domain ) ) {
 			$original = $this->repository->loadDomainDistinguishedName( $domain );
 
+			// Honor an updated le-mail on renewal; fall back to stored email only when none is passed.
+			$email_address = ! empty( $email ) ? $email : $original->getEmailAddress();
+
 			$distinguishedName = new DistinguishedName(
 				$domain,
 				$original->getCountryName(),
@@ -698,7 +998,7 @@ class Site_Letsencrypt {
 				$original->getLocalityName(),
 				$original->getOrganizationName(),
 				$original->getOrganizationalUnitName(),
-				$original->getEmailAddress(),
+				$email_address,
 				$alternativeNames
 			);
 		} else {

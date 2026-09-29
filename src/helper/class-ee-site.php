@@ -35,6 +35,10 @@ use function EE\Site\Utils\validate_alias_domains;
  * @package ee
  */
 abstract class EE_Site_Command {
+	// Seconds to wait for another process's SSL lock before giving up; cron renewals can wait longer.
+	const SSL_LOCK_WAIT_SECONDS       = 120;
+	const SSL_RENEW_LOCK_WAIT_SECONDS = 600;
+
 	/**
 	 * @var Filesystem $fs Symfony Filesystem object.
 	 */
@@ -56,6 +60,13 @@ abstract class EE_Site_Command {
 	private $le_mail;
 
 	/**
+	 * @var resource $ssl_lock_handle Handle of the process-wide SSL lock.
+	 *
+	 * Static because `ssl-renew --all` renews every site in one process, and flock refuses a second handle there.
+	 */
+	private static $ssl_lock_handle;
+
+	/**
 	 * @var array $site_data Associative array containing essential site related information.
 	 */
 	public $site_data;
@@ -64,6 +75,11 @@ abstract class EE_Site_Command {
 	 * @var array $site_meta Associative array containing essential site meta related information.
 	 */
 	public $site_meta;
+
+	/**
+	 * @var bool $le_renewal_started Whether this process already started an LE renewal (`ssl-renew --all` renews every site in one process).
+	 */
+	private static $le_renewal_started = false;
 
 	public function __construct() {
 
@@ -188,6 +204,25 @@ abstract class EE_Site_Command {
 			'db_name' => $this->site_data['db_name'],
 		];
 
+		// Never drop a database or user that another site still uses.
+		if ( ! empty( $db_data ) ) {
+			$db_labels = [
+				'db_name' => 'database',
+				'db_user' => 'database user',
+			];
+			foreach ( Site::all( [ 'site_url', 'db_host', 'db_name', 'db_user' ] ) as $site ) {
+				if ( $site->site_url === $this->site_data['site_url'] || $site->db_host !== $db_data['db_host'] ) {
+					continue;
+				}
+				foreach ( $db_labels as $key => $label ) {
+					if ( ! empty( $db_data[ $key ] ) && $site->$key === $db_data[ $key ] ) {
+						\EE::warning( sprintf( 'Keeping %s `%s`: site %s uses it too.', $label, $db_data[ $key ], $site->site_url ) );
+						$db_data[ $key ] = '';
+					}
+				}
+			}
+		}
+
 		\EE::confirm( sprintf( 'Are you sure you want to delete %s?', $this->site_data['site_url'] ), $assoc_args );
 
 		if ( $this->site_data['site_ssl'] ) {
@@ -218,14 +253,14 @@ abstract class EE_Site_Command {
 	 * Function to delete the given site.
 	 *
 	 * @param int $level           Level of deletion.
-	 *                             Level - 0: No need of clean-up.
+	 *                             Level - 0: Nothing on disk was created; the site root is kept.
 	 *                             Level - 1: Clean-up only the site-root.
 	 *                             Level - 2: Try to remove network. The network may or may not have been created.
 	 *                             Level - 3: Disconnect & remove network and try to remove containers. The containers
 	 *                             may not have been created. Level - 4: Remove containers. Level - 5: Remove db entry.
 	 * @param string $site_url     Name of the site to be deleted.
 	 * @param string $site_fs_path Webroot of the site.
-	 * @param array $db_data       Database host, user and password to cleanup db.
+	 * @param array $db_data       Database host, name and user to drop; an empty name or user is kept.
 	 *
 	 * @throws \EE\ExitException
 	 */
@@ -260,11 +295,16 @@ abstract class EE_Site_Command {
 		}
 
 		if ( ! empty( $db_data['db_host'] ) ) {
-			\EE\Site\Utils\cleanup_db( $db_data['db_host'], $db_data['db_name'] );
-			\EE\Site\Utils\cleanup_db_user( $db_data['db_host'], $db_data['db_user'] );
+			if ( ! empty( $db_data['db_name'] ) ) {
+				\EE\Site\Utils\cleanup_db( $db_data['db_host'], $db_data['db_name'] );
+			}
+			if ( ! empty( $db_data['db_user'] ) ) {
+				\EE\Site\Utils\cleanup_db_user( $db_data['db_host'], $db_data['db_user'] );
+			}
 		}
 
-		if ( $this->fs->exists( $site_fs_path ) ) {
+		// At level 0 the webroot was not created by this run: it may belong to someone else.
+		if ( $level > 0 && $this->fs->exists( $site_fs_path ) ) {
 			try {
 				$this->fs->remove( $site_fs_path );
 			} catch ( \Exception $e ) {
@@ -277,10 +317,12 @@ abstract class EE_Site_Command {
 		\EE\Site\Utils\remove_etc_hosts_entry( $site_url );
 
 		$config_file_path = EE_ROOT_DIR . '/services/nginx-proxy/conf.d/' . $site_url . '-redirect.conf';
+		$redirect_removed = false;
 
 		if ( $this->fs->exists( $config_file_path ) ) {
 			try {
 				$this->fs->remove( $config_file_path );
+				$redirect_removed = true;
 			} catch ( \Exception $e ) {
 				\EE::debug( $e );
 				\EE::error( 'Could not remove site redirection file. Please check if you have sufficient rights.' );
@@ -302,7 +344,8 @@ abstract class EE_Site_Command {
 
 		$conf_locations = [ $proxy_conf_location, $proxy_vhost_location, $proxy_vhost_location_subdom ];
 
-		$reload = false;
+		// The proxy reloaded when the containers went down, before the www redirect was removed.
+		$reload = $redirect_removed;
 
 		foreach ( $conf_locations as $cl ) {
 
@@ -348,21 +391,8 @@ abstract class EE_Site_Command {
 		\EE::do_hook( 'site_cleanup', $site_url );
 
 		if ( $level > 4 ) {
-			if ( $this->site_data['site_ssl'] ) {
-				\EE::log( 'Removing ssl certs and other config files.' );
-				$crt_file   = EE_ROOT_DIR . "/services/nginx-proxy/certs/$site_url.crt";
-				$key_file   = EE_ROOT_DIR . "/services/nginx-proxy/certs/$site_url.key";
-				$pem_file   = EE_ROOT_DIR . "/services/nginx-proxy/certs/$site_url.chain.pem";
-				$conf_certs = EE_ROOT_DIR . "/services/nginx-proxy/acme-conf/certs/$site_url";
-				$conf_var   = EE_ROOT_DIR . "/services/nginx-proxy/acme-conf/var/$site_url";
-
-				$delete_files = [ $conf_certs, $conf_var, $crt_file, $key_file, $pem_file ];
-				try {
-					$this->fs->remove( $delete_files );
-				} catch ( \Exception $e ) {
-					\EE::warning( $e );
-				}
-			}
+			// Also when site_ssl is empty: SSL may have been turned off or lost while the files stayed, and nginx-proxy would keep matching them.
+			\EE\Site\Utils\remove_site_ssl_files( $site_url, $this->get_ssl_domains( $site_url ) );
 
 			if ( Site::find( $site_url )->delete() ) {
 				\EE::log( 'Removed database entry.' );
@@ -392,6 +422,12 @@ abstract class EE_Site_Command {
 	 *
 	 * [--wildcard]
 	 * : Enable wildcard SSL on site.
+	 *
+	 * [--ssl-key=<ssl-key-path>]
+	 * : Path to the SSL key file. Required with --ssl=custom.
+	 *
+	 * [--ssl-crt=<ssl-crt-path>]
+	 * : Path to the SSL crt file. Required with --ssl=custom.
 	 *
 	 * [--php=<php-version>]
 	 * : PHP version for site. Currently only supports PHP 5.6, 7.0, 7.2, 7.3, 7.4, 8.0, 8.1, 8.2, 8.3, 8.4, and 8.5.
@@ -443,6 +479,9 @@ abstract class EE_Site_Command {
 	 *
 	 *     # Add self-signed SSL to non-ssl site
 	 *     $ ee site update example.com --ssl=self
+	 *
+	 *     # Add custom SSL to non-ssl site
+	 *     $ ee site update example.com --ssl=custom --ssl-key=/path/to/site.key --ssl-crt=/path/to/site.crt
 	 *
 	 *     # Update PHP version of site.
 	 *     $ ee site update example.com --php=8.0
@@ -503,6 +542,11 @@ abstract class EE_Site_Command {
 			$array_data      = (array) $this->site_data;
 			$this->site_data = reset( $array_data );
 
+			// Lock before the compose dump below drops HTTPS, so a busy lock can't leave the site half-updated.
+			if ( 'le' === $this->site_data['site_ssl'] ) {
+				$this->acquire_ssl_lock();
+			}
+
 			// Drop blanks so that e.g. `b.com,` never stores an empty alias domain.
 			$existing_alias_domains = split_alias_domains( (string) $this->site_data['alias_domains'] );
 			$domains_to_add         = split_alias_domains( $add_domains );
@@ -550,6 +594,11 @@ abstract class EE_Site_Command {
 				}
 			}
 
+			// Resolve le-mail before the site drops HTTPS; the renewal below would otherwise exit mid-update without reverting.
+			if ( 'le' === $this->site_data['site_ssl'] && ! isset( $this->le_mail ) ) {
+				$this->le_mail = $this->get_validated_le_mail( \EE::get_runner()->config['le-mail'] ?? null );
+			}
+
 			$final_alias_domains = array_merge( $existing_alias_domains, $domains_to_add );
 			$final_alias_domains = array_diff( $final_alias_domains, $domains_to_delete );
 
@@ -568,8 +617,9 @@ abstract class EE_Site_Command {
 			$this->site_data['alias_domains'] = implode( ',', $final_alias_domains );
 			$is_ssl                           = $this->site_data['site_ssl'] ? true : false;
 			$preferred_ssl_challenge          = get_preferred_ssl_challenge( get_domains_of_site( $this->site_data['site_url'] ) );
-			// Only LE sites drop HTTPS here for the HTTP-01 challenge; the renewal below turns it back on, other SSL types keep theirs.
-			$nohttps                          = 'le' === $this->site_data['site_ssl'] && 'dns' !== $preferred_ssl_challenge;
+			// Sites without SSL stay HTTP-only, else nginx-proxy serves HTTPS with any leftover cert whose name matches.
+			// LE sites drop HTTPS here for the HTTP-01 challenge; the renewal below turns it back on, other SSL types keep theirs.
+			$nohttps                          = ! $is_ssl || ( 'le' === $this->site_data['site_ssl'] && 'dns' !== $preferred_ssl_challenge );
 			$this->dump_docker_compose_yml( [ 'nohttps' => $nohttps ] );
 			\EE_DOCKER::docker_compose_up( $this->site_data['site_fs_path'], [ 'nginx' ] );
 		} catch ( \Exception $e ) {
@@ -598,23 +648,39 @@ abstract class EE_Site_Command {
 			}
 		}
 
-		$client = new Site_Letsencrypt();
-
-		$old_certs = $client->loadDomainCertificates( $all_domains );
-
 		if ( $is_ssl ) {
 			// Only Let's Encrypt certs can be reissued by EE to cover the new alias-domain set.
 			if ( 'le' === $this->site_data['site_ssl'] ) {
+				$client    = new Site_Letsencrypt();
+				$old_certs = $client->loadDomainCertificates( $all_domains );
+
 				// Update SSL.
 				EE::log( 'Updating and force renewing SSL certificate to accomodated alias domain changes.' );
 				try {
-					$this->ssl_renew( [ $this->site_data['site_url'] ], [ 'force' => true ] );
+					// le-mail was resolved and validated before the site dropped HTTPS.
+					$this->reissue_le_certificate( true );
 				} catch ( \Exception $e ) {
 					EE::warning( 'Certificate could not be issued. Reverting back to original state.' );
+					// The DB still has the old alias domains, so a refresh regenerates the site's compose file and proxy config from it.
 					$this->enable( [ $this->site_data['site_url'] ], [ 'refresh' => 'true' ] );
 					\EE::do_hook( 'site_alias_domains_update_failed', $site->site_url, $domains_to_add );
-					EE::error( $e->getMessage() );
+					// The failed order left an authorization challenge for each new domain.
+					foreach ( array_diff( $domains_to_add, [ \EE\Site\Utils\get_www_counterpart( $site->site_url ) ] ) as $domain ) {
+						$this->fs->remove( EE_ROOT_DIR . '/services/nginx-proxy/acme-conf/var/' . $domain );
+					}
+					EE::error( sprintf( 'Alias domains of %s were not changed: %s', $site->site_url, $e->getMessage() ) );
 				}
+
+				// Revoke only certificates a new one replaced: a DNS-01 order without Cloudflare credentials returns before issuing.
+				$new_certs = $client->loadDomainCertificates( $all_domains );
+				$replaced  = array_filter(
+					$old_certs,
+					function ( $cert, $domain ) use ( $new_certs ) {
+						return isset( $new_certs[ $domain ] ) && $new_certs[ $domain ]->getPEM() !== $cert->getPEM();
+					},
+					ARRAY_FILTER_USE_BOTH
+				);
+				$client->revokeCertificates( $replaced );
 			} elseif ( 'custom' === $this->site_data['site_ssl'] ) {
 				EE::warning( 'Custom SSL certificate is not renewed automatically. Please ensure the certificate you provided covers the updated alias-domain set.' );
 			} else {
@@ -622,9 +688,6 @@ abstract class EE_Site_Command {
 				EE::log( 'No SSL certificate action needed for ' . $this->site_data['site_ssl'] . ' SSL on alias domain change.' );
 			}
 		}
-
-		// Revoke old certificate which will not be used
-		$client->revokeCertificates( $old_certs );
 
 		chdir( $this->site_data['site_fs_path'] );
 		// Required as env variables have changed.
@@ -635,6 +698,19 @@ abstract class EE_Site_Command {
 			update_site_db_entry( $this->site_data['site_url'], $this->site_data );
 		} catch ( \Exception $e ) {
 			EE::error( $e->getMessage() );
+		}
+
+		// A stale proxy cache location would use this site's cache zone if the domain is ever served again, e.g. after the site is deleted.
+		foreach ( array_diff( $domains_to_delete, [ $this->site_data['site_url'], '*.' . $this->site_data['site_url'] ] ) as $domain ) {
+			$location_file = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/' . $domain . '_location';
+			if ( $this->fs->exists( $location_file ) ) {
+				$this->fs->remove( $location_file );
+			}
+		}
+
+		// A removed alias's ACME state (its authorization challenge) is no longer tracked by the site, so a later site delete can't find it.
+		foreach ( array_diff( $domains_to_delete, [ $this->site_data['site_url'], \EE\Site\Utils\get_www_counterpart( $this->site_data['site_url'] ) ] ) as $domain ) {
+			$this->fs->remove( EE_ROOT_DIR . '/services/nginx-proxy/acme-conf/var/' . $domain );
 		}
 
 		if ( ! empty( $this->site_data['proxy_cache'] ) && 'on' === $this->site_data['proxy_cache'] ) {
@@ -732,6 +808,8 @@ abstract class EE_Site_Command {
 				] );
 			}
 
+			$failed = false;
+
 			if ( 'on' === $proxy_cache ) {
 
 				$sanitized_site_url = str_replace( '.', '-', $this->site_data['site_url'] );
@@ -746,30 +824,39 @@ abstract class EE_Site_Command {
 				];
 				$proxy_conf_content = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx-proxy/proxy.conf.mustache', $data );
 
-				if ( ! $force ) {
-					$this->fs->dumpFile( $proxy_conf_location, $proxy_conf_content );
-				}
-
-				$proxy_vhost_content = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx-proxy/vhost_location.conf.mustache', $data );
-				$this->fs->dumpFile( $proxy_vhost_location, $proxy_vhost_content );
-
+				// In force mode (alias domain changes) the cache zone in conf.d is kept, only the locations using it are written.
+				$location_files = [ $proxy_vhost_location ];
 				if ( 'subdom' === $this->site_data['app_sub_type'] ) {
-					$this->fs->dumpFile( $proxy_vhost_location_subdom, $proxy_vhost_content );
+					$location_files[] = $proxy_vhost_location_subdom;
+				}
+				foreach ( $alias_domains as $ad ) {
+					$location_files[] = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/' . $ad . '_location';
 				}
 
-				foreach ( $alias_domains as $ad ) {
+				$written_files = $force ? $location_files : array_merge( [ $proxy_conf_location ], $location_files );
+				$backup        = \EE\Site\Utils\backup_files( $written_files );
 
-					$proxy_vhost_location = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/' . $ad . '_location';
-					$proxy_vhost_content  = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx-proxy/vhost_location.conf.mustache', $data );
-					$this->fs->dumpFile( $proxy_vhost_location, $proxy_vhost_content );
+				try {
+					if ( ! $force ) {
+						$this->fs->dumpFile( $proxy_conf_location, $proxy_conf_content );
+					}
+
+					$proxy_vhost_content = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx-proxy/vhost_location.conf.mustache', $data );
+					foreach ( $location_files as $location_file ) {
+						$this->fs->dumpFile( $location_file, $proxy_vhost_content );
+					}
+				} catch ( \Exception $e ) {
+					// A write that fails part-way must not leave the files already written for the next reload.
+					\EE\Site\Utils\restore_files( $backup );
+					throw $e;
 				}
 			} else {
 				$reload = false;
 
-
 				$conf_locations = [ $proxy_conf_location, $proxy_vhost_location, $proxy_vhost_location_subdom ];
-
-				$reload = false;
+				foreach ( $alias_domains as $ad ) {
+					$conf_locations[] = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/' . $ad . '_location';
+				}
 
 				foreach ( $conf_locations as $cl ) {
 
@@ -779,32 +866,45 @@ abstract class EE_Site_Command {
 					}
 				}
 
-				foreach ( $alias_domains as $ad ) {
-
-					$proxy_vhost_location = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/' . $ad . '_location';
-					if ( $this->fs->exists( $proxy_vhost_location ) ) {
-						$this->fs->remove( $proxy_vhost_location );
-						$reload = true;
-					}
-				}
-
 				if ( $reload ) {
 					\EE\Site\Utils\reload_global_nginx_proxy();
 					EE::exec( 'docker exec ' . EE_PROXY_TYPE . " bash -c 'rm -rf /var/cache/nginx/" . $this->site_data['site_url'] . "'" );
 				}
 			}
-			if ( EE::exec( 'docker exec ' . EE_PROXY_TYPE . " bash -c 'nginx -t'" ) ) {
+
+			$test = \EE\Site\Utils\test_global_nginx_proxy_config( true );
+			// The reload regenerates and tests again; restarting after it refused would load a config nginx rejected.
+			if ( 0 === $test->return_code && false !== \EE\Site\Utils\reload_global_nginx_proxy() ) {
+				// A changed cache zone needs a fresh nginx master; alias changes only add locations, which the reload applies.
+				if ( ! $force ) {
+					EE::exec( 'docker restart ' . EE_PROXY_TYPE );
+				}
+			} elseif ( 'on' === $proxy_cache ) {
+				// Put back exactly what this call replaced, so no location is left using a cache zone that is gone.
+				\EE\Site\Utils\restore_files( $backup );
 				\EE\Site\Utils\reload_global_nginx_proxy();
-				EE::exec( 'docker restart ' . EE_PROXY_TYPE );
+				$failed = true;
 			} else {
-				$this->fs->remove( $proxy_conf_location );
-				$this->fs->remove( $proxy_vhost_location );
-				$this->fs->remove( $proxy_vhost_location_subdom );
-				\EE\Site\Utils\reload_global_nginx_proxy();
+				// Removing the zone together with every location that uses it keeps the config valid, so the failure is elsewhere.
+				EE::warning( "nginx config test failed after disabling proxy cache:\n" . trim( $test->stderr ) );
 			}
 		} catch ( \Exception $e ) {
 			EE::error( $e->getMessage() );
 		}
+
+		if ( $failed ) {
+			$message = 'Could not enable proxy cache on ' . $this->site_data['site_url'] . ", nginx config test failed. The previous proxy config was restored.\n" . trim( $test->stderr );
+			if ( $force || $call_on_create ) {
+				EE::warning( $message );
+				if ( $call_on_create ) {
+					$this->site_data['proxy_cache'] = 'off';
+				}
+
+				return;
+			}
+			EE::error( $message );
+		}
+
 		if ( ! $call_on_create ) {
 			$site->proxy_cache = $proxy_cache;
 			$site->save();
@@ -919,11 +1019,16 @@ abstract class EE_Site_Command {
 			$ssl = false;
 		}
 
-		if ( ! $this->site_data->site_ssl_wildcard && $wildcard ) {
+		// Only enabling SSL depends on the wildcard flag; self-signed sites are stored as wildcard, so this blocked --ssl=off for them.
+		// Self-signed certificates are always wildcard, so neither check applies to them.
+		if ( $ssl && 'self' !== $ssl && ! $this->site_data->site_ssl_wildcard && $wildcard ) {
 			EE::error( 'Update from normal SSL to wildcard SSL is not supported yet.' );
 		}
 
-		if ( $this->site_data->site_ssl_wildcard && ! $wildcard ) {
+		// Self-signed sites are stored as wildcard too, so only refuse a normal certificate where one can't cover the site.
+		$alias_domains  = empty( $this->site_data->alias_domains ) ? [] : explode( ',', $this->site_data->alias_domains );
+		$needs_wildcard = 'subdom' === $this->site_data->app_sub_type || in_array( '*.' . $this->site_data->site_url, $alias_domains, true );
+		if ( $ssl && 'self' !== $ssl && $this->site_data->site_ssl_wildcard && ! $wildcard && $needs_wildcard ) {
 			EE::error( 'Update from wildcard SSL to normal SSL is not supported yet.' );
 		}
 
@@ -939,10 +1044,32 @@ abstract class EE_Site_Command {
 			EE::error( 'You cannot use --wildcard flag with --ssl=off' );
 		}
 
+		// Their redirect configs load this site's certificate, which --ssl=off removes; nginx would then fail to load its config.
+		if ( ! $ssl ) {
+			$children = array_filter(
+				Site::all( [ 'site_url', 'site_ssl' ] ),
+				function ( $child ) {
+					return 'inherit' === $child->site_ssl && implode( '.', array_slice( explode( '.', $child->site_url ), 1 ) ) === $this->site_data->site_url;
+				}
+			);
+			if ( ! empty( $children ) ) {
+				$names = array_map(
+					function ( $child ) {
+						return $child->site_url;
+					},
+					$children
+				);
+				EE::error( sprintf( 'Cannot disable SSL on %s: %s inherit its certificate. Disable SSL on them first.', $this->site_data->site_url, implode( ', ', $names ) ) );
+			}
+		}
+
 		EE::log( 'Starting SSL update for: ' . $this->site_data->site_url );
 		try {
-			$this->site_data->site_ssl          = $ssl;
-			$this->site_data->site_ssl_wildcard = $wildcard ? 1 : 0;
+			$this->site_data->site_ssl = $ssl;
+			// Keep the stored wildcard flag when turning SSL off, so the same SSL can be enabled again.
+			if ( $ssl ) {
+				$this->site_data->site_ssl_wildcard = ( $wildcard || 'self' === $ssl ) ? 1 : 0;
+			}
 
 			$site                        = $this->site_data;
 			$array_data                  = ( array ) $this->site_data;
@@ -950,7 +1077,29 @@ abstract class EE_Site_Command {
 			$this->site_data['site_ssl'] = $ssl;
 
 			if ( $ssl ) {
-				$this->www_ssl_wrapper( [ 'nginx' ] );
+				// www_ssl_wrapper() skips cert work for custom SSL, so validate and copy the provided pair first.
+				if ( 'custom' === $ssl ) {
+					$this->validate_site_custom_ssl( get_flag_value( $assoc_args, 'ssl-key' ), get_flag_value( $assoc_args, 'ssl-crt' ) );
+				}
+				try {
+					// Inside the try, so a failure after the copy removes the copied pair again.
+					if ( 'custom' === $ssl ) {
+						$this->custom_site_ssl();
+					}
+					$this->www_ssl_wrapper( [ 'nginx' ] );
+					// init_le() only warns and clears site_ssl when the certificate could not be issued.
+					if ( empty( $this->site_data['site_ssl'] ) ) {
+						throw new \Exception( 'See the warnings above.' );
+					}
+				} catch ( \Exception $e ) {
+					// A custom pair passed from the certs dir itself is the user's only copy.
+					$this->disable_ssl( 'custom' === $ssl ? [ $this->site_data['ssl_key'], $this->site_data['ssl_crt'] ] : [] );
+					$rerun = '--ssl=' . $ssl . ( $wildcard ? ' --wildcard' : '' );
+					if ( 'custom' === $ssl ) {
+						$rerun .= ' --ssl-key=' . escapeshellarg( $this->site_data['ssl_key'] ) . ' --ssl-crt=' . escapeshellarg( $this->site_data['ssl_crt'] );
+					}
+					throw new \Exception( sprintf( 'SSL could not be enabled on %1$s, the site stays without SSL: %2$s Fix the issue and re-run `ee site update %1$s %3$s`.', $this->site_data['site_url'], rtrim( $e->getMessage(), '.' ) . '.', $rerun ) );
+				}
 			} else {
 				$this->disable_ssl();
 			}
@@ -974,14 +1123,54 @@ abstract class EE_Site_Command {
 	/**
 	 * Disables SSL on a site.
 	 *
+	 * @param array $keep_files Certificate files to leave in place.
+	 *
 	 * @throws \Exception
 	 */
-	private function disable_ssl() {
+	private function disable_ssl( array $keep_files = [] ) {
+
+		$site_url = $this->site_data['site_url'];
 
 		$this->dump_docker_compose_yml( [ 'nohttps' => true ] );
 
 		\EE\Site\Utils\start_site_containers( $this->site_data['site_fs_path'], [ 'nginx' ] );
+
+		// The redirect's HTTPS block loads the certificate that is removed below.
+		if ( $this->fs->exists( EE_ROOT_DIR . '/services/nginx-proxy/conf.d/' . $site_url . '-redirect.conf' ) ) {
+			\EE\Site\Utils\add_site_redirects( $site_url, false, false );
+		}
 		\EE\Site\Utils\reload_global_nginx_proxy();
+
+		// Left behind, nginx-proxy would still match the certificate to this site's (and similarly named sites') hosts.
+		\EE\Site\Utils\remove_site_ssl_files( $site_url, $this->get_ssl_domains( $site_url ), $keep_files );
+	}
+
+	/**
+	 * Domains other than the site itself that can have ACME state for its certificate: its alias domains, its www counterpart and its wildcard name.
+	 *
+	 * @param string $site_url Name of the site.
+	 *
+	 * @return array
+	 */
+	private function get_ssl_domains( $site_url ) {
+
+		$domains = empty( $this->site_data['alias_domains'] ) ? [] : explode( ',', $this->site_data['alias_domains'] );
+
+		// Never touch the state of the www counterpart when it is another site or another site's alias.
+		$www    = \EE\Site\Utils\get_www_counterpart( $site_url );
+		$parent = get_parent_of_alias( $www );
+		if ( ! Site::find( $www ) && ( empty( $parent ) || $site_url === $parent ) ) {
+			$domains[] = $www;
+		}
+
+		// A wildcard order stores the `*.<site>` authorization under its own name, also when it isn't an alias.
+		$wildcard = '*.' . $site_url;
+		$parent   = get_parent_of_alias( $wildcard );
+		if ( empty( $parent ) || $site_url === $parent ) {
+			$domains[] = $wildcard;
+		}
+
+		return array_values( array_diff( array_unique( array_map( 'trim', $domains ) ), [ $site_url, '' ] ) );
 	}
 
 	/**
@@ -1536,6 +1725,63 @@ abstract class EE_Site_Command {
 	}
 
 	/**
+	 * Acquire a process-wide lock serializing all SSL/ACME operations.
+	 *
+	 * Concurrent runs share the HTTP-01 challenge files and vhost.d/default (wiped by cleanup()), proxy reloads and per-domain ACME state.
+	 * Polls for up to $wait seconds; the kernel drops the lock when the process exits.
+	 *
+	 * @param bool $throw Throw an exception instead of exiting, so callers that already changed site state can roll back.
+	 * @param int  $wait  Seconds to wait for a lock held by another process.
+	 *
+	 * @throws \Exception When $throw is set and the lock can't be acquired.
+	 * @return void
+	 */
+	private function acquire_ssl_lock( $throw = false, $wait = self::SSL_LOCK_WAIT_SECONDS ) {
+		// Already held by this process (reentrant: nested ssl_verify, or --all loop).
+		if ( isset( self::$ssl_lock_handle ) ) {
+			return;
+		}
+
+		// EE_ROOT_DIR is defined at plugin load and always exists at runtime.
+		$lock_file = EE_ROOT_DIR . '/ssl-global.lock';
+		$fh        = fopen( $lock_file, 'c' );
+		$locked    = false;
+
+		if ( $fh ) {
+			$deadline = microtime( true ) + $wait;
+			$waiting  = false;
+			while ( true ) {
+				$locked = flock( $fh, LOCK_EX | LOCK_NB, $would_block );
+				if ( $locked || ! $would_block || microtime( true ) >= $deadline ) {
+					break;
+				}
+				if ( ! $waiting ) {
+					\EE::log( sprintf( 'Waiting up to %ds for another SSL operation to finish...', $wait ) );
+					$waiting = true;
+				}
+				sleep( 1 );
+				// This file has no declare(ticks), so run pending SIGINT/SIGTERM handlers here or Ctrl-C can't end the wait.
+				pcntl_signal_dispatch();
+			}
+		}
+
+		if ( ! $locked ) {
+			if ( ! $fh ) {
+				$message = 'Unable to open SSL lock file: ' . $lock_file;
+			} else {
+				fclose( $fh );
+				$message = $would_block ? 'Another SSL operation is already in progress on this server. Wait for it to finish and retry.' : 'Unable to lock SSL lock file: ' . $lock_file;
+			}
+			if ( $throw ) {
+				throw new \Exception( $message );
+			}
+			\EE::error( $message );
+		}
+
+		self::$ssl_lock_handle = $fh;
+	}
+
+	/**
 	 * Runs the acme le registration and authorization.
 	 *
 	 * @param string $site_url     Name of the site for ssl.
@@ -1546,6 +1792,8 @@ abstract class EE_Site_Command {
 	 * @param array $alias_domains Array of alias domains if any.
 	 */
 	protected function init_le( $site_url, $site_fs_path, $wildcard = false, $www_or_non_www, $force = false, $alias_domains = [] ) {
+		// Serialize before register()/authorize() write the account key and order. Throws so create/update roll back instead of exiting mid-way.
+		$this->acquire_ssl_lock( true );
 		$preferred_challenge = get_preferred_ssl_challenge( $alias_domains );
 		$is_solver_dns       = ( $wildcard || 'dns' === $preferred_challenge ) ? true : false;
 		\EE::debug( 'Wildcard in init_le: ' . ( bool ) $wildcard );
@@ -1553,7 +1801,10 @@ abstract class EE_Site_Command {
 		$this->site_data['site_fs_path']      = $site_fs_path;
 		$this->site_data['site_ssl_wildcard'] = $wildcard;
 		$client                               = new Site_Letsencrypt();
-		$this->le_mail                        = \EE::get_runner()->config['le-mail'] ?? \EE::input( 'Enter your mail id: ' );
+		if ( ! isset( $this->le_mail ) ) {
+			// Throws instead of exiting so site create/update can roll back.
+			$this->le_mail = $this->get_validated_le_mail( \EE::get_runner()->config['le-mail'] ?? null );
+		}
 		\EE::get_runner()->ensure_present_in_config( 'le-mail', $this->le_mail );
 		if ( ! $client->register( $this->le_mail ) ) {
 			$this->site_data['site_ssl'] = null;
@@ -1588,6 +1839,31 @@ abstract class EE_Site_Command {
 				return;
 			}
 		}
+	}
+
+	/**
+	 * Resolves and validates the Let's Encrypt account email.
+	 *
+	 * `??` only guards null/unset, so an empty/garbage le-mail (e.g. an empty STDIN
+	 * read during non-interactive cron runs) used to slip through to ACME and fail
+	 * with an opaque error. Validate here so callers always get a real email.
+	 *
+	 * @param string|null $config_mail Email resolved from config by the caller, if any.
+	 *
+	 * @return string A non-empty, valid email address.
+	 * @throws \Exception If no valid email can be resolved.
+	 */
+	private function get_validated_le_mail( $config_mail = null ) {
+		$mail = $config_mail;
+		if ( empty( $mail ) || ! filter_var( $mail, FILTER_VALIDATE_EMAIL ) ) {
+			// One re-prompt for interactive users; on non-interactive runs STDIN is empty and this stays empty.
+			$mail = \EE::input( 'Enter your mail id: ' );
+		}
+		if ( empty( $mail ) || ! filter_var( $mail, FILTER_VALIDATE_EMAIL ) ) {
+			throw new \Exception( 'A valid Let\'s Encrypt email is required. Set it with `ee config set le-mail <email>`.' );
+		}
+
+		return $mail;
 	}
 
 	/**
@@ -1683,6 +1959,9 @@ abstract class EE_Site_Command {
 
 		EE::log( 'Starting SSL verification.' );
 
+		// Reentrant when called from init_le (lock already held); locks for standalone `ee site ssl-verify`.
+		$this->acquire_ssl_lock();
+
 		// This checks if this method was called internally by ee or by user
 		$called_by_ee   = ! empty( $this->site_data['site_url'] );
 		$api_key_absent = empty( get_config_value( 'cloudflare-api-key' ) );
@@ -1691,8 +1970,23 @@ abstract class EE_Site_Command {
 			$this->site_data = get_site_info( $args );
 		}
 
+		// A failed LE setup (init_le) clears site_ssl and suggests ssl-verify; point to the command that enables SSL properly.
+		if ( empty( $this->site_data['site_ssl'] ) ) {
+			$wildcard_flag = empty( $this->site_data['site_ssl_wildcard'] ) ? '' : ' --wildcard';
+			EE::error( sprintf( 'SSL is not enabled on %1$s. Enable Let\'s Encrypt SSL with `ee site update %1$s --ssl=le%2$s`.', $this->site_data['site_url'], $wildcard_flag ) );
+		}
+
+		// SSL verification issues a Let's Encrypt cert via ACME, which is meaningless for non-LE certs and would clobber custom/self/inherited ones.
+		if ( 'le' !== $this->site_data['site_ssl'] ) {
+			EE::error( 'SSL verification is only applicable to Let\'s Encrypt certificates.' );
+		}
+
 		if ( ! isset( $this->le_mail ) ) {
-			$this->le_mail = \EE::get_config( 'le-mail' ) ?? \EE::input( 'Enter your mail id: ' );
+			try {
+				$this->le_mail = $this->get_validated_le_mail( \EE::get_config( 'le-mail' ) );
+			} catch ( \Exception $e ) {
+				EE::error( $e->getMessage() );
+			}
 		}
 
 		$force         = \EE\Utils\get_flag_value( $assoc_args, 'force' );
@@ -1864,7 +2158,7 @@ abstract class EE_Site_Command {
 
 		try {
 			$certificate       = new \AcmePhp\Ssl\Certificate( file_get_contents( $crt_file ) );
-			$certificateParser = new \AcmePhp\Ssl\Parser\CertificateParser();
+			$certificateParser = new \EE\Site\Type\EECertificateParser();
 			$parsedCertificate = $certificateParser->parse( $certificate );
 
 			$issuer    = $parsedCertificate->getIssuer();
@@ -1877,7 +2171,8 @@ abstract class EE_Site_Command {
 			$crt_pem = file_get_contents( $crt_file );
 			if ( function_exists( 'openssl_x509_parse' ) ) {
 				$cert_data   = openssl_x509_parse( $crt_pem );
-				$subjectCN   = isset( $cert_data['subject']['CN'] ) ? $cert_data['subject']['CN'] : '';
+				// Without a subject CN, the parser's subject is the first SAN.
+				$subjectCN   = isset( $cert_data['subject']['CN'] ) ? $cert_data['subject']['CN'] : (string) $subject;
 				$issuer_full = isset( $cert_data['issuer'] ) ? $cert_data['issuer'] : [];
 				$le_found    = false;
 				foreach ( $issuer_full as $field => $value ) {
@@ -1957,9 +2252,8 @@ abstract class EE_Site_Command {
 
 		EE::log( 'Starting SSL cert renewal' );
 
-		if ( ! isset( $this->le_mail ) ) {
-			$this->le_mail = EE::get_config( 'le-mail' ) ?? EE::input( 'Enter your mail id: ' );
-		}
+		// First call in a `ssl-renew --all` batch locks; later per-site calls are reentrant.
+		$this->acquire_ssl_lock( false, self::SSL_RENEW_LOCK_WAIT_SECONDS );
 
 		$force = get_flag_value( $assoc_args, 'force', false );
 		$all   = get_flag_value( $assoc_args, 'all', false );
@@ -1980,11 +2274,25 @@ abstract class EE_Site_Command {
 					}
 					continue;
 				}
-				$this->renew_ssl_cert( [ $site->site_url ], $force );
+				try {
+					$this->renew_ssl_cert( [ $site->site_url ], $force );
+				} catch ( \Exception $e ) {
+					EE::warning( $e->getMessage() . ' The current certificate is kept.' );
+				}
 			}
 		} else {
 			$args = auto_site_name( $args, 'site', __FUNCTION__ );
-			$this->renew_ssl_cert( $args, $force );
+			try {
+				$this->renew_ssl_cert( $args, $force );
+			} catch ( \Exception $e ) {
+				// `ssl-renew --all` runs this once per site, and one failed site must not stop the others.
+				if ( ! empty( EE::get_runner()->assoc_args['all'] ) ) {
+					EE::warning( $e->getMessage() . ' The current certificate is kept.' );
+
+					return;
+				}
+				EE::error( $e->getMessage() . ' The current certificate is kept.' );
+			}
 		}
 		EE::success( 'SSL renewal completed.' );
 	}
@@ -2012,6 +2320,15 @@ abstract class EE_Site_Command {
 			EE::error( 'Only Letsencrypt certificate renewal is supported.' );
 		}
 
+		// Resolve le-mail only after confirming the site is LE, so non-LE sites hit the site-type error first.
+		if ( ! isset( $this->le_mail ) ) {
+			try {
+				$this->le_mail = $this->get_validated_le_mail( EE::get_config( 'le-mail' ) );
+			} catch ( \Exception $e ) {
+				EE::error( $e->getMessage() );
+			}
+		}
+
 		$client              = new Site_Letsencrypt();
 		$preferred_challenge = get_preferred_ssl_challenge( get_domains_of_site( $this->site_data['site_url'] ) );
 
@@ -2024,9 +2341,40 @@ abstract class EE_Site_Command {
 			return 0;
 		}
 
+		// Space out consecutive renewals to smooth LE API load; sites not due returned above, so they don't wait.
+		if ( self::$le_renewal_started ) {
+			sleep( random_int( 1, 5 ) );
+		}
+		self::$le_renewal_started = true;
+
+		$this->reissue_le_certificate( $force );
+	}
+
+	/**
+	 * Issues the site's Let's Encrypt certificate for its current domains.
+	 *
+	 * @param bool $force Whether to force renewal of cert or not.
+	 *
+	 * @throws \Exception When no certificate was issued. The files from `get_site_ssl_file_paths()` are put back first.
+	 */
+	private function reissue_le_certificate( $force ) {
+
+		$backup              = \EE\Site\Utils\backup_files( \EE\Site\Utils\get_site_ssl_file_paths( $this->site_data['site_url'] ) );
 		$postfix_exists      = \EE_DOCKER::service_exists( 'postfix', $this->site_data['site_fs_path'] );
 		$containers_to_start = $postfix_exists ? [ 'nginx', 'postfix' ] : [ 'nginx' ];
-		$this->www_ssl_wrapper( $containers_to_start, false, $force, true );
+
+		try {
+			$this->www_ssl_wrapper( $containers_to_start, false, $force, true );
+			// init_le() only warns and clears site_ssl when the order, the validation or the request fails.
+			if ( 'le' !== $this->site_data['site_ssl'] ) {
+				throw new \Exception( sprintf( 'Let\'s Encrypt certificate could not be issued for %s. See the warnings above.', $this->site_data['site_url'] ) );
+			}
+		} catch ( \Exception $e ) {
+			$this->site_data['site_ssl'] = 'le';
+			\EE\Site\Utils\restore_files( $backup );
+			reload_global_nginx_proxy();
+			throw $e;
+		}
 
 		reload_global_nginx_proxy();
 	}
@@ -2212,11 +2560,15 @@ abstract class EE_Site_Command {
 
 	/**
 	 * Shutdown function to catch and rollback from fatal errors.
+	 *
+	 * @param array|null $error The error_get_last() result, read before anything else in the shutdown path.
 	 */
-	protected function shut_down_function() {
+	protected function shut_down_function( $error = null ) {
 
+		if ( null === $error ) {
+			$error = error_get_last();
+		}
 		$logger = \EE::get_file_logger()->withName( 'site-command' );
-		$error  = error_get_last();
 
 		// Check if the $this->site_data is set and it is array and  $this->site_data['site_url'] is set.
 		if ( isset( $this->site_data ) && is_array( $this->site_data ) && isset( $this->site_data['site_url'] ) ) {
@@ -2263,10 +2615,59 @@ abstract class EE_Site_Command {
 		}
 
 		if ( $this->fs->exists( $ssl_key ) && $this->fs->exists( $ssl_crt ) ) {
+			// Validate cert contents before storing paths, else a malformed/mismatched pair silently breaks nginx-proxy on reload.
+			$this->assert_valid_cert_key_pair( file_get_contents( $ssl_crt ), file_get_contents( $ssl_key ) );
+
 			$this->site_data['ssl_key'] = realpath( $ssl_key );
 			$this->site_data['ssl_crt'] = realpath( $ssl_crt );
 		} else {
 			throw new \Exception( 'ssl-key OR ssl-crt path does not exist' );
+		}
+	}
+
+	/**
+	 * Assert that a PEM certificate and private key are valid and matching; warn if the certificate is expired or near expiry.
+	 *
+	 * @param string $crt_contents Certificate file contents (PEM).
+	 * @param string $key_contents Private key file contents (PEM).
+	 */
+	protected function assert_valid_cert_key_pair( $crt_contents, $key_contents ) {
+
+		$cert_info = openssl_x509_parse( $crt_contents );
+		if ( false === $cert_info ) {
+			EE::error( 'The supplied --ssl-crt is not a valid/parseable certificate.' );
+		}
+
+		// nginx loads every certificate in the file, so a truncated or corrupt chain certificate breaks it too.
+		$begin_count = substr_count( $crt_contents, '-----BEGIN CERTIFICATE-----' );
+		$block_count = preg_match_all( '/-----BEGIN CERTIFICATE-----.+?-----END CERTIFICATE-----/s', $crt_contents, $crt_blocks );
+		if ( $begin_count !== $block_count ) {
+			EE::error( 'The supplied --ssl-crt contains a truncated certificate.' );
+		}
+		foreach ( $crt_blocks[0] as $crt_block ) {
+			if ( false === openssl_x509_parse( $crt_block ) ) {
+				EE::error( 'The supplied --ssl-crt contains an invalid chain certificate.' );
+			}
+		}
+
+		if ( false === openssl_pkey_get_private( $key_contents ) ) {
+			EE::error( 'The supplied --ssl-key is not a valid private key.' );
+		}
+
+		if ( ! openssl_x509_check_private_key( $crt_contents, $key_contents ) ) {
+			EE::error( 'The supplied certificate and private key do not match.' );
+		}
+
+		// Warn (but allow) on an expired or soon-to-expire cert: clone/restore may legitimately re-supply an existing expired cert, so don't block.
+		if ( isset( $cert_info['validTo_time_t'] ) ) {
+			$now              = time();
+			$expiry_threshold = 30 * 24 * 60 * 60; // 30 days in seconds.
+
+			if ( $cert_info['validTo_time_t'] < $now ) {
+				EE::warning( sprintf( 'The supplied certificate expired on %s.', date( 'Y-m-d', $cert_info['validTo_time_t'] ) ) );
+			} elseif ( $cert_info['validTo_time_t'] - $now < $expiry_threshold ) {
+				EE::warning( sprintf( 'The supplied certificate expires on %s (within 30 days).', date( 'Y-m-d', $cert_info['validTo_time_t'] ) ) );
+			}
 		}
 	}
 
@@ -2278,8 +2679,13 @@ abstract class EE_Site_Command {
 		$ssl_key_dest = sprintf( '%1$s/nginx-proxy/certs/%2$s.key', remove_trailing_slash( EE_SERVICE_DIR ), $this->site_data['site_url'] );
 		$ssl_crt_dest = sprintf( '%1$s/nginx-proxy/certs/%2$s.crt', remove_trailing_slash( EE_SERVICE_DIR ), $this->site_data['site_url'] );
 
-		$this->fs->copy( $this->site_data['ssl_key'], $ssl_key_dest, true );
-		$this->fs->copy( $this->site_data['ssl_crt'], $ssl_crt_dest, true );
+		// Copying a file onto itself truncates it, e.g. when re-enabling SSL with the files already in the certs dir.
+		if ( realpath( $ssl_key_dest ) !== $this->site_data['ssl_key'] ) {
+			$this->fs->copy( $this->site_data['ssl_key'], $ssl_key_dest, true );
+		}
+		if ( realpath( $ssl_crt_dest ) !== $this->site_data['ssl_crt'] ) {
+			$this->fs->copy( $this->site_data['ssl_crt'], $ssl_crt_dest, true );
+		}
 	}
 
 	/**
