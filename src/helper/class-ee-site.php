@@ -1140,7 +1140,7 @@ abstract class EE_Site_Command {
 	}
 
 	/**
-	 * Domains other than the site itself that can have ACME state for its certificate: its alias domains and its www counterpart.
+	 * Domains other than the site itself that can have ACME state for its certificate: its alias domains, its www counterpart and its wildcard name.
 	 *
 	 * @param string $site_url Name of the site.
 	 *
@@ -1155,6 +1155,13 @@ abstract class EE_Site_Command {
 		$parent = get_parent_of_alias( $www );
 		if ( ! Site::find( $www ) && ( empty( $parent ) || $site_url === $parent ) ) {
 			$domains[] = $www;
+		}
+
+		// A wildcard order stores the `*.<site>` authorization under its own name, also when it isn't an alias.
+		$wildcard = '*.' . $site_url;
+		$parent   = get_parent_of_alias( $wildcard );
+		if ( empty( $parent ) || $site_url === $parent ) {
+			$domains[] = $wildcard;
 		}
 
 		return array_values( array_diff( array_unique( array_map( 'trim', $domains ) ), [ $site_url, '' ] ) );
