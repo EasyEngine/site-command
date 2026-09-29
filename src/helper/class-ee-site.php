@@ -673,8 +673,16 @@ abstract class EE_Site_Command {
 					EE::error( sprintf( 'Alias domains of %s were not changed: %s', $site->site_url, $e->getMessage() ) );
 				}
 
-				// Revoke the old certificate, which the new one replaces.
-				$client->revokeCertificates( $old_certs );
+				// Revoke only certificates a new one replaced: a DNS-01 order without Cloudflare credentials returns before issuing.
+				$new_certs = $client->loadDomainCertificates( $all_domains );
+				$replaced  = array_filter(
+					$old_certs,
+					function ( $cert, $domain ) use ( $new_certs ) {
+						return isset( $new_certs[ $domain ] ) && $new_certs[ $domain ]->getPEM() !== $cert->getPEM();
+					},
+					ARRAY_FILTER_USE_BOTH
+				);
+				$client->revokeCertificates( $replaced );
 			} elseif ( 'custom' === $this->site_data['site_ssl'] ) {
 				EE::warning( 'Custom SSL certificate is not renewed automatically. Please ensure the certificate you provided covers the updated alias-domain set.' );
 			} else {
