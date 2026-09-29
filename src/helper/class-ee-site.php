@@ -1067,13 +1067,20 @@ abstract class EE_Site_Command {
 				// www_ssl_wrapper() skips cert work for custom SSL, so validate and copy the provided pair first.
 				if ( 'custom' === $ssl ) {
 					$this->validate_site_custom_ssl( get_flag_value( $assoc_args, 'ssl-key' ), get_flag_value( $assoc_args, 'ssl-crt' ) );
-					$this->custom_site_ssl();
 				}
-				$this->www_ssl_wrapper( [ 'nginx' ] );
-				// init_le() only warns and clears site_ssl when the certificate could not be issued.
-				if ( empty( $this->site_data['site_ssl'] ) ) {
+				try {
+					// Inside the try, so a failure after the copy removes the copied pair again.
+					if ( 'custom' === $ssl ) {
+						$this->custom_site_ssl();
+					}
+					$this->www_ssl_wrapper( [ 'nginx' ] );
+					// init_le() only warns and clears site_ssl when the certificate could not be issued.
+					if ( empty( $this->site_data['site_ssl'] ) ) {
+						throw new \Exception( 'See the warnings above.' );
+					}
+				} catch ( \Exception $e ) {
 					$this->disable_ssl();
-					throw new \Exception( sprintf( 'SSL could not be enabled on %s, the site stays without SSL. See the warnings above.', $this->site_data['site_url'] ) );
+					throw new \Exception( sprintf( 'SSL could not be enabled on %1$s, the site stays without SSL: %2$s Fix the issue and re-run `ee site update %1$s --ssl=%3$s`.', $this->site_data['site_url'], rtrim( $e->getMessage(), '.' ) . '.', $ssl ) );
 				}
 			} else {
 				$this->disable_ssl();
