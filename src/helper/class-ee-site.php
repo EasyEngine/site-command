@@ -1031,10 +1031,32 @@ abstract class EE_Site_Command {
 			EE::error( 'You cannot use --wildcard flag with --ssl=off' );
 		}
 
+		// Their redirect configs load this site's certificate, which --ssl=off removes; nginx would then fail to load its config.
+		if ( ! $ssl ) {
+			$children = array_filter(
+				Site::all( [ 'site_url', 'site_ssl' ] ),
+				function ( $child ) {
+					return 'inherit' === $child->site_ssl && implode( '.', array_slice( explode( '.', $child->site_url ), 1 ) ) === $this->site_data->site_url;
+				}
+			);
+			if ( ! empty( $children ) ) {
+				$names = array_map(
+					function ( $child ) {
+						return $child->site_url;
+					},
+					$children
+				);
+				EE::error( sprintf( 'Cannot disable SSL on %s: %s inherit its certificate. Disable SSL on them first.', $this->site_data->site_url, implode( ', ', $names ) ) );
+			}
+		}
+
 		EE::log( 'Starting SSL update for: ' . $this->site_data->site_url );
 		try {
-			$this->site_data->site_ssl          = $ssl;
-			$this->site_data->site_ssl_wildcard = $wildcard ? 1 : 0;
+			$this->site_data->site_ssl = $ssl;
+			// Keep the stored wildcard flag when turning SSL off, so the same SSL can be enabled again.
+			if ( $ssl ) {
+				$this->site_data->site_ssl_wildcard = $wildcard ? 1 : 0;
+			}
 
 			$site                        = $this->site_data;
 			$array_data                  = ( array ) $this->site_data;
