@@ -657,9 +657,7 @@ abstract class EE_Site_Command {
 				// Update SSL.
 				EE::log( 'Updating and force renewing SSL certificate to accomodated alias domain changes.' );
 				try {
-					if ( ! isset( $this->le_mail ) ) {
-						$this->le_mail = EE::get_config( 'le-mail' ) ?? EE::input( 'Enter your mail id: ' );
-					}
+					// le-mail was resolved and validated before the site dropped HTTPS.
 					$this->reissue_le_certificate( true );
 				} catch ( \Exception $e ) {
 					EE::warning( 'Certificate could not be issued. Reverting back to original state.' );
