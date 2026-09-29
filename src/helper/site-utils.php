@@ -1232,3 +1232,118 @@ function get_subnet_range( $ip, $mask ) {
 
 	return [ $range_start, $range_end ];
 }
+
+/**
+ * Bash helpers for fetching and checking WordPress core inside a site's php container.
+ *
+ * WP-CLI <= 2.12 extracts .tar.gz packages with PharData, which truncates paths longer than 100 bytes in the PAX headers of WordPress >= 6.7.2 en_US packages (wp-cli/wp-cli#6320). So WP-CLI only resolves, downloads and md5-checks the package here, and tar/unzip extract it. WP-CLI >= 3.0 saves a .zip instead (wp-cli/core-command#333).
+ *
+ * @return string Unescaped bash that enables set -e and defines wp_cli, ee_wp_fetch, ee_wp_extract and ee_wp_verify.
+ */
+function get_wp_core_shell_functions() {
+	return <<<'BASH'
+set -e
+wp_cli() { php -d memory_limit=256M "$(command -v wp)" "$@"; }
+# ee_wp_fetch <empty-dir> [core download args]: prints the path of the downloaded package.
+ee_wp_fetch() {
+	local dir=$1 pkg
+	shift
+	wp_cli core download --no-extract --path="$dir" "$@" >&2 || return 1
+	pkg=$(find "$dir" -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.tgz' -o -name '*.zip' \) | head -n 1)
+	if [ -z "$pkg" ]; then
+		echo 'Error: WordPress package not found after download.' >&2
+		return 1
+	fi
+	printf '%s\n' "$pkg"
+}
+# ee_wp_extract <package> <wp-root> [<subdir>]: extracts wordpress/<subdir> (default: all) into <wp-root>/<subdir>.
+ee_wp_extract() {
+	local pkg=$1 dest=${2%/} sub=${3:-} strip=1 x
+	mkdir -p "$dest/$sub" || return 1
+	case "$pkg" in
+		*.zip)
+			x="${pkg%/*}/x"
+			mkdir -p "$x" || return 1
+			if command -v unzip >/dev/null 2>&1; then
+				unzip -q -o "$pkg" ${sub:+"wordpress/$sub/*"} -d "$x" || return 1
+			else
+				php -r '$z = new ZipArchive(); if ( true !== $z->open( $argv[1] ) || ! $z->extractTo( $argv[2] ) ) { fwrite( STDERR, "Error: Could not extract $argv[1].\n" ); exit( 1 ); }' "$pkg" "$x" || return 1
+			fi
+			cp -R "$x/wordpress/$sub/." "$dest/$sub/" || return 1
+			;;
+		*)
+			[ -z "$sub" ] || strip=$(( $(printf '%s' "$sub" | tr -cd '/' | wc -c) + 2 ))
+			tar -xzf "$pkg" --no-same-owner --strip-components="$strip" -C "$dest/$sub" "wordpress/$sub" || return 1
+			;;
+	esac
+}
+# ee_wp_verify <wp-root>: fails unless core verifies, but only warns when the checksums can't be fetched from WordPress.org.
+ee_wp_verify() {
+	local out
+	out=$(wp_cli core verify-checksums --path="$1" 2>&1) && return 0
+	case "$out" in
+		*"File doesn't exist:"* | *"File doesn't verify against checksum:"*) ;;
+		*"Couldn't get checksums"* | *"api.wordpress.org"* | *"Failed to decode JSON"*)
+			printf 'Warning: Could not verify WordPress core checksums: %s\n' "$out" >&2
+			return 0
+			;;
+	esac
+	printf '%s\n' "$out" >&2
+	return 1
+}
+
+BASH;
+}
+
+/**
+ * Build the in-container command that downloads WordPress core into a site.
+ *
+ * @param string $path WordPress root inside the php container.
+ * @param array  $args Optional `version`, `locale`, `skip-content` and `force` (replace an existing install).
+ *
+ * @return string Command escaped for EE_DOCKER::docker_compose_exec() with $shell_wrapper = true.
+ */
+function get_wp_core_download_command( string $path, array $args = [] ) {
+	$version    = isset( $args['version'] ) ? (string) $args['version'] : '';
+	$is_nightly = in_array( strtolower( $version ), [ 'nightly', 'trunk' ], true );
+
+	$download_args = '';
+	foreach ( [ 'locale', 'version' ] as $key ) {
+		if ( isset( $args[ $key ] ) && '' !== (string) $args[ $key ] ) {
+			$download_args .= " --$key=" . escapeshellarg( (string) $args[ $key ] );
+		}
+	}
+
+	$script = get_wp_core_shell_functions() . 'dest=' . escapeshellarg( $path ) . "\n";
+	if ( ! empty( $args['skip-content'] ) || $is_nightly ) {
+		// WP-CLI downloads the .zip here and extracts it with ZipArchive, which isn't affected.
+		$script .= 'wp_cli core download --path="$dest"' . $download_args
+			. ( empty( $args['skip-content'] ) ? '' : ' --skip-content' )
+			. ( empty( $args['force'] ) ? '' : ' --force' ) . "\n";
+	} else {
+		if ( empty( $args['force'] ) ) {
+			// WP-CLI's own check only sees the temp dir it downloads into.
+			$script .= "if [ -e \"\$dest/wp-load.php\" ]; then echo 'Error: WordPress files seem to already be present here.' >&2; exit 1; fi\n";
+		}
+		// Extract into the temp dir first, so a failure leaves the existing core untouched.
+		$script .= "tmp=\$(mktemp -d)\ntrap 'rm -rf \"\$tmp\"' EXIT\nmkdir \"\$tmp/dl\"\n"
+			. "pkg=\$(ee_wp_fetch \"\$tmp/dl\"$download_args)\n"
+			. "if ! ee_wp_extract \"\$pkg\" \"\$tmp/wp\"; then\n"
+			// A package from WP-CLI's cache isn't md5-checked again, so fetch a fresh copy once.
+			. "\trm -rf \"\$tmp/dl\" \"\$tmp/wp\"\n\tmkdir \"\$tmp/dl\"\n"
+			. "\tpkg=\$(WP_CLI_CACHE_DIR=\"\$tmp/cache\" ee_wp_fetch \"\$tmp/dl\"$download_args)\n"
+			. "\tee_wp_extract \"\$pkg\" \"\$tmp/wp\"\nfi\n";
+		if ( ! empty( $args['force'] ) ) {
+			// Drop wp-admin and wp-includes files of the previous core version.
+			$script .= "rm -rf \"\${dest:?}/wp-admin\" \"\${dest:?}/wp-includes\"\n";
+		}
+		$script .= "mkdir -p \"\$dest\"\ncp -R \"\$tmp/wp/.\" \"\$dest/\"\n";
+	}
+	// Nightly builds have no published checksums.
+	if ( ! $is_nightly ) {
+		$script .= "ee_wp_verify \"\$dest\"\n";
+	}
+
+	// docker_compose_exec() wraps the command in bash -c "...".
+	return addcslashes( $script, '"$`\\' );
+}
