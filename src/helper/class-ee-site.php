@@ -999,11 +999,12 @@ abstract class EE_Site_Command {
 			$ssl = false;
 		}
 
-		if ( ! $this->site_data->site_ssl_wildcard && $wildcard ) {
+		// Only enabling SSL depends on the wildcard flag; self-signed sites are stored as wildcard, so this blocked --ssl=off for them.
+		if ( $ssl && ! $this->site_data->site_ssl_wildcard && $wildcard ) {
 			EE::error( 'Update from normal SSL to wildcard SSL is not supported yet.' );
 		}
 
-		if ( $this->site_data->site_ssl_wildcard && ! $wildcard ) {
+		if ( $ssl && $this->site_data->site_ssl_wildcard && ! $wildcard ) {
 			EE::error( 'Update from wildcard SSL to normal SSL is not supported yet.' );
 		}
 
