@@ -2395,11 +2395,15 @@ abstract class EE_Site_Command {
 
 	/**
 	 * Shutdown function to catch and rollback from fatal errors.
+	 *
+	 * @param array|null $error The error_get_last() result, read before anything else in the shutdown path.
 	 */
-	protected function shut_down_function() {
+	protected function shut_down_function( $error = null ) {
 
+		if ( null === $error ) {
+			$error = error_get_last();
+		}
 		$logger = \EE::get_file_logger()->withName( 'site-command' );
-		$error  = error_get_last();
 
 		// Check if the $this->site_data is set and it is array and  $this->site_data['site_url'] is set.
 		if ( isset( $this->site_data ) && is_array( $this->site_data ) && isset( $this->site_data['site_url'] ) ) {
