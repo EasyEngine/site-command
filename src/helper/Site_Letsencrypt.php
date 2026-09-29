@@ -19,6 +19,7 @@ use AcmePhp\Core\Exception\Protocol\ChallengeNotSupportedException;
 use AcmePhp\Core\Exception\Protocol\CertificateRevocationException;
 use AcmePhp\Core\Exception\Server\RateLimitedServerException;
 use AcmePhp\Core\Protocol\AuthorizationChallenge;
+use AcmePhp\Core\Protocol\CertificateOrder;
 use AcmePhp\Core\Protocol\ResourcesDirectory;
 use AcmePhp\Core\Protocol\RevocationReason;
 use AcmePhp\Core\Http\Base64SafeEncoder;
@@ -68,6 +69,65 @@ class EEAcmeClient extends AcmeClient {
 		}
 
 		return $this->account;
+	}
+
+	/**
+	 * Same as acmephp's requestOrder(), but keeps only the challenge types EE can solve.
+	 *
+	 * acmephp 1.3 reads a token from every challenge, so one without a token (the draft dns-persist-01 that Pebble 2.10 offers) made the whole order throw.
+	 *
+	 * @param array $domains Domains to order a certificate for.
+	 *
+	 * @return CertificateOrder
+	 */
+	public function requestOrder( array $domains ) {
+		\Webmozart\Assert\Assert::allStringNotEmpty( $domains, 'requestOrder::$domains expected a list of strings. Got: %s' );
+
+		$payload = [
+			'identifiers' => array_map(
+				function ( $domain ) {
+					return [
+						'type'  => 'dns',
+						'value' => $domain,
+					];
+				},
+				array_values( $domains )
+			),
+		];
+
+		$client      = $this->getHttpClient();
+		$resourceUrl = $this->getResourceUrl( ResourcesDirectory::NEW_ORDER );
+		$response    = $client->request( 'POST', $resourceUrl, $client->signKidPayload( $resourceUrl, $this->getResourceAccount(), $payload ) );
+		if ( ! isset( $response['authorizations'] ) || ! $response['authorizations'] ) {
+			throw new ChallengeNotSupportedException();
+		}
+
+		$orderEndpoint            = $client->getLastLocation();
+		$authorizationsChallenges = [];
+		$base64encoder            = $client->getBase64Encoder();
+		foreach ( $response['authorizations'] as $authorizationEndpoint ) {
+			$authorizationsResponse = $client->request( 'POST', $authorizationEndpoint, $client->signKidPayload( $authorizationEndpoint, $this->getResourceAccount(), null ) );
+			$domain                 = ( empty( $authorizationsResponse['wildcard'] ) ? '' : '*.' ) . $authorizationsResponse['identifier']['value'];
+
+			// An empty list still reaches authorize(), which reports the domain as unsupported.
+			$authorizationsChallenges[ $domain ] = [];
+			foreach ( $authorizationsResponse['challenges'] as $challenge ) {
+				if ( ! in_array( $challenge['type'] ?? '', [ 'http-01', 'dns-01' ], true ) || empty( $challenge['token'] ) || ! is_string( $challenge['token'] ) ) {
+					\EE::debug( 'Skipping unsupported ACME challenge ' . ( $challenge['type'] ?? '(no type)' ) . ' for ' . $domain );
+					continue;
+				}
+				$authorizationsChallenges[ $domain ][] = new AuthorizationChallenge(
+					$authorizationsResponse['identifier']['value'],
+					$challenge['status'],
+					$challenge['type'],
+					$challenge['url'],
+					$challenge['token'],
+					$challenge['token'] . '.' . $base64encoder->encode( $client->getJWKThumbprint() )
+				);
+			}
+		}
+
+		return new CertificateOrder( $authorizationsChallenges, $orderEndpoint );
 	}
 
 	public function revokeAuthorizationChallenge(AuthorizationChallenge $challenge)
