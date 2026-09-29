@@ -317,10 +317,12 @@ abstract class EE_Site_Command {
 		\EE\Site\Utils\remove_etc_hosts_entry( $site_url );
 
 		$config_file_path = EE_ROOT_DIR . '/services/nginx-proxy/conf.d/' . $site_url . '-redirect.conf';
+		$redirect_removed = false;
 
 		if ( $this->fs->exists( $config_file_path ) ) {
 			try {
 				$this->fs->remove( $config_file_path );
+				$redirect_removed = true;
 			} catch ( \Exception $e ) {
 				\EE::debug( $e );
 				\EE::error( 'Could not remove site redirection file. Please check if you have sufficient rights.' );
@@ -342,7 +344,8 @@ abstract class EE_Site_Command {
 
 		$conf_locations = [ $proxy_conf_location, $proxy_vhost_location, $proxy_vhost_location_subdom ];
 
-		$reload = false;
+		// The proxy reloaded when the containers went down, before the www redirect was removed.
+		$reload = $redirect_removed;
 
 		foreach ( $conf_locations as $cl ) {
 
