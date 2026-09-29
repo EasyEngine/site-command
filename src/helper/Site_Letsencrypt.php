@@ -678,18 +678,7 @@ class Site_Letsencrypt {
 	private function executeFirstRequest( $domain, array $alternativeNames, $email ) {
 		\EE::log( 'Executing first request.' );
 
-		// Generate domain key pair
-		$keygen        = new KeyPairGenerator();
-		$domainKeyPair = $keygen->generateKeyPair();
-		$this->repository->storeDomainKeyPair( $domain, $domainKeyPair );
-
-		\EE::debug( "$domain Domain key pair generated and stored" );
-
-		$distinguishedName = $this->getOrCreateDistinguishedName( $domain, $alternativeNames, $email );
-		// TODO: ask them ;)
-		\EE::debug( 'Distinguished name informations have been stored locally for this domain (they won\'t be asked on renewal).' );
-
-		// Order
+		// Order first, so a missing order can't replace the key of the certificate that is still served.
 		$domains = array_merge( [ $domain ], $alternativeNames );
 		\EE::debug( sprintf( 'Loading the order related to the domains %s .', implode( ', ', $domains ) ) );
 		if ( ! $this->repository->hasCertificateOrder( $domains ) ) {
@@ -697,11 +686,46 @@ class Site_Letsencrypt {
 		}
 		$order = $this->repository->loadCertificateOrder( $domains );
 
-		// Request
-		\EE::log( sprintf( 'Requesting first certificate for domain %s.', $domain ) );
-		$csr      = new CertificateRequest( $distinguishedName, $domainKeyPair );
-		$response = $this->client->finalizeOrder( $order, $csr );
-		\EE::log( 'Certificate received' );
+		// Restored if no certificate is stored below: they belong to the stored certificate, if there is one.
+		$previous_key_pair = $this->repository->hasDomainKeyPair( $domain ) ? $this->repository->loadDomainKeyPair( $domain ) : null;
+		$previous_dn       = $this->repository->hasDomainDistinguishedName( $domain ) ? $this->repository->loadDomainDistinguishedName( $domain ) : null;
+
+		try {
+			// Generate domain key pair
+			$keygen        = new KeyPairGenerator();
+			$domainKeyPair = $keygen->generateKeyPair();
+			$this->repository->storeDomainKeyPair( $domain, $domainKeyPair );
+
+			\EE::debug( "$domain Domain key pair generated and stored" );
+
+			$distinguishedName = $this->getOrCreateDistinguishedName( $domain, $alternativeNames, $email );
+			// TODO: ask them ;)
+			\EE::debug( 'Distinguished name informations have been stored locally for this domain (they won\'t be asked on renewal).' );
+
+			// Request
+			\EE::log( sprintf( 'Requesting first certificate for domain %s.', $domain ) );
+			$csr      = new CertificateRequest( $distinguishedName, $domainKeyPair );
+			$response = $this->client->finalizeOrder( $order, $csr );
+			\EE::log( 'Certificate received' );
+
+			// finalizeOrder() skips the CSR for an already-finalized order and returns that order's certificate, issued for another key.
+			if ( ! openssl_x509_check_private_key( $response->getCertificate()->getPEM(), $domainKeyPair->getPrivateKey()->getPEM() ) ) {
+				throw new \Exception( 'the returned certificate does not match the new domain key (the stored order was already finalized)' );
+			}
+		} catch ( \Throwable $e ) {
+			// Logged first, so a restore that fails too doesn't hide the reason. Not print_r(): its trace args hold the new private key.
+			\EE::debug( (string) $e );
+			if ( $previous_key_pair ) {
+				$this->repository->storeDomainKeyPair( $domain, $previous_key_pair );
+			}
+			if ( $previous_dn ) {
+				$this->repository->storeDomainDistinguishedName( $domain, $previous_dn );
+			}
+			$kept = $this->repository->hasDomainCertificate( $domain ) ? ' The current certificate is kept.' : '';
+			\EE::warning( sprintf( 'Certificate request for %s failed: %s.%s', $domain, $e->getMessage(), $kept ) );
+
+			return false;
+		}
 
 		// Store
 		$this->repository->storeDomainCertificate( $domain, $response->getCertificate() );
@@ -722,6 +746,11 @@ class Site_Letsencrypt {
 		$key_dest_file   = EE_ROOT_DIR . '/services/nginx-proxy/certs/' . $domain . '.key';
 		$crt_dest_file   = EE_ROOT_DIR . '/services/nginx-proxy/certs/' . $domain . '.crt';
 		$chain_dest_file = EE_ROOT_DIR . '/services/nginx-proxy/certs/' . $domain . '.chain.pem';
+
+		// A mismatched pair fails nginx -t, which blocks every later reload of the shared proxy.
+		if ( is_readable( $crt_source_file ) && is_readable( $key_source_file ) && ! openssl_x509_check_private_key( file_get_contents( $crt_source_file ), file_get_contents( $key_source_file ) ) ) {
+			throw new \Exception( sprintf( 'Certificate %s does not match its private key; not deploying it.', $crt_source_file ) );
+		}
 
 		// Stage temps in the destination dir and rename() them in, so a failed copy never leaves a half-written live key/cert.
 		// Each rename is atomic, the set is not; an already-renamed file is not rolled back.
@@ -906,7 +935,7 @@ class Site_Letsencrypt {
 
 		} catch ( \Exception $e ) {
 			\EE::warning( 'A critical error occurred during certificate renewal: ' . $e->getMessage() );
-			\EE::debug( print_r( $e, true ) );
+			\EE::debug( (string) $e );
 			// A rate limit is not a misconfigured-domain failure; point the user to the LE rate-limit docs.
 			if ( $this->is_rate_limit_exception( $e ) ) {
 				\EE::warning( 'Let\'s Encrypt rate limit hit for: ' . $domain . '. Please wait before retrying. Ref: https://letsencrypt.org/docs/rate-limits/' );
@@ -916,7 +945,7 @@ class Site_Letsencrypt {
 			return false;
 		} catch ( \Throwable $e ) {
 			\EE::warning( 'A critical error occurred during certificate renewal: ' . $e->getMessage() );
-			\EE::debug( print_r( $e, true ) );
+			\EE::debug( (string) $e );
 			// A rate limit is not a misconfigured-domain failure; point the user to the LE rate-limit docs.
 			if ( $this->is_rate_limit_exception( $e ) ) {
 				\EE::warning( 'Let\'s Encrypt rate limit hit for: ' . $domain . '. Please wait before retrying. Ref: https://letsencrypt.org/docs/rate-limits/' );
