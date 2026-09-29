@@ -1096,7 +1096,7 @@ abstract class EE_Site_Command {
 					$this->disable_ssl( 'custom' === $ssl ? [ $this->site_data['ssl_key'], $this->site_data['ssl_crt'] ] : [] );
 					$rerun = '--ssl=' . $ssl . ( $wildcard ? ' --wildcard' : '' );
 					if ( 'custom' === $ssl ) {
-						$rerun .= ' --ssl-key=' . $this->site_data['ssl_key'] . ' --ssl-crt=' . $this->site_data['ssl_crt'];
+						$rerun .= ' --ssl-key=' . escapeshellarg( $this->site_data['ssl_key'] ) . ' --ssl-crt=' . escapeshellarg( $this->site_data['ssl_crt'] );
 					}
 					throw new \Exception( sprintf( 'SSL could not be enabled on %1$s, the site stays without SSL: %2$s Fix the issue and re-run `ee site update %1$s %3$s`.', $this->site_data['site_url'], rtrim( $e->getMessage(), '.' ) . '.', $rerun ) );
 				}
