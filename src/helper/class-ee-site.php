@@ -696,6 +696,14 @@ abstract class EE_Site_Command {
 			EE::error( $e->getMessage() );
 		}
 
+		// A stale proxy cache location would use this site's cache zone if the domain is ever served again, e.g. after the site is deleted.
+		foreach ( array_diff( $domains_to_delete, [ $this->site_data['site_url'], '*.' . $this->site_data['site_url'] ] ) as $domain ) {
+			$location_file = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/' . $domain . '_location';
+			if ( $this->fs->exists( $location_file ) ) {
+				$this->fs->remove( $location_file );
+			}
+		}
+
 		if ( ! empty( $this->site_data['proxy_cache'] ) && 'on' === $this->site_data['proxy_cache'] ) {
 			EE::log( 'As proxy cache is enabled on this site, updating config to enable it in newly added alias domains.' );
 			$this->site_data = get_site_info( $args, true, true, false );
@@ -791,6 +799,8 @@ abstract class EE_Site_Command {
 				] );
 			}
 
+			$failed = false;
+
 			if ( 'on' === $proxy_cache ) {
 
 				$sanitized_site_url = str_replace( '.', '-', $this->site_data['site_url'] );
@@ -805,30 +815,33 @@ abstract class EE_Site_Command {
 				];
 				$proxy_conf_content = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx-proxy/proxy.conf.mustache', $data );
 
+				// In force mode (alias domain changes) the cache zone in conf.d is kept, only the locations using it are written.
+				$location_files = [ $proxy_vhost_location ];
+				if ( 'subdom' === $this->site_data['app_sub_type'] ) {
+					$location_files[] = $proxy_vhost_location_subdom;
+				}
+				foreach ( $alias_domains as $ad ) {
+					$location_files[] = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/' . $ad . '_location';
+				}
+
+				$written_files = $force ? $location_files : array_merge( [ $proxy_conf_location ], $location_files );
+				$backup        = \EE\Site\Utils\backup_files( $written_files );
+
 				if ( ! $force ) {
 					$this->fs->dumpFile( $proxy_conf_location, $proxy_conf_content );
 				}
 
 				$proxy_vhost_content = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx-proxy/vhost_location.conf.mustache', $data );
-				$this->fs->dumpFile( $proxy_vhost_location, $proxy_vhost_content );
-
-				if ( 'subdom' === $this->site_data['app_sub_type'] ) {
-					$this->fs->dumpFile( $proxy_vhost_location_subdom, $proxy_vhost_content );
-				}
-
-				foreach ( $alias_domains as $ad ) {
-
-					$proxy_vhost_location = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/' . $ad . '_location';
-					$proxy_vhost_content  = \EE\Utils\mustache_render( SITE_TEMPLATE_ROOT . '/config/nginx-proxy/vhost_location.conf.mustache', $data );
-					$this->fs->dumpFile( $proxy_vhost_location, $proxy_vhost_content );
+				foreach ( $location_files as $location_file ) {
+					$this->fs->dumpFile( $location_file, $proxy_vhost_content );
 				}
 			} else {
 				$reload = false;
 
-
 				$conf_locations = [ $proxy_conf_location, $proxy_vhost_location, $proxy_vhost_location_subdom ];
-
-				$reload = false;
+				foreach ( $alias_domains as $ad ) {
+					$conf_locations[] = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/' . $ad . '_location';
+				}
 
 				foreach ( $conf_locations as $cl ) {
 
@@ -838,32 +851,45 @@ abstract class EE_Site_Command {
 					}
 				}
 
-				foreach ( $alias_domains as $ad ) {
-
-					$proxy_vhost_location = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/' . $ad . '_location';
-					if ( $this->fs->exists( $proxy_vhost_location ) ) {
-						$this->fs->remove( $proxy_vhost_location );
-						$reload = true;
-					}
-				}
-
 				if ( $reload ) {
 					\EE\Site\Utils\reload_global_nginx_proxy();
 					EE::exec( 'docker exec ' . EE_PROXY_TYPE . " bash -c 'rm -rf /var/cache/nginx/" . $this->site_data['site_url'] . "'" );
 				}
 			}
-			if ( EE::exec( 'docker exec ' . EE_PROXY_TYPE . " bash -c 'nginx -t'" ) ) {
+
+			$test = \EE\Site\Utils\test_global_nginx_proxy_config( true );
+			if ( 0 === $test->return_code ) {
 				\EE\Site\Utils\reload_global_nginx_proxy();
-				EE::exec( 'docker restart ' . EE_PROXY_TYPE );
+				// A changed cache zone needs a fresh nginx master; alias changes only add locations, which the reload applies.
+				if ( ! $force ) {
+					EE::exec( 'docker restart ' . EE_PROXY_TYPE );
+				}
+			} elseif ( 'on' === $proxy_cache ) {
+				// Put back exactly what this call replaced, so no location is left using a cache zone that is gone.
+				\EE\Site\Utils\restore_files( $backup );
+				\EE\Site\Utils\reload_global_nginx_proxy();
+				$failed = true;
 			} else {
-				$this->fs->remove( $proxy_conf_location );
-				$this->fs->remove( $proxy_vhost_location );
-				$this->fs->remove( $proxy_vhost_location_subdom );
-				\EE\Site\Utils\reload_global_nginx_proxy();
+				// Removing the zone together with every location that uses it keeps the config valid, so the failure is elsewhere.
+				EE::warning( "nginx config test failed after disabling proxy cache:\n" . trim( $test->stderr ) );
 			}
 		} catch ( \Exception $e ) {
 			EE::error( $e->getMessage() );
 		}
+
+		if ( $failed ) {
+			$message = 'Could not enable proxy cache on ' . $this->site_data['site_url'] . ", nginx config test failed. The previous proxy config was restored.\n" . trim( $test->stderr );
+			if ( $force || $call_on_create ) {
+				EE::warning( $message );
+				if ( $call_on_create ) {
+					$this->site_data['proxy_cache'] = 'off';
+				}
+
+				return;
+			}
+			EE::error( $message );
+		}
+
 		if ( ! $call_on_create ) {
 			$site->proxy_cache = $proxy_cache;
 			$site->save();

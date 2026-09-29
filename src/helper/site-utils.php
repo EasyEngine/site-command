@@ -793,11 +793,8 @@ function configure_postfix( $site_url, $site_fs_path ) {
  */
 function reload_global_nginx_proxy() {
 
-	// Regenerate default.conf first so `nginx -t` validates the config that will actually be served.
-	\EE::launch( sprintf( 'docker exec %s sh -c "/app/docker-entrypoint.sh /usr/local/bin/docker-gen /app/nginx.tmpl /etc/nginx/conf.d/default.conf"', EE_PROXY_TYPE ) );
-
 	// `EE::launch()` returns a ProcessRun object (truthy), so gate on the exit code to avoid reloading a broken config.
-	$test = \EE::launch( sprintf( 'docker exec %s sh -c "nginx -t"', EE_PROXY_TYPE ) );
+	$test = test_global_nginx_proxy_config();
 	if ( 0 !== $test->return_code ) {
 		\EE::warning( 'nginx config test failed, skipping reload of ' . EE_PROXY_TYPE . ":\n" . $test->stderr );
 
@@ -805,6 +802,69 @@ function reload_global_nginx_proxy() {
 	}
 
 	return \EE::launch( sprintf( 'docker exec %s sh -c "/usr/sbin/nginx -s reload"', EE_PROXY_TYPE ) );
+}
+
+/**
+ * Regenerates the global proxy's default.conf and runs `nginx -t` on it.
+ *
+ * @param bool $retry_any_failure Retry once on any failure, not only on one reported in default.conf.
+ *
+ * @return \EE\ProcessRun Result of the last `nginx -t`.
+ */
+function test_global_nginx_proxy_config( $retry_any_failure = false ) {
+
+	$regenerate = sprintf( 'docker exec %s sh -c "/app/docker-entrypoint.sh /usr/local/bin/docker-gen /app/nginx.tmpl /etc/nginx/conf.d/default.conf"', EE_PROXY_TYPE );
+	$test_cmd   = sprintf( 'docker exec %s sh -c "nginx -t"', EE_PROXY_TYPE );
+
+	// Regenerate first so `nginx -t` validates the config that will actually be served.
+	\EE::launch( $regenerate );
+	$test = \EE::launch( $test_cmd );
+
+	// The proxy's own docker-gen rewrites default.conf in place after container events, so a test racing it can read a partial file.
+	if ( 0 !== $test->return_code && ( $retry_any_failure || false !== strpos( $test->stderr, '/etc/nginx/conf.d/default.conf' ) ) ) {
+		\EE::debug( "nginx config test failed, retrying once:\n" . $test->stderr );
+		sleep( 1 );
+		\EE::launch( $regenerate );
+		$test = \EE::launch( $test_cmd );
+	}
+
+	return $test;
+}
+
+/**
+ * Reads files so that they can be put back with `restore_files()`.
+ *
+ * @param array $paths Absolute file paths.
+ *
+ * @return array Path => content, or null for a file that does not exist.
+ */
+function backup_files( array $paths ) {
+
+	$backup = [];
+	foreach ( array_unique( $paths ) as $path ) {
+		$backup[ $path ] = is_file( $path ) ? file_get_contents( $path ) : null;
+	}
+
+	return $backup;
+}
+
+/**
+ * Puts files back as `backup_files()` found them: rewrites the ones that existed and removes the others.
+ *
+ * @param array $backup Return value of `backup_files()`.
+ */
+function restore_files( array $backup ) {
+
+	$fs = new Filesystem();
+	foreach ( $backup as $path => $content ) {
+		if ( null === $content ) {
+			if ( file_exists( $path ) ) {
+				$fs->remove( $path );
+			}
+		} else {
+			$fs->dumpFile( $path, $content );
+		}
+	}
 }
 
 /**
