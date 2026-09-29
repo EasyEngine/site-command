@@ -1082,7 +1082,8 @@ abstract class EE_Site_Command {
 						throw new \Exception( 'See the warnings above.' );
 					}
 				} catch ( \Exception $e ) {
-					$this->disable_ssl();
+					// A custom pair passed from the certs dir itself is the user's only copy.
+					$this->disable_ssl( 'custom' === $ssl ? [ $this->site_data['ssl_key'], $this->site_data['ssl_crt'] ] : [] );
 					throw new \Exception( sprintf( 'SSL could not be enabled on %1$s, the site stays without SSL: %2$s Fix the issue and re-run `ee site update %1$s --ssl=%3$s`.', $this->site_data['site_url'], rtrim( $e->getMessage(), '.' ) . '.', $ssl ) );
 				}
 			} else {
@@ -1108,9 +1109,11 @@ abstract class EE_Site_Command {
 	/**
 	 * Disables SSL on a site.
 	 *
+	 * @param array $keep_files Certificate files to leave in place.
+	 *
 	 * @throws \Exception
 	 */
-	private function disable_ssl() {
+	private function disable_ssl( array $keep_files = [] ) {
 
 		$site_url = $this->site_data['site_url'];
 
@@ -1125,7 +1128,7 @@ abstract class EE_Site_Command {
 		\EE\Site\Utils\reload_global_nginx_proxy();
 
 		// Left behind, nginx-proxy would still match the certificate to this site's (and similarly named sites') hosts.
-		\EE\Site\Utils\remove_site_ssl_files( $site_url, $this->get_ssl_domains( $site_url ) );
+		\EE\Site\Utils\remove_site_ssl_files( $site_url, $this->get_ssl_domains( $site_url ), $keep_files );
 	}
 
 	/**

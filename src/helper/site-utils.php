@@ -898,8 +898,9 @@ function get_site_ssl_file_paths( $site_url ) {
  *
  * @param string $site_url Name of the site.
  * @param array  $domains  Other domains of the site (alias domains, www variant) whose ACME state goes too.
+ * @param array  $keep     Files to leave in place, e.g. a custom pair the user keeps in the certs dir.
  */
-function remove_site_ssl_files( $site_url, array $domains = [] ) {
+function remove_site_ssl_files( $site_url, array $domains = [], array $keep = [] ) {
 
 	$proxy_dir = EE_ROOT_DIR . '/services/nginx-proxy';
 	$paths     = [
@@ -915,7 +916,15 @@ function remove_site_ssl_files( $site_url, array $domains = [] ) {
 		}
 	}
 
-	$paths = array_values( array_filter( $paths, 'file_exists' ) );
+	$keep  = array_filter( array_map( 'realpath', array_filter( $keep ) ) );
+	$paths = array_values(
+		array_filter(
+			$paths,
+			function ( $path ) use ( $keep ) {
+				return file_exists( $path ) && ! in_array( realpath( $path ), $keep, true );
+			}
+		)
+	);
 	if ( empty( $paths ) ) {
 		return;
 	}
