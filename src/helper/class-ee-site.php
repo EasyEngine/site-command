@@ -657,23 +657,33 @@ abstract class EE_Site_Command {
 			}
 		}
 
-		$client = new Site_Letsencrypt();
-
-		$old_certs = $client->loadDomainCertificates( $all_domains );
-
 		if ( $is_ssl ) {
 			// Only Let's Encrypt certs can be reissued by EE to cover the new alias-domain set.
 			if ( 'le' === $this->site_data['site_ssl'] ) {
+				$client    = new Site_Letsencrypt();
+				$old_certs = $client->loadDomainCertificates( $all_domains );
+
 				// Update SSL.
 				EE::log( 'Updating and force renewing SSL certificate to accomodated alias domain changes.' );
 				try {
-					$this->ssl_renew( [ $this->site_data['site_url'] ], [ 'force' => true ] );
+					if ( ! isset( $this->le_mail ) ) {
+						$this->le_mail = EE::get_config( 'le-mail' ) ?? EE::input( 'Enter your mail id: ' );
+					}
+					$this->reissue_le_certificate( true );
 				} catch ( \Exception $e ) {
 					EE::warning( 'Certificate could not be issued. Reverting back to original state.' );
+					// The DB still has the old alias domains, so a refresh regenerates the site's compose file and proxy config from it.
 					$this->enable( [ $this->site_data['site_url'] ], [ 'refresh' => 'true' ] );
 					\EE::do_hook( 'site_alias_domains_update_failed', $site->site_url, $domains_to_add );
-					EE::error( $e->getMessage() );
+					// The failed order left an authorization challenge for each new domain.
+					foreach ( array_diff( $domains_to_add, [ \EE\Site\Utils\get_www_counterpart( $site->site_url ) ] ) as $domain ) {
+						$this->fs->remove( EE_ROOT_DIR . '/services/nginx-proxy/acme-conf/var/' . $domain );
+					}
+					EE::error( sprintf( 'Alias domains of %s were not changed: %s', $site->site_url, $e->getMessage() ) );
 				}
+
+				// Revoke the old certificate, which the new one replaces.
+				$client->revokeCertificates( $old_certs );
 			} elseif ( 'custom' === $this->site_data['site_ssl'] ) {
 				EE::warning( 'Custom SSL certificate is not renewed automatically. Please ensure the certificate you provided covers the updated alias-domain set.' );
 			} else {
@@ -681,9 +691,6 @@ abstract class EE_Site_Command {
 				EE::log( 'No SSL certificate action needed for ' . $this->site_data['site_ssl'] . ' SSL on alias domain change.' );
 			}
 		}
-
-		// Revoke old certificate which will not be used
-		$client->revokeCertificates( $old_certs );
 
 		chdir( $this->site_data['site_fs_path'] );
 		// Required as env variables have changed.
@@ -2174,11 +2181,25 @@ abstract class EE_Site_Command {
 					}
 					continue;
 				}
-				$this->renew_ssl_cert( [ $site->site_url ], $force );
+				try {
+					$this->renew_ssl_cert( [ $site->site_url ], $force );
+				} catch ( \Exception $e ) {
+					EE::warning( $e->getMessage() . ' The current certificate is kept.' );
+				}
 			}
 		} else {
 			$args = auto_site_name( $args, 'site', __FUNCTION__ );
-			$this->renew_ssl_cert( $args, $force );
+			try {
+				$this->renew_ssl_cert( $args, $force );
+			} catch ( \Exception $e ) {
+				// `ssl-renew --all` runs this once per site, and one failed site must not stop the others.
+				if ( ! empty( EE::get_runner()->assoc_args['all'] ) ) {
+					EE::warning( $e->getMessage() . ' The current certificate is kept.' );
+
+					return;
+				}
+				EE::error( $e->getMessage() . ' The current certificate is kept.' );
+			}
 		}
 		EE::success( 'SSL renewal completed.' );
 	}
@@ -2233,9 +2254,34 @@ abstract class EE_Site_Command {
 		}
 		self::$le_renewal_started = true;
 
+		$this->reissue_le_certificate( $force );
+	}
+
+	/**
+	 * Issues the site's Let's Encrypt certificate for its current domains.
+	 *
+	 * @param bool $force Whether to force renewal of cert or not.
+	 *
+	 * @throws \Exception When no certificate was issued. The site's certificate, ACME and redirect files are put back first.
+	 */
+	private function reissue_le_certificate( $force ) {
+
+		$backup              = \EE\Site\Utils\backup_files( \EE\Site\Utils\get_site_ssl_file_paths( $this->site_data['site_url'] ) );
 		$postfix_exists      = \EE_DOCKER::service_exists( 'postfix', $this->site_data['site_fs_path'] );
 		$containers_to_start = $postfix_exists ? [ 'nginx', 'postfix' ] : [ 'nginx' ];
-		$this->www_ssl_wrapper( $containers_to_start, false, $force, true );
+
+		try {
+			$this->www_ssl_wrapper( $containers_to_start, false, $force, true );
+			// init_le() only warns and clears site_ssl when the order, the validation or the request fails.
+			if ( 'le' !== $this->site_data['site_ssl'] ) {
+				throw new \Exception( sprintf( 'Let\'s Encrypt certificate could not be issued for %s. See the warnings above.', $this->site_data['site_url'] ) );
+			}
+		} catch ( \Exception $e ) {
+			$this->site_data['site_ssl'] = 'le';
+			\EE\Site\Utils\restore_files( $backup );
+			reload_global_nginx_proxy();
+			throw $e;
+		}
 
 		reload_global_nginx_proxy();
 	}

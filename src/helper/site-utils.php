@@ -868,6 +868,80 @@ function restore_files( array $backup ) {
 }
 
 /**
+ * Paths of a site's certificate and ACME files that an LE issuance can change.
+ *
+ * @param string $site_url Name of the site.
+ *
+ * @return array Absolute file paths.
+ */
+function get_site_ssl_file_paths( $site_url ) {
+
+	$proxy_dir = EE_ROOT_DIR . '/services/nginx-proxy';
+	$acme_dir  = "$proxy_dir/acme-conf";
+
+	return [
+		"$proxy_dir/certs/$site_url.crt",
+		"$proxy_dir/certs/$site_url.key",
+		"$proxy_dir/certs/$site_url.chain.pem",
+		"$proxy_dir/conf.d/$site_url-redirect.conf",
+		"$acme_dir/certs/$site_url/private/key.public.pem",
+		"$acme_dir/certs/$site_url/private/key.private.pem",
+		"$acme_dir/certs/$site_url/private/combined.pem",
+		"$acme_dir/certs/$site_url/public/cert.pem",
+		"$acme_dir/certs/$site_url/public/chain.pem",
+		"$acme_dir/certs/$site_url/public/fullchain.pem",
+		"$acme_dir/var/$site_url/distinguished_name.json",
+	];
+}
+
+/**
+ * Removes a site's certificate files from nginx-proxy and its ACME state, whatever the site's current SSL type.
+ *
+ * @param string $site_url Name of the site.
+ * @param array  $domains  Other domains of the site (alias domains, www variant) whose ACME state goes too.
+ */
+function remove_site_ssl_files( $site_url, array $domains = [] ) {
+
+	$proxy_dir = EE_ROOT_DIR . '/services/nginx-proxy';
+	$paths     = [
+		"$proxy_dir/certs/$site_url.crt",
+		"$proxy_dir/certs/$site_url.key",
+		"$proxy_dir/certs/$site_url.chain.pem",
+		"$proxy_dir/acme-conf/certs/$site_url",
+	];
+
+	foreach ( array_unique( array_merge( [ $site_url ], $domains ) ) as $domain ) {
+		if ( '' !== $domain && false === strpos( $domain, '/' ) ) {
+			$paths[] = "$proxy_dir/acme-conf/var/$domain";
+		}
+	}
+
+	$paths = array_values( array_filter( $paths, 'file_exists' ) );
+	if ( empty( $paths ) ) {
+		return;
+	}
+
+	\EE::log( 'Removing ssl certs and other config files.' );
+	try {
+		( new Filesystem() )->remove( $paths );
+	} catch ( \Exception $e ) {
+		\EE::warning( $e->getMessage() );
+	}
+}
+
+/**
+ * The www or non-www counterpart of a domain.
+ *
+ * @param string $domain Domain name.
+ *
+ * @return string
+ */
+function get_www_counterpart( $domain ) {
+
+	return 0 === strpos( $domain, 'www.' ) ? substr( $domain, 4 ) : 'www.' . $domain;
+}
+
+/**
  * Get global auth if it exists.
  */
 function get_global_auth() {
