@@ -710,6 +710,11 @@ abstract class EE_Site_Command {
 			}
 		}
 
+		// A removed alias's ACME state (its authorization challenge) is no longer tracked by the site, so a later site delete can't find it.
+		foreach ( array_diff( $domains_to_delete, [ $this->site_data['site_url'], \EE\Site\Utils\get_www_counterpart( $this->site_data['site_url'] ) ] ) as $domain ) {
+			$this->fs->remove( EE_ROOT_DIR . '/services/nginx-proxy/acme-conf/var/' . $domain );
+		}
+
 		if ( ! empty( $this->site_data['proxy_cache'] ) && 'on' === $this->site_data['proxy_cache'] ) {
 			EE::log( 'As proxy cache is enabled on this site, updating config to enable it in newly added alias domains.' );
 			$this->site_data = get_site_info( $args, true, true, false );
