@@ -2348,7 +2348,7 @@ abstract class EE_Site_Command {
 	 *
 	 * @param bool $force Whether to force renewal of cert or not.
 	 *
-	 * @throws \Exception When no certificate was issued. The site's certificate, ACME and redirect files are put back first.
+	 * @throws \Exception When no certificate was issued. The files from `get_site_ssl_file_paths()` are put back first.
 	 */
 	private function reissue_le_certificate( $force ) {
 

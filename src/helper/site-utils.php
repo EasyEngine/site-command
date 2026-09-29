@@ -867,7 +867,9 @@ function restore_files( array $backup ) {
 }
 
 /**
- * Paths of a site's certificate and ACME files that an LE issuance can change.
+ * Paths of the files a failed LE issuance must not leave changed: the served certificate, its ACME key pair, certificates and DN, and the www redirect.
+ *
+ * Authorization and order state is left out: the next order revokes and replaces it.
  *
  * @param string $site_url Name of the site.
  *
