@@ -1040,6 +1040,11 @@ abstract class EE_Site_Command {
 					$this->custom_site_ssl();
 				}
 				$this->www_ssl_wrapper( [ 'nginx' ] );
+				// init_le() only warns and clears site_ssl when the certificate could not be issued.
+				if ( empty( $this->site_data['site_ssl'] ) ) {
+					$this->disable_ssl();
+					throw new \Exception( sprintf( 'SSL could not be enabled on %s, the site stays without SSL. See the warnings above.', $this->site_data['site_url'] ) );
+				}
 			} else {
 				$this->disable_ssl();
 			}
