@@ -2171,7 +2171,8 @@ abstract class EE_Site_Command {
 			$crt_pem = file_get_contents( $crt_file );
 			if ( function_exists( 'openssl_x509_parse' ) ) {
 				$cert_data   = openssl_x509_parse( $crt_pem );
-				$subjectCN   = isset( $cert_data['subject']['CN'] ) ? $cert_data['subject']['CN'] : '';
+				// Without a subject CN, the parser's subject is the first SAN.
+				$subjectCN   = isset( $cert_data['subject']['CN'] ) ? $cert_data['subject']['CN'] : (string) $subject;
 				$issuer_full = isset( $cert_data['issuer'] ) ? $cert_data['issuer'] : [];
 				$le_found    = false;
 				foreach ( $issuer_full as $field => $value ) {
