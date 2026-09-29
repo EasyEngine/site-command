@@ -592,18 +592,18 @@ class Site_Letsencrypt {
 		$previous_key_pair = $this->repository->hasDomainKeyPair( $domain ) ? $this->repository->loadDomainKeyPair( $domain ) : null;
 		$previous_dn       = $this->repository->hasDomainDistinguishedName( $domain ) ? $this->repository->loadDomainDistinguishedName( $domain ) : null;
 
-		// Generate domain key pair
-		$keygen        = new KeyPairGenerator();
-		$domainKeyPair = $keygen->generateKeyPair();
-		$this->repository->storeDomainKeyPair( $domain, $domainKeyPair );
-
-		\EE::debug( "$domain Domain key pair generated and stored" );
-
-		$distinguishedName = $this->getOrCreateDistinguishedName( $domain, $alternativeNames, $email );
-		// TODO: ask them ;)
-		\EE::debug( 'Distinguished name informations have been stored locally for this domain (they won\'t be asked on renewal).' );
-
 		try {
+			// Generate domain key pair
+			$keygen        = new KeyPairGenerator();
+			$domainKeyPair = $keygen->generateKeyPair();
+			$this->repository->storeDomainKeyPair( $domain, $domainKeyPair );
+
+			\EE::debug( "$domain Domain key pair generated and stored" );
+
+			$distinguishedName = $this->getOrCreateDistinguishedName( $domain, $alternativeNames, $email );
+			// TODO: ask them ;)
+			\EE::debug( 'Distinguished name informations have been stored locally for this domain (they won\'t be asked on renewal).' );
+
 			// Request
 			\EE::log( sprintf( 'Requesting first certificate for domain %s.', $domain ) );
 			$csr      = new CertificateRequest( $distinguishedName, $domainKeyPair );
@@ -615,13 +615,14 @@ class Site_Letsencrypt {
 				throw new \Exception( 'the returned certificate does not match the new domain key (the stored order was already finalized)' );
 			}
 		} catch ( \Throwable $e ) {
+			// Logged first, so a restore that fails too doesn't hide the reason.
+			\EE::debug( print_r( $e, true ) );
 			if ( $previous_key_pair ) {
 				$this->repository->storeDomainKeyPair( $domain, $previous_key_pair );
 			}
 			if ( $previous_dn ) {
 				$this->repository->storeDomainDistinguishedName( $domain, $previous_dn );
 			}
-			\EE::debug( print_r( $e, true ) );
 			\EE::warning( sprintf( 'Certificate request for %s failed: %s. The current certificate is kept.', $domain, $e->getMessage() ) );
 
 			return false;
