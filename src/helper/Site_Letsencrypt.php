@@ -74,9 +74,9 @@ class EEAcmeClient extends AcmeClient {
 	}
 
 	/**
-	 * Same as acmephp's requestOrder(), but keeps only the challenge types EE can solve.
+	 * Same as acmephp's requestOrder(), but skips challenges it can't represent.
 	 *
-	 * acmephp 1.3 reads a token from every challenge, so one without a token (the draft dns-persist-01 that Pebble 2.10 offers) made the whole order throw.
+	 * acmephp 1.3 reads a token from every challenge, so one without a token (the draft dns-persist-01 that Pebble 2.10 offers) made the whole order throw. Other types are kept as before: authorize() picks the one its solver supports, or a valid one.
 	 *
 	 * @param array $domains Domains to order a certificate for.
 	 *
@@ -114,8 +114,8 @@ class EEAcmeClient extends AcmeClient {
 			// An empty list still reaches authorize(), which reports the domain as unsupported.
 			$authorizationsChallenges[ $domain ] = [];
 			foreach ( $authorizationsResponse['challenges'] as $challenge ) {
-				if ( ! in_array( $challenge['type'] ?? '', [ 'http-01', 'dns-01' ], true ) || empty( $challenge['token'] ) || ! is_string( $challenge['token'] ) ) {
-					\EE::debug( 'Skipping unsupported ACME challenge ' . ( $challenge['type'] ?? '(no type)' ) . ' for ' . $domain );
+				if ( empty( $challenge['token'] ) || ! is_string( $challenge['token'] ) || ! isset( $challenge['type'], $challenge['status'], $challenge['url'] ) ) {
+					\EE::debug( 'Skipping ACME challenge without a token: ' . ( $challenge['type'] ?? '(no type)' ) . ' for ' . $domain );
 					continue;
 				}
 				$authorizationsChallenges[ $domain ][] = new AuthorizationChallenge(
