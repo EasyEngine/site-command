@@ -588,7 +588,7 @@ class Site_Letsencrypt {
 		}
 		$order = $this->repository->loadCertificateOrder( $domains );
 
-		// Restored if no certificate is stored below: they belong to the certificate that is still served.
+		// Restored if no certificate is stored below: they belong to the stored certificate, if there is one.
 		$previous_key_pair = $this->repository->hasDomainKeyPair( $domain ) ? $this->repository->loadDomainKeyPair( $domain ) : null;
 		$previous_dn       = $this->repository->hasDomainDistinguishedName( $domain ) ? $this->repository->loadDomainDistinguishedName( $domain ) : null;
 
@@ -623,7 +623,8 @@ class Site_Letsencrypt {
 			if ( $previous_dn ) {
 				$this->repository->storeDomainDistinguishedName( $domain, $previous_dn );
 			}
-			\EE::warning( sprintf( 'Certificate request for %s failed: %s. The current certificate is kept.', $domain, $e->getMessage() ) );
+			$kept = $this->repository->hasDomainCertificate( $domain ) ? ' The current certificate is kept.' : '';
+			\EE::warning( sprintf( 'Certificate request for %s failed: %s.%s', $domain, $e->getMessage(), $kept ) );
 
 			return false;
 		}
