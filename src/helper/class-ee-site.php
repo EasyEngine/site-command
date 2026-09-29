@@ -388,21 +388,8 @@ abstract class EE_Site_Command {
 		\EE::do_hook( 'site_cleanup', $site_url );
 
 		if ( $level > 4 ) {
-			if ( $this->site_data['site_ssl'] ) {
-				\EE::log( 'Removing ssl certs and other config files.' );
-				$crt_file   = EE_ROOT_DIR . "/services/nginx-proxy/certs/$site_url.crt";
-				$key_file   = EE_ROOT_DIR . "/services/nginx-proxy/certs/$site_url.key";
-				$pem_file   = EE_ROOT_DIR . "/services/nginx-proxy/certs/$site_url.chain.pem";
-				$conf_certs = EE_ROOT_DIR . "/services/nginx-proxy/acme-conf/certs/$site_url";
-				$conf_var   = EE_ROOT_DIR . "/services/nginx-proxy/acme-conf/var/$site_url";
-
-				$delete_files = [ $conf_certs, $conf_var, $crt_file, $key_file, $pem_file ];
-				try {
-					$this->fs->remove( $delete_files );
-				} catch ( \Exception $e ) {
-					\EE::warning( $e );
-				}
-			}
+			// Also when site_ssl is empty: SSL may have been turned off or lost while the files stayed, and nginx-proxy would keep matching them.
+			\EE\Site\Utils\remove_site_ssl_files( $site_url, $this->get_ssl_domains( $site_url ) );
 
 			if ( Site::find( $site_url )->delete() ) {
 				\EE::log( 'Removed database entry.' );
@@ -1075,10 +1062,41 @@ abstract class EE_Site_Command {
 	 */
 	private function disable_ssl() {
 
+		$site_url = $this->site_data['site_url'];
+
 		$this->dump_docker_compose_yml( [ 'nohttps' => true ] );
 
 		\EE\Site\Utils\start_site_containers( $this->site_data['site_fs_path'], [ 'nginx' ] );
+
+		// The redirect's HTTPS block loads the certificate that is removed below.
+		if ( $this->fs->exists( EE_ROOT_DIR . '/services/nginx-proxy/conf.d/' . $site_url . '-redirect.conf' ) ) {
+			\EE\Site\Utils\add_site_redirects( $site_url, false, false );
+		}
 		\EE\Site\Utils\reload_global_nginx_proxy();
+
+		// Left behind, nginx-proxy would still match the certificate to this site's (and similarly named sites') hosts.
+		\EE\Site\Utils\remove_site_ssl_files( $site_url, $this->get_ssl_domains( $site_url ) );
+	}
+
+	/**
+	 * Domains other than the site itself that can have ACME state for its certificate: its alias domains and its www counterpart.
+	 *
+	 * @param string $site_url Name of the site.
+	 *
+	 * @return array
+	 */
+	private function get_ssl_domains( $site_url ) {
+
+		$domains = empty( $this->site_data['alias_domains'] ) ? [] : explode( ',', $this->site_data['alias_domains'] );
+
+		// Never touch the state of the www counterpart when it is another site or another site's alias.
+		$www    = \EE\Site\Utils\get_www_counterpart( $site_url );
+		$parent = get_parent_of_alias( $www );
+		if ( ! Site::find( $www ) && ( empty( $parent ) || $site_url === $parent ) ) {
+			$domains[] = $www;
+		}
+
+		return array_values( array_diff( array_unique( array_map( 'trim', $domains ) ), [ $site_url, '' ] ) );
 	}
 
 	/**
