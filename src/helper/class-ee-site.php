@@ -873,8 +873,8 @@ abstract class EE_Site_Command {
 			}
 
 			$test = \EE\Site\Utils\test_global_nginx_proxy_config( true );
-			if ( 0 === $test->return_code ) {
-				\EE\Site\Utils\reload_global_nginx_proxy();
+			// The reload regenerates and tests again; restarting after it refused would load a config nginx rejected.
+			if ( 0 === $test->return_code && false !== \EE\Site\Utils\reload_global_nginx_proxy() ) {
 				// A changed cache zone needs a fresh nginx master; alias changes only add locations, which the reload applies.
 				if ( ! $force ) {
 					EE::exec( 'docker restart ' . EE_PROXY_TYPE );
