@@ -1018,7 +1018,10 @@ abstract class EE_Site_Command {
 			EE::error( 'Update from normal SSL to wildcard SSL is not supported yet.' );
 		}
 
-		if ( $ssl && $this->site_data->site_ssl_wildcard && ! $wildcard ) {
+		// Self-signed sites are stored as wildcard too, so only refuse a normal certificate where one can't cover the site.
+		$alias_domains  = empty( $this->site_data->alias_domains ) ? [] : explode( ',', $this->site_data->alias_domains );
+		$needs_wildcard = 'subdom' === $this->site_data->app_sub_type || in_array( '*.' . $this->site_data->site_url, $alias_domains, true );
+		if ( $ssl && $this->site_data->site_ssl_wildcard && ! $wildcard && $needs_wildcard ) {
 			EE::error( 'Update from wildcard SSL to normal SSL is not supported yet.' );
 		}
 
@@ -1055,14 +1058,10 @@ abstract class EE_Site_Command {
 
 		EE::log( 'Starting SSL update for: ' . $this->site_data->site_url );
 		try {
-			$old_ssl                   = $this->site_data->site_ssl;
 			$this->site_data->site_ssl = $ssl;
 			// Keep the stored wildcard flag when turning SSL off, so the same SSL can be enabled again.
 			if ( $ssl ) {
 				$this->site_data->site_ssl_wildcard = $wildcard ? 1 : 0;
-			} elseif ( 'self' === $old_ssl && 'subdom' !== $this->site_data->app_sub_type ) {
-				// Self-signed certs are always wildcard, so the kept flag would refuse `--ssl=self` or `--ssl=le` without --wildcard.
-				$this->site_data->site_ssl_wildcard = 0;
 			}
 
 			$site                        = $this->site_data;
