@@ -834,15 +834,17 @@ class Site_Backup_Restore {
 		// metacharacter can survive either shell layer.
 		$wp_version = preg_replace( '/[^0-9A-Za-z.\-]/', '', (string) $wp_version );
 
-		// wp core download extracts the WordPress archive in PHP, which needs more
-		// than a typical site's 128M memory_limit and OOMs on low-RAM hosts. Run it
-		// under a higher limit via `php -d memory_limit=256M $(which wp)`, matching
-		// the site-creation path in site-type-wp. The command runs through `bash -c`
-		// in the container, so the `$` in `$(which wp)` is escaped here to defer the
-		// substitution to the container's shell (EE's `wp` is the phar, invoked
-		// directly, so the WP_CLI_PHP_ARGS env var would not apply).
+		// Same download, extraction and checksum gate as site creation (see get_wp_core_download_command()).
 		$args       = [ 'shell', $this->site_data['site_url'] ];
-		$assoc_args = [ 'command' => sprintf( "php -d memory_limit=256M \\$(which wp) core download --force --version=%s", $wp_version ) ];
+		$assoc_args = [
+			'command' => \EE\Site\Utils\get_wp_core_download_command(
+				$this->site_data['site_container_fs_path'],
+				[
+					'version' => $wp_version,
+					'force'   => true,
+				]
+			),
+		];
 		$options    = [ 'skip-tty' => true ];
 		EE::run_command( $args, $assoc_args, $options );
 
