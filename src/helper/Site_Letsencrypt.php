@@ -837,7 +837,7 @@ class Site_Letsencrypt {
 
 		} catch ( \Exception $e ) {
 			\EE::warning( 'A critical error occurred during certificate renewal: ' . $e->getMessage() );
-			\EE::debug( print_r( $e, true ) );
+			\EE::debug( (string) $e );
 			// A rate limit is not a misconfigured-domain failure; point the user to the LE rate-limit docs.
 			if ( $this->is_rate_limit_exception( $e ) ) {
 				\EE::warning( 'Let\'s Encrypt rate limit hit for: ' . $domain . '. Please wait before retrying. Ref: https://letsencrypt.org/docs/rate-limits/' );
@@ -847,7 +847,7 @@ class Site_Letsencrypt {
 			return false;
 		} catch ( \Throwable $e ) {
 			\EE::warning( 'A critical error occurred during certificate renewal: ' . $e->getMessage() );
-			\EE::debug( print_r( $e, true ) );
+			\EE::debug( (string) $e );
 			// A rate limit is not a misconfigured-domain failure; point the user to the LE rate-limit docs.
 			if ( $this->is_rate_limit_exception( $e ) ) {
 				\EE::warning( 'Let\'s Encrypt rate limit hit for: ' . $domain . '. Please wait before retrying. Ref: https://letsencrypt.org/docs/rate-limits/' );
