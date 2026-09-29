@@ -615,8 +615,8 @@ class Site_Letsencrypt {
 				throw new \Exception( 'the returned certificate does not match the new domain key (the stored order was already finalized)' );
 			}
 		} catch ( \Throwable $e ) {
-			// Logged first, so a restore that fails too doesn't hide the reason.
-			\EE::debug( print_r( $e, true ) );
+			// Logged first, so a restore that fails too doesn't hide the reason. Not print_r(): its trace args hold the new private key.
+			\EE::debug( (string) $e );
 			if ( $previous_key_pair ) {
 				$this->repository->storeDomainKeyPair( $domain, $previous_key_pair );
 			}
