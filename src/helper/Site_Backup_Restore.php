@@ -855,7 +855,8 @@ class Site_Backup_Restore {
 		];
 		foreach ( $constants as $constant => $value ) {
 			$value_file = $this->write_scratch_file( strtolower( $constant ), (string) $value );
-			$command    = sprintf( 'wp config set %s \\"\\$(cat /var/www/%s/%s)\\" --quiet', $constant, self::RESTORE_STAGE_DIR, strtolower( $constant ) );
+			// `&&`: an unreadable file must fail the step, not set an empty value.
+			$command = sprintf( 'value=\\$(cat /var/www/%s/%s) && wp config set %s \\"\\$value\\" --quiet', self::RESTORE_STAGE_DIR, strtolower( $constant ), $constant );
 			$this->run_checked_shell_command( $command, sprintf( 'Failed to set %s in wp-config.', $constant ) );
 			unlink( $value_file );
 		}
@@ -1206,6 +1207,9 @@ class Site_Backup_Restore {
 			EE::error( sprintf( "These mount points are inside the site directory:\n%s\nUnmount them before a restore. The site was not changed.", implode( "\n", $mounts ) ) );
 		}
 
+		if ( 0 === strpos( $stage, $this->get_restore_scratch_dir() . '/' ) ) {
+			EE::warning( 'app/ is on a filesystem of its own, so the restore stages the files inside it, where the site\'s own code can reach them.' );
+		}
 		$this->remove_scratch_dir();
 		$this->fs->remove( $stage );
 		$this->fs->mkdir( [ $stage . '/new', $stage . '/old' ], 0700 );
@@ -1300,15 +1304,23 @@ class Site_Backup_Restore {
 	 * @return array|null
 	 */
 	private function read_unfinished_restore_journal() {
+		$unfinished = null;
 		foreach ( [ $this->get_restore_journal_file(), $this->get_restore_stage_dir() . '/journal.json' ] as $file ) {
 			$journal = is_file( $file ) ? json_decode( (string) file_get_contents( $file ), true ) : null;
+			if ( ! is_array( $journal ) || ! isset( $journal['stage'], $journal['pairs'], $journal['db'] ) ) {
+				continue;
+			}
+			// The copies are written one after the other: a kill in between leaves one committed and one not.
+			if ( ! empty( $journal['committed'] ) ) {
+				return null;
+			}
 			// A journal without its stage dir is from a deleted site: nothing to roll back.
-			if ( is_array( $journal ) && isset( $journal['stage'], $journal['pairs'], $journal['db'] ) && empty( $journal['committed'] ) && is_dir( $journal['stage'] ) ) {
-				return $this->restore_has_changes( $journal ) ? $journal : null;
+			if ( null === $unfinished && is_dir( $journal['stage'] ) ) {
+				$unfinished = $journal;
 			}
 		}
 
-		return null;
+		return null !== $unfinished && $this->restore_has_changes( $unfinished ) ? $unfinished : null;
 	}
 
 	/**
@@ -1717,6 +1729,8 @@ class Site_Backup_Restore {
 		$this->write_restore_journal();
 		$this->restore_txn = null;
 		try {
+			// The previous files go first: a kill in the middle must not leave them without the (committed) journal.
+			$this->fs->remove( [ $stage . '/old', $stage . '/new' ] );
 			$this->remove_scratch_dir();
 			$this->fs->remove( [ $this->get_restore_journal_file(), $stage ] );
 		} catch ( \Throwable $e ) {
@@ -1773,7 +1787,10 @@ class Site_Backup_Restore {
 			// Read-only for the container; a kill during the import still leaves the copy in the stage. The mode is set
 			// on the stage's own file (same inode), never through the path the site user can replace.
 			if ( file_exists( $saved ) && chmod( $saved, 0644 ) && ( @link( $saved, $view ) || copy( $saved, $view ) ) ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- falls back to a copy.
-				// The DB name was checked when the restore began; no EE::error() may run in a shutdown handler.
+				// Checked again here: no EE::error() may run in a shutdown handler.
+				if ( ! preg_match( '/^[A-Za-z0-9_.-]+$/', (string) $this->site_data['db_name'] ) ) {
+					throw new \RuntimeException( 'The database name is not supported for restore.' );
+				}
 				$command = sprintf( 'mysql --defaults-extra-file=%s --skip-ssl %s < /var/www/%s/db-before.sql 2>&1', $this->write_mysql_defaults_file(), $this->site_data['db_name'], self::RESTORE_STAGE_DIR );
 				$result  = EE::launch( $this->get_ee_shell_command( $command ) );
 				$this->remove_mysql_defaults_files();
@@ -2014,7 +2031,8 @@ class Site_Backup_Restore {
 	private function pre_backup_check() {
 		$this->pre_backup_restore_checks();
 
-		$site_path = EE_ROOT_DIR . '/sites/' . $this->site_data['site_url'] . '/app/htdocs';
+		// The archive holds all of app/, not only htdocs/.
+		$site_path = $this->get_site_app_dir();
 		$site_size = $this->dir_size( $site_path );
 
 		EE::debug( 'Site size: ' . $site_size );
@@ -2951,11 +2969,11 @@ class Site_Backup_Restore {
 			$this->rclone_download( $backup_dir );
 		}
 
-		$restore_command = sprintf( 'cd %s && unzip -o conf.zip < /dev/null', $backup_dir );
+		$restore_command = sprintf( 'cd %s && unzip -o conf.zip < /dev/null', escapeshellarg( $backup_dir ) );
 		$this->exec_or_fail( $restore_command, 'Failed to extract the configuration from the backup.' );
 
 		if ( $this->fs->exists( $backup_dir . '/nginx' ) ) {
-			$restore_command = sprintf( 'rsync -a %s/nginx/ %s/config/nginx/', $backup_dir, EE_ROOT_DIR . '/sites/' . $this->site_data['site_url'] );
+			$restore_command = sprintf( 'rsync -a %s %s', escapeshellarg( $backup_dir . '/nginx/' ), escapeshellarg( EE_ROOT_DIR . '/sites/' . $this->site_data['site_url'] . '/config/nginx/' ) );
 			$this->exec_or_fail( $restore_command, 'Failed to restore the nginx configuration.' );
 		}
 	}
@@ -2969,7 +2987,7 @@ class Site_Backup_Restore {
 			$this->rclone_download( $backup_dir );
 		}
 		if ( ! $this->fs->exists( sprintf( '%s/php', $backup_dir ) ) ) {
-			$restore_command = sprintf( 'cd %s && unzip -o conf.zip < /dev/null', $backup_dir );
+			$restore_command = sprintf( 'cd %s && unzip -o conf.zip < /dev/null', escapeshellarg( $backup_dir ) );
 			$this->exec_or_fail( $restore_command, 'Failed to extract the configuration from the backup.' );
 		}
 
@@ -2978,7 +2996,9 @@ class Site_Backup_Restore {
 			foreach ( [ 'php-fpm.d/', 'php/php.ini', 'php/conf.d/custom.ini' ] as $conf ) {
 				// Only what the backup has; a failed copy rolls the restore back.
 				if ( $this->fs->exists( $backup_dir . '/php/' . rtrim( $conf, '/' ) ) ) {
-					$restore_command = sprintf( 'rsync -a %s/php/%s %s/config/php/%s', $backup_dir, $conf, $site_root, $conf );
+					// rsync creates the file or last dir, not missing parents.
+					$this->fs->mkdir( dirname( $site_root . '/config/php/' . rtrim( $conf, '/' ) ) );
+					$restore_command = sprintf( 'rsync -a %s %s', escapeshellarg( $backup_dir . '/php/' . $conf ), escapeshellarg( $site_root . '/config/php/' . $conf ) );
 					$this->exec_or_fail( $restore_command, 'Failed to restore the php configuration.' );
 				}
 			}
