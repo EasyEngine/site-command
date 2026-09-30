@@ -106,6 +106,9 @@ class Site_Backup_Restore {
 	private $mysql_defaults_files   = [];
 	private $mysql_defaults_cleanup = false;
 
+	// The restore replaced the top-level entries of app/ (htdocs included).
+	private $restore_replaced_app = false;
+
 	// The per-site lock file this process created (released on any exit).
 	private $site_lock_file = null;
 
@@ -383,8 +386,15 @@ class Site_Backup_Restore {
 		$this->fs->remove( $backup_dir );
 		$this->restore_in_progress = false;
 
-		EE::log( 'Reloading site.' );
-		EE::run_command( [ 'site', 'reload', $this->site_data['site_url'] ], [], [] );
+		if ( $this->restore_replaced_app ) {
+			// Mounts inside the containers below /var/www/htdocs (admin-tools' ee-admin, custom compose volumes) stay on the old
+			// directory until the containers start again.
+			EE::log( 'Restarting the site containers.' );
+			EE::run_command( [ 'site', 'restart', $this->site_data['site_url'] ], [], [] );
+		} else {
+			EE::log( 'Reloading site.' );
+			EE::run_command( [ 'site', 'reload', $this->site_data['site_url'] ], [], [] );
+		}
 
 		$this->fs->remove( EE_BACKUP_DIR . '/' . $this->site_data['site_url'] . '.lock' );
 
@@ -1474,6 +1484,7 @@ class Site_Backup_Restore {
 				$this->add_restore_pair( $app_dir . '/' . $name, $new . '/' . $name );
 			}
 		}
+		$this->restore_replaced_app = true;
 	}
 
 	/**
