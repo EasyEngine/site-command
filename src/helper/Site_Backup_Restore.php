@@ -385,7 +385,7 @@ class Site_Backup_Restore {
 		// Only now, with files, DB and config committed; restore_site()/restore_wp() no longer call it (BKP-13).
 		$this->maybe_restore_custom_docker_compose( $backup_dir );
 
-		$this->fs->remove( $backup_dir );
+		$this->clear_download_dir();
 		$this->restore_in_progress = false;
 
 		if ( $this->restore_replaced_app ) {
@@ -967,6 +967,22 @@ class Site_Backup_Restore {
 	}
 
 	/**
+	 * Empty the restore's download dir, EE_BACKUP_DIR/<site>/, except the DB dump `ee site update --ssl` keeps there
+	 * (<site>.db) and tells the user to restore from.
+	 */
+	private function clear_download_dir() {
+		$dir = EE_BACKUP_DIR . '/' . $this->site_data['site_url'];
+		foreach ( $this->list_dir( $dir ) as $entry ) {
+			if ( $this->site_data['site_url'] . '.db' !== $entry ) {
+				$this->fs->remove( $dir . '/' . $entry );
+			}
+		}
+		if ( is_dir( $dir ) && empty( $this->list_dir( $dir ) ) ) {
+			rmdir( $dir );
+		}
+	}
+
+	/**
 	 * The php container's scratch dir, as a real directory it can write to. app/ belongs to the site's own user, who can
 	 * put a symlink there that resolves anywhere on the host, so root checks it right before every use.
 	 *
@@ -1163,12 +1179,17 @@ class Site_Backup_Restore {
 				$wp_root = trim( str_replace( '/var/www/', '', $this->site_data['site_container_fs_path'] ), '/' );
 			}
 
-			$wp_version = $this->get_backup_wp_version( $backup_dir, $backup_app );
-			$this->begin_restore_transaction( $backup_app, self::WP_CORE_SIZE_ESTIMATE );
+			// These backups hold no core; without a version the current core stays.
+			$wp_version = $this->get_backup_wp_version( $backup_dir, $backup_app, false );
+			$this->begin_restore_transaction( $backup_app, '' === $wp_version ? 0 : self::WP_CORE_SIZE_ESTIMATE );
 
 			EE::log( 'Restoring site files.' );
 			$this->stage_legacy_wp_archive( $backup_app, $wp_root );
-			$this->stage_wp_core( $wp_version, $wp_root, true );
+			if ( '' === $wp_version ) {
+				EE::warning( 'The backup does not record its WordPress version, so the current WordPress core is kept.' );
+			} else {
+				$this->stage_wp_core( $wp_version, $wp_root, true );
+			}
 		}
 
 		$this->apply_restore_transaction( $backup_dir );
@@ -1200,7 +1221,7 @@ class Site_Backup_Restore {
 	 *
 	 * @return string
 	 */
-	private function get_backup_wp_version( $backup_dir, $backup_app ) {
+	private function get_backup_wp_version( $backup_dir, $backup_app, $required = true ) {
 		$meta_file = $backup_dir . '/meta.json';
 
 		// Format 2 uploads meta.json next to the archive; older backups keep it inside.
@@ -1214,6 +1235,9 @@ class Site_Backup_Restore {
 
 		// '-' is what backup_site_details() stores when WP-CLI failed.
 		if ( '' === $wp_version || '-' === $wp_version ) {
+			if ( ! $required ) {
+				return '';
+			}
 			EE::error( 'Backup metadata (meta.json) is missing or has no WordPress version. The site was not changed.' );
 		}
 
@@ -1880,7 +1904,7 @@ class Site_Backup_Restore {
 	private function rollback_unfinished_restore() {
 		// A failed restore must not leave its download behind to be taken for another backup next time.
 		if ( $this->restore_in_progress ) {
-			$this->fs->remove( EE_BACKUP_DIR . '/' . $this->site_data['site_url'] );
+			$this->clear_download_dir();
 		}
 
 		if ( null === $this->restore_txn ) {
@@ -1938,7 +1962,7 @@ class Site_Backup_Restore {
 		if ( null !== $this->read_unfinished_restore_journal() ) {
 			$this->capture_error( 'An interrupted restore left the site in an inconsistent state', self::ERROR_TYPE_VALIDATION, 1004 );
 			$this->fs->remove( EE_BACKUP_DIR . '/' . $this->site_data['site_url'] . '.lock' );
-			EE::error( sprintf( 'An earlier restore of %1$s did not finish, so the site may be half restored. Run `ee site restore %1$s` (it rolls the earlier restore back first), then back up again.', $this->site_data['site_url'] ) );
+			EE::error( sprintf( 'An earlier restore of %1$s did not finish, so the site may be half restored. Run `ee site restore %1$s` (optionally with --id=<backup-id>): it rolls the earlier restore back first and then restores that backup (by default this host\'s newest). Then back up again.', $this->site_data['site_url'] ) );
 		}
 	}
 
@@ -1959,8 +1983,10 @@ class Site_Backup_Restore {
 		$container_fs_path = rtrim( str_replace( '/var/www/', '', $this->site_data['site_container_fs_path'] ), '/' );
 		$wp_cli_yml_path   = ltrim( str_replace( 'htdocs', '', $container_fs_path ), '/' );
 
-		if ( ! empty( $wp_cli_yml_path ) ) {
-			$this->fs->dumpFile( $this->site_data['site_fs_path'] . '/app/htdocs/wp-cli.yml', "path: $wp_cli_yml_path/" );
+		$file = $this->site_data['site_fs_path'] . '/app/htdocs/wp-cli.yml';
+		// A file that sets the path (e.g. restored from the backup, maybe with more settings) is kept.
+		if ( ! empty( $wp_cli_yml_path ) && ! ( is_file( $file ) && preg_match( '/^path:/m', (string) file_get_contents( $file ) ) ) ) {
+			$this->fs->dumpFile( $file, "path: $wp_cli_yml_path/" );
 		}
 	}
 
@@ -2180,7 +2206,7 @@ class Site_Backup_Restore {
 		$this->recover_interrupted_restore();
 
 		// Never reuse what a failed backup or restore left in the download dir: it may be another backup (BKP-1).
-		$this->fs->remove( EE_BACKUP_DIR . '/' . $this->site_data['site_url'] );
+		$this->clear_download_dir();
 
 		$remote_path = $this->get_remote_path( false );
 		$command     = sprintf( 'rclone size --json %s', escapeshellarg( $remote_path ) );
@@ -2357,7 +2383,8 @@ class Site_Backup_Restore {
 
 	private function list_remote_backups() {
 
-		$backups = $this->get_remote_backups();
+		// Listing is read-only: it doesn't create this host's id.
+		$backups = $this->get_remote_backups( false );
 
 		if ( null === $backups ) {
 			EE::error( 'Error listing remote backups: ' . $this->rclone_error ); // Display specific error
@@ -2383,7 +2410,7 @@ class Site_Backup_Restore {
 	 * @return array{own:string[],legacy:string[],foreign:string[]}|null own: this host's ids, legacy: ids directly under
 	 *                                                                   <rclone-path>/<site>/ (before BKP-8), foreign: <host-id>/<id> of other hosts.
 	 */
-	private function get_remote_backups() {
+	private function get_remote_backups( $create_host_id = true ) {
 		$site_root = $this->get_rclone_config_path();
 		$entries   = $this->list_remote_dirs( $site_root );
 
@@ -2391,7 +2418,8 @@ class Site_Backup_Restore {
 			return null;
 		}
 
-		$own     = $this->get_backup_host_id();
+		// null: this host has no id yet, so every host dir is another host's.
+		$own     = $this->get_backup_host_id( $create_host_id );
 		$backups = [
 			'own'     => [],
 			'legacy'  => [],
@@ -2494,7 +2522,7 @@ class Site_Backup_Restore {
 	 *
 	 * @return string
 	 */
-	private function get_backup_host_id() {
+	private function get_backup_host_id( $create = true ) {
 		if ( null !== $this->backup_host_id ) {
 			return $this->backup_host_id;
 		}
@@ -2512,6 +2540,9 @@ class Site_Backup_Restore {
 		$stored = \EE\Model\Option::get( 'backup-host-id' );
 		if ( is_string( $stored ) && $this->is_valid_backup_host_id( $stored ) ) {
 			return $this->backup_host_id = $stored;
+		}
+		if ( ! $create ) {
+			return null;
 		}
 
 		// Concurrent first backups (cron) must agree on one id.
@@ -2584,11 +2615,18 @@ class Site_Backup_Restore {
 
 				return $site_root . '/' . $matches[0];
 			}
+			if ( count( $matches ) > 1 ) {
+				EE::error( sprintf( "Backup %s exists on several hosts:\n%s\nChoose one with --id=<host-id>/<backup-id>.", $backup_id, implode( "\n", $matches ) ) );
+			}
 
 			EE::error( "Invalid backup ID provided.\nPlease provide a valid ID from the list using 'ee site backup --list " . $this->site_data['site_url'] . "'." );
 		}
 
 		if ( ! empty( $backups['own'] ) ) {
+			// E.g. made by an older EE version after a downgrade; it may also come from another host, so it's not taken.
+			if ( ! empty( $backups['legacy'] ) && (int) $backups['legacy'][0] > (int) $backups['own'][0] ) {
+				EE::warning( sprintf( 'A newer backup in the old shared layout exists (%1$s), possibly from another host. Restore it with --id=%1$s.', $backups['legacy'][0] ) );
+			}
 			EE::log( 'Restoring from backup: ' . $backups['own'][0] );
 
 			return $host_root . '/' . $backups['own'][0];

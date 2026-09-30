@@ -2927,7 +2927,7 @@ abstract class EE_Site_Command {
 	/**
 	 * Function to take backup of site.
 	 *
-	 * Backups are stored in <rclone-path>/<site>/<host-id>/<backup-id>, so hosts sharing a remote keep their backups apart. The host id is generated once per host. Set `backup-host-id` in config.yml only to take over the backups of a server this one replaces; two running hosts with the same id share (and prune) each other's backups.
+	 * Backups are stored in <rclone-path>/<site>/<host-id>/<backup-id>, so hosts sharing a remote keep their backups apart. The host id is generated on the first backup or restore and kept in the EE database, so a reinstall starts a new one and a copied database shares it. Set `backup-host-id` in config.yml only to take over the backups of a server this one replaces; two running hosts with the same id share (and prune) each other's backups.
 	 *
 	 * ## OPTIONS
 	 *
