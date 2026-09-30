@@ -182,6 +182,15 @@ class Site_Backup_Restore {
 		// Fails on an invalid backup-host-id before any lock is taken.
 		$this->get_backup_host_id();
 
+		$this->run_guarded( 'create_backup' );
+
+		delem_log( 'site backup end' );
+	}
+
+	/**
+	 * Everything of `ee site backup` after the argument checks.
+	 */
+	private function create_backup() {
 		// Acquire global lock to serialize backups (prevents OOM from concurrent backups)
 		$this->acquire_global_backup_lock();
 
@@ -242,8 +251,6 @@ class Site_Backup_Restore {
 		$this->release_global_backup_lock();
 
 		EE::success( 'Backup created successfully.' );
-
-		delem_log( 'site backup end' );
 	}
 
 	/**
@@ -351,6 +358,17 @@ class Site_Backup_Restore {
 		// Registered before the site lock's release handler so a rollback runs while the lock is still held.
 		register_shutdown_function( [ $this, 'rollback_restore_on_shutdown' ] );
 
+		$this->run_guarded( 'run_restore', $backup_dir );
+
+		delem_log( 'site restore end' );
+	}
+
+	/**
+	 * Everything of `ee site restore` from the pre-checks on.
+	 *
+	 * @param string $backup_dir Local download dir.
+	 */
+	private function run_restore( $backup_dir ) {
 		$this->pre_restore_check();
 
 		if ( 'wp' === $this->site_data['site_type'] ) {
@@ -371,8 +389,25 @@ class Site_Backup_Restore {
 		$this->fs->remove( EE_BACKUP_DIR . '/' . $this->site_data['site_url'] . '.lock' );
 
 		EE::success( 'Site restored successfully.' );
+	}
 
-		delem_log( 'site restore end' );
+	/**
+	 * Run a method and turn an uncaught exception into EE::error(): left uncaught, it ends in the site command's
+	 * fatal-error handler, which exits before the restore rollback and the lock release handlers run.
+	 *
+	 * @param string $method Method name.
+	 * @param mixed  ...$args Arguments.
+	 */
+	private function run_guarded( $method, ...$args ) {
+		try {
+			$this->$method( ...$args );
+		} catch ( \Throwable $e ) {
+			if ( $e instanceof \EE\ExitException ) {
+				throw $e;
+			}
+			$this->capture_error( 'Unexpected error: ' . $e->getMessage(), self::ERROR_TYPE_FATAL, 5004 );
+			EE::error( 'Unexpected error: ' . $e->getMessage() );
+		}
 	}
 
 	private function run_wp_cli_command( $command, $skip_plugins_themes = false ) {
@@ -2009,7 +2044,7 @@ class Site_Backup_Restore {
 				self::ERROR_TYPE_LOCK,
 				2003
 			);
-			EE::error( 'Another backup/restore process is running. Please wait for it to complete.' );
+			EE::error( sprintf( 'Another backup/restore process is running. Please wait for it to complete. If none is running (e.g. one was killed), remove %s.', $lock_file ) );
 		} else {
 			$this->fs->dumpFile( $lock_file, 'lock' );
 			$this->site_lock_file = $lock_file;
