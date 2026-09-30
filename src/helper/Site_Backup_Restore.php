@@ -947,6 +947,8 @@ class Site_Backup_Restore {
 	 *
 	 * @param string $command       Command to run inside the container.
 	 * @param string $error_message Message for EE::error() if the command fails.
+	 *
+	 * @return object The finished process (stdout, stderr).
 	 */
 	private function run_checked_shell_command( $command, $error_message ) {
 		$output = EE::launch( $this->get_ee_shell_command( $command ) );
@@ -954,6 +956,8 @@ class Site_Backup_Restore {
 		if ( $output->return_code ) {
 			EE::error( $error_message . ' ' . trim( $output->stdout . ' ' . $output->stderr ) );
 		}
+
+		return $output;
 	}
 
 	/**
@@ -1423,7 +1427,13 @@ class Site_Backup_Restore {
 				'force'   => true,
 			]
 		);
-		$this->run_checked_shell_command( $core_download_command, 'Failed to download WordPress core for restore. The site was not changed.' );
+		$result = $this->run_checked_shell_command( $core_download_command, 'Failed to download WordPress core for restore. The site was not changed.' );
+		// The output is captured, so pass on the checksum gate's warning (checksums unavailable from WordPress.org).
+		if ( preg_match_all( '/^Warning: Could not verify WordPress core checksums.*$/m', $result->stdout . "\n" . $result->stderr, $warnings ) ) {
+			foreach ( array_unique( $warnings[0] ) as $warning ) {
+				EE::warning( substr( $warning, strlen( 'Warning: ' ) ) );
+			}
+		}
 
 		$core_entries = array_diff( $this->list_dir( $core_dir ), [ 'wp-content' ] );
 		if ( ! in_array( 'wp-includes', $core_entries, true ) ) {
