@@ -106,6 +106,9 @@ class Site_Backup_Restore {
 	private $mysql_defaults_files   = [];
 	private $mysql_defaults_cleanup = false;
 
+	// The per-site lock file this process created (released on any exit).
+	private $site_lock_file = null;
+
 	// Set while a shutdown handler runs: EE::error() would exit and skip the remaining handlers.
 	private $in_shutdown = false;
 
@@ -346,7 +349,6 @@ class Site_Backup_Restore {
 		}
 
 		// Registered before the site lock's release handler so a rollback runs while the lock is still held.
-		$this->restore_in_progress = true;
 		register_shutdown_function( [ $this, 'rollback_restore_on_shutdown' ] );
 
 		$this->pre_restore_check();
@@ -1986,7 +1988,20 @@ class Site_Backup_Restore {
 			EE::error( 'Another backup/restore process is running. Please wait for it to complete.' );
 		} else {
 			$this->fs->dumpFile( $lock_file, 'lock' );
+			$this->site_lock_file = $lock_file;
+			// A failed or refused run must not block the next one (and the next restore rolls back a half-finished one).
+			register_shutdown_function( [ $this, 'release_site_lock' ] );
 		}
+	}
+
+	/**
+	 * Shutdown handler: remove the per-site lock file this process created.
+	 */
+	public function release_site_lock() {
+		if ( null !== $this->site_lock_file && file_exists( $this->site_lock_file ) ) {
+			unlink( $this->site_lock_file );
+		}
+		$this->site_lock_file = null;
 	}
 
 	private function pre_backup_check() {
@@ -2084,6 +2099,8 @@ class Site_Backup_Restore {
 	private function pre_restore_check() {
 
 		$this->pre_backup_restore_checks();
+		// Only with the lock held: a restore refused by another run's lock must leave that run's download dir alone.
+		$this->restore_in_progress = true;
 
 		// A restore killed mid-way (SIGKILL, OOM) is rolled back before anything else.
 		$this->recover_interrupted_restore();
