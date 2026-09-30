@@ -106,6 +106,9 @@ class Site_Backup_Restore {
 	private $mysql_defaults_files   = [];
 	private $mysql_defaults_cleanup = false;
 
+	// Set while a shutdown handler runs: EE::error() would exit and skip the remaining handlers.
+	private $in_shutdown = false;
+
 	public function __construct() {
 		$this->fs = new Filesystem();
 	}
@@ -837,7 +840,6 @@ class Site_Backup_Restore {
 
 		// The restored wp-config.php still has the backed-up site's credentials. Each value is read from a file in the
 		// container (`\$(cat …)` runs there), so none of them passes the host shells of `ee shell --command` (BKP-15).
-		$scratch   = $this->get_restore_scratch_dir();
 		$constants = [
 			'DB_NAME'     => $db_name,
 			'DB_USER'     => $db_user,
@@ -845,12 +847,10 @@ class Site_Backup_Restore {
 			'DB_HOST'     => $db_host,
 		];
 		foreach ( $constants as $constant => $value ) {
-			$value_file = $scratch . '/' . strtolower( $constant );
-			$this->fs->dumpFile( $value_file, (string) $value );
-			$this->protect_container_file( $value_file );
-			$command = sprintf( 'wp config set %s \\"\\$(cat /var/www/%s/%s)\\" --quiet', $constant, self::RESTORE_STAGE_DIR, strtolower( $constant ) );
+			$value_file = $this->write_scratch_file( strtolower( $constant ), (string) $value );
+			$command    = sprintf( 'wp config set %s \\"\\$(cat /var/www/%s/%s)\\" --quiet', $constant, self::RESTORE_STAGE_DIR, strtolower( $constant ) );
 			$this->run_checked_shell_command( $command, sprintf( 'Failed to set %s in wp-config.', $constant ) );
-			$this->fs->remove( $value_file );
+			unlink( $value_file );
 		}
 	}
 
@@ -875,7 +875,6 @@ class Site_Backup_Restore {
 	 */
 	private function write_mysql_defaults_file() {
 		$name  = 'mysql-' . bin2hex( random_bytes( 6 ) ) . '.cnf';
-		$file  = $this->get_restore_scratch_dir() . '/' . $name;
 		$quote = function ( $value ) {
 			return '"' . str_replace( [ '\\', '"' ], [ '\\\\', '\\"' ], (string) $value ) . '"';
 		};
@@ -884,13 +883,12 @@ class Site_Backup_Restore {
 			register_shutdown_function( [ $this, 'remove_mysql_defaults_files' ] );
 			$this->mysql_defaults_cleanup = true;
 		}
-		$this->mysql_defaults_files[] = $file;
+		$this->mysql_defaults_files[] = $this->get_restore_scratch_dir() . '/' . $name;
 
-		$this->fs->dumpFile(
-			$file,
+		$this->write_scratch_file(
+			$name,
 			sprintf( "[client]\nuser=%s\npassword=%s\nhost=%s\n", $quote( $this->site_data['db_user'] ), $quote( $this->site_data['db_password'] ), $quote( $this->site_data['db_host'] ) )
 		);
-		$this->protect_container_file( $file );
 
 		return '/var/www/' . self::RESTORE_STAGE_DIR . '/' . $name;
 	}
@@ -900,7 +898,7 @@ class Site_Backup_Restore {
 	 */
 	public function remove_mysql_defaults_files() {
 		foreach ( $this->mysql_defaults_files as $file ) {
-			if ( file_exists( $file ) ) {
+			if ( $this->path_exists( $file ) ) {
 				unlink( $file );
 			}
 		}
@@ -908,19 +906,119 @@ class Site_Backup_Restore {
 
 		// A backup leaves no empty scratch dir behind in the site.
 		$scratch = $this->get_restore_scratch_dir();
-		if ( null === $this->restore_txn && is_dir( $scratch ) && empty( $this->list_dir( $scratch ) ) ) {
+		if ( null === $this->restore_txn && ! is_link( $scratch ) && is_dir( $scratch ) && empty( $this->list_dir( $scratch ) ) ) {
 			rmdir( $scratch );
 		}
 	}
 
 	/**
-	 * Readable only by the site's own php container user.
+	 * The php container's scratch dir, as a real directory it can write to. app/ belongs to the site's own user, who can
+	 * put a symlink there that resolves anywhere on the host, so root checks it right before every use.
 	 *
-	 * @param string $file Host path inside app/.
+	 * @return string Host path.
 	 */
-	private function protect_container_file( $file ) {
-		chmod( $file, 0600 );
-		EE::exec( sprintf( 'chown www-data:www-data %s %s', escapeshellarg( dirname( $file ) ), escapeshellarg( $file ) ) );
+	private function prepare_scratch_dir() {
+		$scratch = $this->get_restore_scratch_dir();
+
+		clearstatcache();
+		if ( is_link( $scratch ) || ( file_exists( $scratch ) && ! is_dir( $scratch ) ) ) {
+			unlink( $scratch );
+		}
+		if ( ! is_dir( $scratch ) && ! mkdir( $scratch, 0755 ) && ! is_dir( $scratch ) ) {
+			$this->fail( sprintf( 'Could not create %s.', $scratch ) );
+		}
+		$this->assert_scratch_dir();
+		if ( ! $this->chown_to_site_user( $scratch ) ) {
+			$this->fail( sprintf( 'Could not hand %s to the site user.', $scratch ) );
+		}
+
+		return $scratch;
+	}
+
+	/**
+	 * Fail unless app/.ee-restore is still the real directory inside app/ (not a symlink the site put in its place).
+	 */
+	private function assert_scratch_dir() {
+		$scratch  = $this->get_restore_scratch_dir();
+		$app_real = realpath( $this->get_site_app_dir() );
+
+		clearstatcache();
+		if ( is_link( $scratch ) || ! is_dir( $scratch ) || false === $app_real || realpath( $scratch ) !== $app_real . '/' . self::RESTORE_STAGE_DIR ) {
+			$this->fail( sprintf( '%s is not a directory inside the site (it was replaced, e.g. by a symlink); stopping.', $scratch ) );
+		}
+	}
+
+	/**
+	 * Create a file only the container's site user can read, without following symlinks at the file or its dir.
+	 *
+	 * @param string $name    File name in the scratch dir.
+	 * @param string $content Content.
+	 *
+	 * @return string Host path.
+	 */
+	private function write_scratch_file( $name, $content ) {
+		$file = $this->prepare_scratch_dir() . '/' . $name;
+
+		// A leftover or planted entry of that name goes first: 'x' (O_EXCL) refuses to open through a symlink.
+		if ( $this->path_exists( $file ) ) {
+			unlink( $file );
+		}
+		$umask  = umask( 0077 );
+		$handle = @fopen( $file, 'x' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- reported below.
+		umask( $umask );
+		if ( false === $handle || false === fwrite( $handle, $content ) || ! fclose( $handle ) ) {
+			$this->fail( sprintf( 'Could not write %s.', $file ) );
+		}
+		if ( ! $this->chown_to_site_user( $file ) ) {
+			unlink( $file );
+			$this->fail( sprintf( 'Could not hand %s to the site user.', $file ) );
+		}
+
+		return $file;
+	}
+
+	/**
+	 * chown to www-data without following symlinks (-h, and -R never follows them).
+	 *
+	 * @param string $path      Host path.
+	 * @param bool   $recursive Whole tree.
+	 *
+	 * @return bool
+	 */
+	private function chown_to_site_user( $path, $recursive = false ) {
+		// Docker Desktop maps file ownership itself, and macOS has no www-data user.
+		if ( IS_DARWIN ) {
+			return true;
+		}
+
+		return EE::exec( sprintf( 'chown %s www-data:www-data %s', $recursive ? '-R' : '-h', escapeshellarg( $path ) ) );
+	}
+
+	/**
+	 * Remove the scratch dir without following symlinks: a symlink is unlinked, a directory goes with `rm -rf`, which
+	 * doesn't follow links it meets while deleting.
+	 */
+	private function remove_scratch_dir() {
+		$scratch = $this->get_restore_scratch_dir();
+
+		clearstatcache();
+		if ( is_link( $scratch ) || is_file( $scratch ) ) {
+			unlink( $scratch );
+		} elseif ( is_dir( $scratch ) ) {
+			EE::exec( sprintf( 'rm -rf %s', escapeshellarg( $scratch ) ) );
+		}
+	}
+
+	/**
+	 * EE::error() normally; an exception inside shutdown handlers, where exiting would skip the remaining handlers.
+	 *
+	 * @param string $message Message.
+	 */
+	private function fail( $message ) {
+		if ( $this->in_shutdown ) {
+			throw new \RuntimeException( $message );
+		}
+		EE::error( $message );
 	}
 
 	/**
@@ -1099,7 +1197,8 @@ class Site_Backup_Restore {
 			EE::error( sprintf( "These mount points are inside the site directory:\n%s\nUnmount them before a restore. The site was not changed.", implode( "\n", $mounts ) ) );
 		}
 
-		$this->fs->remove( [ $stage, $this->get_restore_scratch_dir() ] );
+		$this->remove_scratch_dir();
+		$this->fs->remove( $stage );
 		$this->fs->mkdir( [ $stage . '/new', $stage . '/old' ], 0700 );
 
 		$this->restore_txn = [
@@ -1412,12 +1511,16 @@ class Site_Backup_Restore {
 			EE::error( 'The WordPress root of the backup is outside the site. The site was not changed.' );
 		}
 
-		$this->fs->mkdir( [ $core_dir, $new_root ] );
+		$this->fs->mkdir( $new_root );
 		$real_root = realpath( $new_root );
 		if ( false === $real_root || ( $real_root !== $real_new && 0 !== strpos( $real_root, $real_new . '/' ) ) ) {
 			EE::error( 'The WordPress root of the backup is outside the site. The site was not changed.' );
 		}
-		$this->exec_or_fail( sprintf( 'chown -R www-data:www-data %s', escapeshellarg( $scratch ) ), 'Failed to prepare the WordPress core download.' );
+		// Only the download dir goes to the site user; a fallback stage inside the scratch dir stays root's.
+		$this->prepare_scratch_dir();
+		if ( ! mkdir( $core_dir, 0755 ) || ! $this->chown_to_site_user( $core_dir ) ) {
+			EE::error( 'Failed to prepare the WordPress core download. The site was not changed.' );
+		}
 
 		// Same download, extraction and checksum gate as site creation, but into the private core dir.
 		$core_download_command = \EE\Site\Utils\get_wp_core_download_command(
@@ -1435,7 +1538,15 @@ class Site_Backup_Restore {
 			}
 		}
 
-		$core_entries = array_diff( $this->list_dir( $core_dir ), [ 'wp-content' ] );
+		// Out of the site user's reach before anything in it is listed or moved.
+		$this->assert_scratch_dir();
+		$downloaded = $this->restore_txn['stage'] . '/core';
+		$this->rename_or_fail( $core_dir, $downloaded );
+		if ( is_link( $downloaded ) || ! is_dir( $downloaded ) ) {
+			EE::error( 'The WordPress core download is not a directory. The site was not changed.' );
+		}
+
+		$core_entries = array_diff( $this->list_dir( $downloaded ), [ 'wp-content' ] );
 		if ( ! in_array( 'wp-includes', $core_entries, true ) ) {
 			EE::error( 'The WordPress core download is incomplete. The site was not changed.' );
 		}
@@ -1444,9 +1555,9 @@ class Site_Backup_Restore {
 			if ( $this->path_exists( $new_root . '/' . $entry ) ) {
 				$this->fs->remove( $new_root . '/' . $entry );
 			}
-			$this->rename_or_fail( $core_dir . '/' . $entry, $new_root . '/' . $entry );
+			$this->rename_or_fail( $downloaded . '/' . $entry, $new_root . '/' . $entry );
 		}
-		$this->fs->remove( $core_dir );
+		$this->fs->remove( $downloaded );
 
 		if ( $legacy ) {
 			$live_root = $this->get_site_app_dir() . '/' . $wp_root;
@@ -1464,9 +1575,8 @@ class Site_Backup_Restore {
 	private function apply_restore_transaction( $backup_dir ) {
 		$stage = $this->restore_txn['stage'];
 
-		$this->exec_or_fail( sprintf( 'chown -R www-data:www-data %s', escapeshellarg( $this->restore_txn['new'] ) ), 'Failed to set the owner of the restored files.' );
-		if ( $this->fs->exists( $stage . '/uploads' ) ) {
-			$this->exec_or_fail( sprintf( 'chown -R www-data:www-data %s', escapeshellarg( $stage . '/uploads' ) ), 'Failed to set the owner of the restored files.' );
+		if ( ! $this->chown_to_site_user( $this->restore_txn['new'], true ) || ( $this->fs->exists( $stage . '/uploads' ) && ! $this->chown_to_site_user( $stage . '/uploads', true ) ) ) {
+			EE::error( 'Failed to set the owner of the restored files. The site was not changed.' );
 		}
 
 		if ( ! empty( $this->restore_txn['has_db'] ) ) {
@@ -1507,9 +1617,7 @@ class Site_Backup_Restore {
 	private function snapshot_current_db() {
 		EE::log( 'Saving the current database.' );
 
-		$scratch = $this->get_restore_scratch_dir();
-		$this->fs->mkdir( $scratch );
-		$this->exec_or_fail( sprintf( 'chown www-data:www-data %s', escapeshellarg( $scratch ) ), 'Failed to prepare the database copy.' );
+		$scratch = $this->prepare_scratch_dir();
 
 		$command = sprintf( 'mysqldump --defaults-extra-file=%s --skip-ssl --single-transaction %s > /var/www/%s/db-before.sql', $this->write_mysql_defaults_file(), $this->get_shell_safe_db_name(), self::RESTORE_STAGE_DIR );
 		$result  = EE::launch( $this->get_ee_shell_command( $command ) );
@@ -1521,17 +1629,24 @@ class Site_Backup_Restore {
 		}
 
 		// Out of the container's reach; a rollback reads it through a hard link, so it never leaves the stage.
-		$this->move_db_dump( $scratch . '/db-before.sql', $this->restore_txn['stage'] . '/db-before.sql' );
-		chown( $this->restore_txn['stage'] . '/db-before.sql', 0 );
-		chmod( $this->restore_txn['stage'] . '/db-before.sql', 0600 );
+		$saved = $this->restore_txn['stage'] . '/db-before.sql';
+		$this->move_db_dump( $scratch . '/db-before.sql', $saved );
+		// The site user could have left a symlink of that name; chown() and chmod() would follow it.
+		if ( is_link( $saved ) || ! is_file( $saved ) ) {
+			EE::error( 'The saved copy of the current database is not a regular file. The site was not changed.' );
+		}
+		chown( $saved, 0 );
+		chmod( $saved, 0600 );
 		$this->restore_txn['db'] = 'saved';
 		$this->write_restore_journal();
 	}
 
 	private function move_db_dump( $from, $to ) {
+		// Checked right before the rename: moving into or out of a replaced scratch dir would touch whatever it points to.
+		$this->assert_scratch_dir();
 		$this->rename_or_fail( $from, $to );
 		if ( 0 === strpos( $to, $this->get_restore_scratch_dir() . '/' ) ) {
-			EE::exec( sprintf( 'chown www-data:www-data %s', escapeshellarg( $to ) ) );
+			$this->chown_to_site_user( $to );
 		}
 	}
 
@@ -1593,7 +1708,8 @@ class Site_Backup_Restore {
 		$this->write_restore_journal();
 		$this->restore_txn = null;
 		try {
-			$this->fs->remove( [ $this->get_restore_journal_file(), $stage, $this->get_restore_scratch_dir() ] );
+			$this->remove_scratch_dir();
+			$this->fs->remove( [ $this->get_restore_journal_file(), $stage ] );
 		} catch ( \Throwable $e ) {
 			EE::warning( sprintf( 'Could not remove the previous site files in %s: %s', $stage, $e->getMessage() ) );
 		}
@@ -1635,26 +1751,26 @@ class Site_Backup_Restore {
 		}
 
 		if ( 'importing' === $txn['db'] ) {
-			$scratch = $this->get_restore_scratch_dir();
-			$this->fs->mkdir( $scratch );
-			EE::exec( sprintf( 'chown www-data:www-data %s', escapeshellarg( $scratch ) ) );
-			$result = null;
+			$scratch = $this->prepare_scratch_dir();
+			$result  = null;
 			$saved  = $txn['stage'] . '/db-before.sql';
 			$view   = $scratch . '/db-before.sql';
 			if ( ! file_exists( $saved ) && file_exists( $view ) ) {
 				$this->rename_quietly( $view, $saved );
 			}
-			if ( file_exists( $view ) ) {
+			if ( $this->path_exists( $view ) ) {
 				unlink( $view );
 			}
-			// Read-only for the container; a kill during the import still leaves the copy in the stage.
-			if ( file_exists( $saved ) && ( @link( $saved, $view ) || copy( $saved, $view ) ) ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- falls back to a copy.
-				chmod( $view, 0644 );
+			// Read-only for the container; a kill during the import still leaves the copy in the stage. The mode is set
+			// on the stage's own file (same inode), never through the path the site user can replace.
+			if ( file_exists( $saved ) && chmod( $saved, 0644 ) && ( @link( $saved, $view ) || copy( $saved, $view ) ) ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- falls back to a copy.
 				// The DB name was checked when the restore began; no EE::error() may run in a shutdown handler.
 				$command = sprintf( 'mysql --defaults-extra-file=%s --skip-ssl %s < /var/www/%s/db-before.sql 2>&1', $this->write_mysql_defaults_file(), $this->site_data['db_name'], self::RESTORE_STAGE_DIR );
 				$result  = EE::launch( $this->get_ee_shell_command( $command ) );
 				$this->remove_mysql_defaults_files();
-				unlink( $view );
+				if ( $this->path_exists( $view ) ) {
+					unlink( $view );
+				}
 			}
 			if ( null === $result || $result->return_code ) {
 				EE::warning( 'Could not put back the previous database. ' . ( $result ? trim( $result->stdout . ' ' . $result->stderr ) : '' ) );
@@ -1664,7 +1780,8 @@ class Site_Backup_Restore {
 
 		if ( $ok ) {
 			$this->restore_txn = null;
-			$this->fs->remove( [ $this->get_restore_journal_file(), $txn['stage'], $this->get_restore_scratch_dir() ] );
+			$this->remove_scratch_dir();
+			$this->fs->remove( [ $this->get_restore_journal_file(), $txn['stage'] ] );
 		}
 
 		return $ok;
@@ -1674,6 +1791,18 @@ class Site_Backup_Restore {
 	 * Shutdown handler: a restore that exits before its commit is rolled back while the site lock is still held.
 	 */
 	public function rollback_restore_on_shutdown() {
+		$this->in_shutdown = true;
+		try {
+			$this->rollback_unfinished_restore();
+		} catch ( \Throwable $e ) {
+			// An exception here would also skip the shutdown handlers registered after this one.
+			$where = null === $this->restore_txn ? '' : sprintf( ' The previous site files are in %1$s/old and the previous database in %1$s/db-before.sql; the next `ee site restore` retries the rollback.', $this->restore_txn['stage'] );
+			EE::warning( 'The rollback stopped: ' . $e->getMessage() . $where );
+		}
+		$this->in_shutdown = false;
+	}
+
+	private function rollback_unfinished_restore() {
 		// A failed restore must not leave its download behind to be taken for another backup next time.
 		if ( $this->restore_in_progress ) {
 			$this->fs->remove( EE_BACKUP_DIR . '/' . $this->site_data['site_url'] );
@@ -1684,7 +1813,8 @@ class Site_Backup_Restore {
 		}
 
 		if ( ! $this->restore_has_changes( $this->restore_txn ) ) {
-			$this->fs->remove( [ $this->get_restore_journal_file(), $this->restore_txn['stage'], $this->get_restore_scratch_dir() ] );
+			$this->remove_scratch_dir();
+			$this->fs->remove( [ $this->get_restore_journal_file(), $this->restore_txn['stage'] ] );
 			$this->restore_txn = null;
 			EE::log( 'The site was not changed.' );
 
@@ -1694,7 +1824,7 @@ class Site_Backup_Restore {
 		$stage = $this->restore_txn['stage'];
 		EE::warning( 'The restore did not complete. Rolling the site back.' );
 		if ( $this->rollback_restore_transaction() ) {
-			EE::log( 'Rolled back: the site files, database and configuration are as they were before the restore.' );
+			EE::log( 'Rolled back: the site files and configuration are as they were before the restore, and the database was re-imported from the copy taken before it.' );
 		} else {
 			EE::warning( sprintf( 'The rollback did not complete. The previous site files are in %s/old and the previous database in %s/db-before.sql; the next `ee site restore` retries the rollback.', $stage, $stage ) );
 		}
@@ -1722,7 +1852,8 @@ class Site_Backup_Restore {
 			EE::log( 'The earlier restore was rolled back.' );
 		}
 
-		$this->fs->remove( [ $journal_file, $stage, $this->get_restore_scratch_dir() ] );
+		$this->remove_scratch_dir();
+		$this->fs->remove( [ $journal_file, $stage ] );
 	}
 
 	/**
