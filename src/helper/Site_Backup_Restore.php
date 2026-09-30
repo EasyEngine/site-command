@@ -35,6 +35,8 @@ class Site_Backup_Restore {
 	const BACKUP_ID_PATTERN     = '/^\d+_\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}$/';
 	const DEFAULT_NO_OF_BACKUPS = 7;
 	const METADATA_SECRET_KEYS  = [ 'db_password', 'db_root_password', 'app_admin_password', 'site_auth_password' ];
+	// DB names that pass both shell layers of `ee shell --command` as they are; no leading '-' (it would be an option).
+	const SHELL_SAFE_DB_NAME = '/^[A-Za-z0-9_.@%+=,:][A-Za-z0-9_.@%+=,:-]*$/';
 
 	// app/.ee-restore is the php container's scratch space during a restore; the staged files live next to app/ (get_restore_stage_dir()).
 	const RESTORE_STAGE_DIR = '.ee-restore';
@@ -821,23 +823,23 @@ class Site_Backup_Restore {
 		$this->fs->mkdir( $backup_dir . '/sql' );
 
 		$backup_command = sprintf( 'mysqldump --defaults-extra-file=%s --skip-ssl --single-transaction %s > /var/www/htdocs/%s', $this->write_mysql_defaults_file(), $this->get_shell_safe_db_name(), $sql_filename );
-		$args           = [ 'shell', $this->site_data['site_url'] ];
-		$assoc_args     = [ 'command' => $backup_command ];
-		$options        = [ 'skip-tty' => true ];
-
-		EE::run_command( $args, $assoc_args, $options );
+		// Checked: the redirect creates the file even when mysqldump fails (e.g. it can't read the option file).
+		$result = EE::launch( $this->get_ee_shell_command( $backup_command ) );
 		$this->remove_mysql_defaults_files();
 
 		$sql_dump_path = EE_ROOT_DIR . '/sites/' . $this->site_data['site_url'] . '/app/htdocs/' . $sql_filename;
 
-		// Check if database dump was created successfully
-		if ( ! $this->fs->exists( $sql_dump_path ) ) {
+		clearstatcache();
+		if ( $result->return_code || ! is_file( $sql_dump_path ) || 0 === filesize( $sql_dump_path ) ) {
+			if ( $this->path_exists( $sql_dump_path ) ) {
+				unlink( $sql_dump_path );
+			}
 			$this->capture_error(
 				sprintf( 'Database backup failed for database: %s', $db_name ),
 				self::ERROR_TYPE_DATABASE,
 				4002
 			);
-			EE::error( 'Database backup failed. Please check database credentials and connectivity.' );
+			EE::error( 'Database backup failed. Please check database credentials and connectivity. ' . trim( $result->stderr ) );
 		}
 
 		EE::exec( sprintf( 'mv %s %s', $sql_dump_path, $sql_file ) );
@@ -1082,7 +1084,8 @@ class Site_Backup_Restore {
 	private function get_shell_safe_db_name() {
 		$db_name = (string) $this->site_data['db_name'];
 
-		if ( ! preg_match( '/^[A-Za-z0-9_.-]+$/', $db_name ) ) {
+		if ( ! preg_match( self::SHELL_SAFE_DB_NAME, $db_name ) ) {
+			$this->capture_error( 'Unsupported database name', self::ERROR_TYPE_VALIDATION, 1005 );
 			EE::error( sprintf( 'The database name "%s" contains characters that are not supported for backup and restore.', $db_name ) );
 		}
 
@@ -1834,7 +1837,7 @@ class Site_Backup_Restore {
 			// on the stage's own file (same inode), never through the path the site user can replace.
 			if ( file_exists( $saved ) && chmod( $saved, 0644 ) && ( @link( $saved, $view ) || copy( $saved, $view ) ) ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- falls back to a copy.
 				// Checked again here: no EE::error() may run in a shutdown handler.
-				if ( ! preg_match( '/^[A-Za-z0-9_.-]+$/', (string) $this->site_data['db_name'] ) ) {
+				if ( ! preg_match( self::SHELL_SAFE_DB_NAME, (string) $this->site_data['db_name'] ) ) {
 					throw new \RuntimeException( 'The database name is not supported for restore.' );
 				}
 				$command = sprintf( 'mysql --defaults-extra-file=%s --skip-ssl %s < /var/www/%s/db-before.sql 2>&1', $this->write_mysql_defaults_file(), $this->site_data['db_name'], self::RESTORE_STAGE_DIR );
