@@ -519,8 +519,13 @@ class Site_Backup_Restore {
 		if ( 'wp' === $this->site_data['site_type'] ) {
 			// Where restore puts WordPress core back; '' = core is in the archive.
 			$this->backup_wp_root = (string) $this->get_wp_root_rel();
-			if ( '' !== $this->backup_wp_root && ! preg_match( '/^\d+\.\d+[0-9A-Za-z.\-]*$/', (string) $backup_data['wp_version'] ) ) {
-				EE::warning( 'Could not read the WordPress version, so WordPress core is included in the backup.' );
+			// Only releases can be downloaded again (6.8.1, 6.7-RC1, 6.7-beta1); nightlies like 6.9-alpha-60123 can't.
+			if ( '' !== $this->backup_wp_root && ! preg_match( '/^\d+\.\d+(\.\d+)?(-(beta|RC)\d+)?$/', (string) $backup_data['wp_version'] ) ) {
+				if ( preg_match( '/^\d+\.\d+/', (string) $backup_data['wp_version'] ) ) {
+					EE::warning( sprintf( 'WordPress %s can\'t be downloaded again at restore time, so WordPress core is included in the backup.', $backup_data['wp_version'] ) );
+				} else {
+					EE::warning( 'Could not read the WordPress version, so WordPress core is included in the backup.' );
+				}
 				$this->backup_wp_root = '';
 			}
 			$backup_data['wp_root'] = $this->backup_wp_root;
@@ -1086,11 +1091,12 @@ class Site_Backup_Restore {
 	 */
 	private function restore_wp( $backup_dir ) {
 		$backup_app = $this->get_downloaded_archive( $backup_dir );
-		$wp_version = $this->get_backup_wp_version( $backup_dir, $backup_app );
 		$format     = (int) ( isset( $this->restore_metadata['backup_format'] ) ? $this->restore_metadata['backup_format'] : 1 );
 
 		if ( $format >= 2 ) {
 			$wp_root = $this->get_backup_wp_root();
+			// No version is needed (and none may be known) when core is in the archive.
+			$wp_version = '' === $wp_root ? '' : $this->get_backup_wp_version( $backup_dir, $backup_app );
 
 			$this->begin_restore_transaction( $backup_app, '' === $wp_root ? 0 : self::WP_CORE_SIZE_ESTIMATE );
 
@@ -1108,6 +1114,7 @@ class Site_Backup_Restore {
 				$wp_root = trim( str_replace( '/var/www/', '', $this->site_data['site_container_fs_path'] ), '/' );
 			}
 
+			$wp_version = $this->get_backup_wp_version( $backup_dir, $backup_app );
 			$this->begin_restore_transaction( $backup_app, self::WP_CORE_SIZE_ESTIMATE );
 
 			EE::log( 'Restoring site files.' );
