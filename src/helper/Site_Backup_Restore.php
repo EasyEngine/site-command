@@ -61,8 +61,9 @@ class Site_Backup_Restore {
 		'xmlrpc.php',
 	];
 
-	// Room for a WordPress core download on top of the extracted archive.
-	const WP_CORE_SIZE_ESTIMATE = 104857600;
+	// Peak of the checked core download on top of the extracted archive: package, its extraction in the container's
+	// /tmp, the copy into the stage and WP-CLI's cache (WordPress 7.1: 35 MB package, 117 MB extracted).
+	const WP_CORE_SIZE_ESTIMATE = 335544320;
 
 	private $fs;
 	public $site_data;
