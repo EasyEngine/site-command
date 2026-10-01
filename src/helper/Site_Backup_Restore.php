@@ -2223,8 +2223,19 @@ class Site_Backup_Restore {
 			} else {
 				$status = EE::exec( 'apt-get --version' );
 				if ( $status ) {
-					EE::exec( 'apt-get update' );
-					EE::exec( "apt-get install -y $name" );
+					// Backups run unattended (cron, EasyDash): no debconf, conffile or needrestart prompt may wait for an
+					// answer, and needrestart must not restart services such as Docker in the middle of one (BKP-3).
+					$apt = 'DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l NEEDRESTART_SUSPEND=1 apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold';
+					EE::exec( "$apt update < /dev/null" );
+					EE::exec( "$apt install -y $name < /dev/null" );
+					if ( ! EE::exec( "command -v $command" ) ) {
+						$this->capture_error(
+							sprintf( '%s is not installed and could not be installed with apt-get', $name ),
+							self::ERROR_TYPE_CONFIG,
+							2013
+						);
+						EE::error( "Failed to install $name with apt-get. Please install $name for backup/restore." );
+					}
 				} else {
 					$this->capture_error(
 						sprintf( '%s is not installed and could not be auto-installed (apt-get not available)', $name ),
