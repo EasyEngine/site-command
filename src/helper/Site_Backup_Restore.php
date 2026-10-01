@@ -104,6 +104,10 @@ class Site_Backup_Restore {
 	// stderr of the last failed `rclone lsf`.
 	private $rclone_error = '';
 
+	// DB dump of the running backup while it is in the scratch dir (backup_db()).
+	private $backup_dump_file    = null;
+	private $backup_dump_cleanup = false;
+
 	// MySQL option files with the site's DB credentials (write_mysql_defaults_file()).
 	private $mysql_defaults_files   = [];
 	private $mysql_defaults_cleanup = false;
@@ -822,18 +826,25 @@ class Site_Backup_Restore {
 
 		$this->fs->mkdir( $backup_dir . '/sql' );
 
-		$backup_command = sprintf( 'mysqldump --defaults-extra-file=%s --skip-ssl --single-transaction %s > /var/www/htdocs/%s', $this->write_mysql_defaults_file(), $this->get_shell_safe_db_name(), $sql_filename );
+		// Dumped into the scratch dir next to the webroot, never into htdocs/, and removed on any failure or exit (BKP-2).
+		$dump = $this->prepare_scratch_dir() . '/' . $sql_filename;
+		if ( $this->path_exists( $dump ) ) {
+			unlink( $dump );
+		}
+		$this->backup_dump_file = $dump;
+		if ( ! $this->backup_dump_cleanup ) {
+			register_shutdown_function( [ $this, 'remove_backup_dump' ] );
+			$this->backup_dump_cleanup = true;
+		}
+
+		$backup_command = sprintf( 'mysqldump --defaults-extra-file=%s --skip-ssl --single-transaction %s > /var/www/%s/%s', $this->write_mysql_defaults_file(), $this->get_shell_safe_db_name(), self::RESTORE_STAGE_DIR, $sql_filename );
 		// Checked: the redirect creates the file even when mysqldump fails (e.g. it can't read the option file).
 		$result = EE::launch( $this->get_ee_shell_command( $backup_command ) );
 		$this->remove_mysql_defaults_files();
 
-		$sql_dump_path = EE_ROOT_DIR . '/sites/' . $this->site_data['site_url'] . '/app/htdocs/' . $sql_filename;
-
 		clearstatcache();
-		if ( $result->return_code || ! is_file( $sql_dump_path ) || 0 === filesize( $sql_dump_path ) ) {
-			if ( $this->path_exists( $sql_dump_path ) ) {
-				unlink( $sql_dump_path );
-			}
+		if ( $result->return_code || is_link( $dump ) || ! is_file( $dump ) || 0 === filesize( $dump ) ) {
+			$this->remove_backup_dump();
 			$this->capture_error(
 				sprintf( 'Database backup failed for database: %s', $db_name ),
 				self::ERROR_TYPE_DATABASE,
@@ -842,8 +853,20 @@ class Site_Backup_Restore {
 			EE::error( 'Database backup failed. Please check database credentials and connectivity. ' . trim( $result->stderr ) );
 		}
 
-		EE::exec( sprintf( 'mv %s %s', $sql_dump_path, $sql_file ) );
-		$backup_command = sprintf( 'cd %s && 7z u -mx=1 %s sql', $backup_dir, $backup_file );
+		// mv, not rename(): across filesystems rename() copies a symlink's target, mv moves the link itself.
+		$this->assert_scratch_dir();
+		$moved = EE::exec( sprintf( 'mv -f %s %s', escapeshellarg( $dump ), escapeshellarg( $sql_file ) ) );
+		clearstatcache();
+		// The site's code can swap the dump for a symlink until it is moved; 7z would archive the link's host target as root.
+		if ( ! $moved || is_link( $sql_file ) || ! is_file( $sql_file ) ) {
+			$this->fs->remove( $sql_file );
+			$this->capture_error( 'Failed to move the database dump into the backup', self::ERROR_TYPE_DATABASE, 4002 );
+			EE::error( 'Database backup failed: the dump could not be moved into the backup, or it was replaced (e.g. by a symlink).' );
+		}
+		$this->backup_dump_file = null;
+		$this->remove_backup_dump();
+
+		$backup_command = sprintf( 'cd %s && 7z u -snl -mx=1 %s sql', $backup_dir, $backup_file );
 
 		$result = EE::launch( $backup_command );
 
@@ -959,7 +982,25 @@ class Site_Backup_Restore {
 		}
 		$this->mysql_defaults_files = [];
 
-		// A backup leaves no empty scratch dir behind in the site.
+		$this->remove_empty_scratch_dir();
+	}
+
+	/**
+	 * Shutdown safety net as well: a failed or interrupted backup leaves no DB dump in the site.
+	 */
+	public function remove_backup_dump() {
+		if ( null !== $this->backup_dump_file && $this->path_exists( $this->backup_dump_file ) ) {
+			unlink( $this->backup_dump_file );
+		}
+		$this->backup_dump_file = null;
+
+		$this->remove_empty_scratch_dir();
+	}
+
+	/**
+	 * A backup leaves no empty scratch dir behind in the site.
+	 */
+	private function remove_empty_scratch_dir() {
 		$scratch = $this->get_restore_scratch_dir();
 		if ( null === $this->restore_txn && ! is_link( $scratch ) && is_dir( $scratch ) && empty( $this->list_dir( $scratch ) ) ) {
 			rmdir( $scratch );
