@@ -2728,13 +2728,33 @@ class Site_Backup_Restore {
 		}
 
 		if ( $upload ) {
-			$this->rclone_config_path = $this->get_host_backup_root() . '/' . time() . '_' . date( 'Y-m-d-H-i-s' );
+			$this->rclone_config_path = $this->get_host_backup_root() . '/' . $this->get_new_backup_id();
 		} else {
 			// For restore: this host's most recent backup.
 			$this->rclone_config_path = $this->resolve_restore_path();
 		}
 
 		return $this->rclone_config_path;
+	}
+
+	/**
+	 * An id this host hasn't used yet. Ids have one-second resolution: a backup that started in the same second as the
+	 * previous one uploaded into its directory, and listing and retention counted the two as one (BKP-5).
+	 *
+	 * @return string
+	 */
+	private function get_new_backup_id() {
+		// The site lock keeps other backups of the site on this host from running meanwhile, so the listing stays valid.
+		$existing = $this->list_remote_dirs( $this->get_host_backup_root() );
+
+		for ( $attempt = 1; ; $attempt++ ) {
+			$now = time();
+			$id  = $now . '_' . date( 'Y-m-d-H-i-s', $now );
+			if ( empty( $existing ) || ! in_array( $id, $existing, true ) || $attempt > 3 ) {
+				return $id;
+			}
+			sleep( 1 );
+		}
 	}
 
 	/**
