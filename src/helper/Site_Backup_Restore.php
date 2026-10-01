@@ -947,7 +947,8 @@ class Site_Backup_Restore {
 		$sql_path = "/var/www/$container_path/" . basename( $sql_file ); // Use basename for safety
 
 		// Keep mysql's stderr (it never echoes the password) so a failed import says why.
-		$restore_command = sprintf( 'mysql --defaults-extra-file=%s --skip-ssl %s < %s 2>&1', $this->write_mysql_defaults_file(), $this->get_shell_safe_db_name(), $sql_path );
+		// --loose-skip-print-query-on-error: a failing statement (site data) would otherwise be echoed into the error and the log.
+		$restore_command = sprintf( 'mysql --defaults-extra-file=%s --loose-skip-print-query-on-error --skip-ssl %s < %s 2>&1', $this->write_mysql_defaults_file(), $this->get_shell_safe_db_name(), $sql_path );
 
 		// A failed import must abort the restore (and roll it back) instead of being reported as success.
 		$this->run_checked_shell_command( $restore_command, 'Database restore failed.' );
@@ -1914,7 +1915,7 @@ class Site_Backup_Restore {
 				if ( ! preg_match( self::SHELL_SAFE_DB_NAME, (string) $this->site_data['db_name'] ) ) {
 					throw new \RuntimeException( 'The database name is not supported for restore.' );
 				}
-				$command = sprintf( 'mysql --defaults-extra-file=%s --skip-ssl %s < /var/www/%s/db-before.sql 2>&1', $this->write_mysql_defaults_file(), $this->site_data['db_name'], self::RESTORE_STAGE_DIR );
+				$command = sprintf( 'mysql --defaults-extra-file=%s --loose-skip-print-query-on-error --skip-ssl %s < /var/www/%s/db-before.sql 2>&1', $this->write_mysql_defaults_file(), $this->site_data['db_name'], self::RESTORE_STAGE_DIR );
 				$result  = EE::launch( $this->get_ee_shell_command( $command ) );
 				$this->remove_mysql_defaults_files();
 				if ( $this->path_exists( $view ) ) {
