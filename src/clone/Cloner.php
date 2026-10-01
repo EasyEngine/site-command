@@ -81,8 +81,16 @@ class Site {
 	}
 
 	public function validate_parent_site_present_on_host( string $site ): void {
-		$list_result = $this->execute( 'ee site list --format=json' );
-		$list_result = json_decode( $list_result->stdout, true );
+		$list_run = $this->execute( 'ee site list --format=json' );
+		$list_result = json_decode( $list_run->stdout, true );
+
+		if ( ! is_array( $list_result ) ) {
+			// An empty host has no parent to match; any other failure must surface, not be masked as "parent not found".
+			if ( ! $this->is_no_sites_error( $list_run ) ) {
+				throw new \Exception( 'Unable to get site list on ' . $this->user . '@' . $this->host );
+			}
+			$list_result = [];
+		}
 
 		foreach ( $list_result as $site_details ) {
 			$parent_site  = $site_details['site'];
@@ -92,7 +100,8 @@ class Site {
 				if ( explode( '.', $site, 2 )[1] === $parent_site ) {
 					$info_result = $this->execute( 'ee site info ' . $parent_site . ' --format=json' );
 					$info_result = json_decode( $info_result->stdout, true );
-					if ( $info_result['site_ssl'] !== '' && $info_result['site_ssl_wildcard'] === '1' ) {
+					// site_ssl_wildcard is int 1 or string '1' depending on the PHP version (PDO SQLite typing).
+					if ( ! empty( $info_result['site_ssl'] ) && ! empty( $info_result['site_ssl_wildcard'] ) ) {
 						return;
 					}
 				}
@@ -287,14 +296,23 @@ class Site {
 		return $new_site;
 	}
 
+	// True when `ee site list` failed specifically because the host has no sites.
+	// `\EE::error( 'No sites found!' )` exits 1 and writes to stderr (merged into stdout under `ssh -t`).
+	private function is_no_sites_error( EE\ProcessRun $result ): bool {
+		if ( 1 !== $result->return_code ) {
+			return false;
+		}
+
+		$output = trim( preg_replace( '#\\x1b[[][^A-Za-z]*[A-Za-z]#', '', $result->stderr . $result->stdout ) );
+
+		return false !== strpos( $output, 'Error: No sites found!' );
+	}
+
 	public function site_exists(): bool {
 		$site_list = $this->execute( 'ee site list --format=json --no-color' );
 
-		if ( 1 === $site_list->return_code ) {
-			$error = trim ( preg_replace( '#\\x1b[[][^A-Za-z]*[A-Za-z]#', '', $site_list->stdout ) );
-			if ( 'Error: No sites found!' === $error ) {
-				return false;
-			}
+		if ( $this->is_no_sites_error( $site_list ) ) {
+			return false;
 		}
 
 		if ( 0 !== $site_list->return_code ) {
@@ -302,6 +320,11 @@ class Site {
 		}
 
 		$sites = json_decode( $site_list->stdout, true );
+
+		// Unparseable output must not read as "site doesn't exist": a clone rollback would then delete an existing destination site.
+		if ( ! is_array( $sites ) ) {
+			throw new \Exception( 'Unable to get site list on ' . $this->user . '@' . $this->host );
+		}
 
 		foreach ( $sites as $site ) {
 			if ( $site['site'] === $this->name ) {
