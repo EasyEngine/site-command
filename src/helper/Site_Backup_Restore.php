@@ -2454,6 +2454,10 @@ class Site_Backup_Restore {
 		// This host's backups first (restore picks the newest of them), then pre-host-id ones, then other hosts' as <host-id>/<id>.
 		$all = array_merge( $backups['own'], $backups['legacy'], $backups['foreign'] );
 
+		if ( ! empty( $backups['incomplete'] ) ) {
+			EE::warning( sprintf( 'Not listed, incomplete (interrupted uploads): %s', implode( ', ', $backups['incomplete'] ) ) );
+		}
+
 		if ( empty( $all ) ) {
 			EE::log( 'No remote backups found.' );
 
@@ -2466,10 +2470,11 @@ class Site_Backup_Restore {
 	}
 
 	/**
-	 * Backups of this site on the remote, each list newest first; null when rclone failed.
+	 * Complete backups of this site on the remote, each list newest first; null when rclone failed.
 	 *
-	 * @return array{own:string[],legacy:string[],foreign:string[]}|null own: this host's ids, legacy: ids directly under
-	 *                                                                   <rclone-path>/<site>/ (before BKP-8), foreign: <host-id>/<id> of other hosts.
+	 * @return array{own:string[],legacy:string[],foreign:string[],incomplete:string[]}|null own: this host's ids, legacy: ids
+	 *         directly under <rclone-path>/<site>/ (before BKP-8), foreign: <host-id>/<id> of other hosts, incomplete:
+	 *         interrupted uploads of any of them, as their path below <rclone-path>/<site>/ (BKP-20).
 	 */
 	private function get_remote_backups( $create_host_id = true ) {
 		$site_root = $this->get_rclone_config_path();
@@ -2479,25 +2484,40 @@ class Site_Backup_Restore {
 			return null;
 		}
 
+		// The files of the old-layout backups; the filter keeps rclone out of the host dirs, one of which may be unreadable.
+		$legacy_files = [];
+		if ( ! empty( array_filter( $entries, [ $this, 'is_backup_id' ] ) ) ) {
+			$legacy = $this->list_remote_tree( $site_root, '/*_????-??-??-??-??-??/*' );
+			if ( null === $legacy ) {
+				return null;
+			}
+			$legacy_files = $legacy['files'];
+		}
+
 		// null: this host has no id yet, so every host dir is another host's.
 		$own     = $this->get_backup_host_id( $create_host_id );
 		$backups = [
-			'own'     => [],
-			'legacy'  => [],
-			'foreign' => [],
+			'own'        => [],
+			'legacy'     => [],
+			'foreign'    => [],
+			'incomplete' => [],
 		];
 
 		foreach ( $entries as $entry ) {
 			if ( $this->is_backup_id( $entry ) ) {
-				$backups['legacy'][] = $entry;
+				if ( $this->is_complete_backup( isset( $legacy_files[ $entry ] ) ? $legacy_files[ $entry ] : [], false ) ) {
+					$backups['legacy'][] = $entry;
+				} else {
+					$backups['incomplete'][] = $entry;
+				}
 				continue;
 			}
 			if ( ! $this->is_valid_backup_host_id( $entry ) ) {
 				continue;
 			}
 
-			$ids = $this->list_remote_dirs( $site_root . '/' . $entry );
-			if ( null === $ids ) {
+			$host = $this->list_remote_tree( $site_root . '/' . $entry );
+			if ( null === $host ) {
 				if ( $entry === $own ) {
 					return null;
 				}
@@ -2505,12 +2525,13 @@ class Site_Backup_Restore {
 				EE::warning( sprintf( 'Could not list the backups of host %s: %s', $entry, $this->rclone_error ) );
 				continue;
 			}
-			$ids = array_values( array_filter( $ids, [ $this, 'is_backup_id' ] ) );
 
-			if ( $entry === $own ) {
-				$backups['own'] = $ids;
-			} else {
-				foreach ( $ids as $id ) {
+			foreach ( array_filter( $host['dirs'], [ $this, 'is_backup_id' ] ) as $id ) {
+				if ( ! $this->is_complete_backup( $host['files'][ $id ], true ) ) {
+					$backups['incomplete'][] = $entry . '/' . $id;
+				} elseif ( $entry === $own ) {
+					$backups['own'][] = $id;
+				} else {
 					$backups['foreign'][] = $entry . '/' . $id;
 				}
 			}
@@ -2526,6 +2547,61 @@ class Site_Backup_Restore {
 		);
 
 		return $backups;
+	}
+
+	/**
+	 * Interrupted uploads leave a backup dir without the site archive, and since BKP-20 without metadata.json, which is
+	 * uploaded last. Backups of older versions (old layout) may lack metadata.json.
+	 *
+	 * @param string[] $files       File names in the backup dir.
+	 * @param bool     $host_layout Under a <host-id>/ dir, written with metadata.json last.
+	 *
+	 * @return bool
+	 */
+	private function is_complete_backup( array $files, $host_layout ) {
+		return in_array( $this->site_data['site_url'] . '.zip', $files, true ) && ( ! $host_layout || in_array( 'metadata.json', $files, true ) );
+	}
+
+	/**
+	 * Dirs directly under $remote_dir and the files in each, in one listing; null when rclone failed.
+	 *
+	 * @param string      $remote_dir rclone path.
+	 * @param string|null $include    rclone --include pattern.
+	 *
+	 * @return array{dirs:string[],files:array<string,string[]>}|null
+	 */
+	private function list_remote_tree( $remote_dir, $include = null ) {
+		$output = EE::launch( sprintf( 'rclone lsf -R --max-depth 2 %s%s', null === $include ? '' : '--include ' . escapeshellarg( $include ) . ' ', escapeshellarg( $remote_dir ) ) );
+
+		if ( $output->return_code ) {
+			// Local and SFTP remotes fail for a missing dir where bucket remotes list nothing (SC-11).
+			if ( false !== stripos( $output->stderr, 'directory not found' ) ) {
+				return [ 'dirs' => [], 'files' => [] ];
+			}
+			$this->rclone_error = trim( $output->stderr );
+
+			return null;
+		}
+
+		$tree = [ 'dirs' => [], 'files' => [] ];
+		foreach ( explode( "\n", $output->stdout ) as $line ) {
+			$line = trim( $line );
+			// Files directly under $remote_dir have no '/'.
+			if ( false === strpos( $line, '/' ) || 0 === strpos( $line, '/' ) ) {
+				continue;
+			}
+			$dir = strtok( $line, '/' );
+			if ( ! isset( $tree['files'][ $dir ] ) ) {
+				$tree['dirs'][]         = $dir;
+				$tree['files'][ $dir ] = [];
+			}
+			$rest = substr( $line, strlen( $dir ) + 1 );
+			if ( false !== $rest && '' !== $rest && false === strpos( $rest, '/' ) ) {
+				$tree['files'][ $dir ][] = $rest;
+			}
+		}
+
+		return $tree;
 	}
 
 	/**
@@ -2678,6 +2754,12 @@ class Site_Backup_Restore {
 			}
 			if ( count( $matches ) > 1 ) {
 				EE::error( sprintf( "Backup %s exists on several hosts:\n%s\nChoose one with --id=<host-id>/<backup-id>.", $backup_id, implode( "\n", $matches ) ) );
+			}
+
+			foreach ( $backups['incomplete'] as $incomplete ) {
+				if ( $backup_id === $incomplete || $backup_id === basename( $incomplete ) ) {
+					EE::error( sprintf( 'Backup %s is incomplete (its upload was interrupted) and cannot be restored. The site was not changed.', $incomplete ) );
+				}
 			}
 
 			EE::error( "Invalid backup ID provided.\nPlease provide a valid ID from the list using 'ee site backup --list " . $this->site_data['site_url'] . "'." );
@@ -2951,8 +3033,13 @@ class Site_Backup_Restore {
 			$transfers * ( $res['buffer_size'] + ( $res['s3_chunk_size'] * $res['s3_concurrency'] ) )
 		) );
 
-		$command = sprintf( "rclone copy -P %s --transfers %d --checkers %d --buffer-size %s %s %s", $s3_flag, $transfers, $transfers, $buffer_size, escapeshellarg( $path ), escapeshellarg( $this->get_remote_path() ) );
+		// metadata.json goes last: a backup dir without it is an interrupted upload, which listing, restore and retention
+		// skip (BKP-20).
+		$command = sprintf( "rclone copy -P %s --transfers %d --checkers %d --buffer-size %s --exclude /metadata.json %s %s", $s3_flag, $transfers, $transfers, $buffer_size, escapeshellarg( $path ), escapeshellarg( $this->get_remote_path() ) );
 		$output  = EE::launch( $command );
+		if ( ! $output->return_code ) {
+			$output = EE::launch( sprintf( 'rclone copyto %s %s', escapeshellarg( $path . '/metadata.json' ), escapeshellarg( $this->get_remote_path() . '/metadata.json' ) ) );
+		}
 
 		if ( $output->return_code ) {
 			$this->capture_error(
@@ -2960,7 +3047,9 @@ class Site_Backup_Restore {
 				self::ERROR_TYPE_NETWORK,
 				4001
 			);
-			EE::error( 'Error uploading backup to remote storage.' );
+			// Best effort; whatever stays (e.g. after a kill) is skipped as incomplete and pruned by a later backup.
+			$this->purge_remote_backup( $this->get_remote_path() );
+			EE::error( 'Error uploading backup to remote storage. ' . trim( $output->stderr ) );
 		} else {
 
 			EE::success( 'Backup uploaded to remote storage. Remote path: ' . $this->get_remote_path() );
@@ -3064,42 +3153,67 @@ class Site_Backup_Restore {
 	 */
 	private function cleanup_old_backups() {
 		$no_of_backups = $this->get_no_of_backups();
+		$host_root     = $this->get_host_backup_root();
+		$current       = basename( $this->get_remote_path() );
 
 		// Only this host's backups: pre-host-id ones and other hosts' are never pruned here (BKP-8).
-		$backups = $this->list_remote_dirs( $this->get_host_backup_root() );
+		$tree = $this->list_remote_tree( $host_root );
 
-		if ( null === $backups ) {
+		if ( null === $tree ) {
 			EE::warning( 'Could not list remote backups; old backups were not cleaned up.' );
 
 			return;
 		}
 
-		$backups = array_values( array_filter( $backups, [ $this, 'is_backup_id' ] ) );
+		$backups    = [];
+		$incomplete = [];
+		foreach ( array_filter( $tree['dirs'], [ $this, 'is_backup_id' ] ) as $id ) {
+			if ( $this->is_complete_backup( $tree['files'][ $id ], true ) ) {
+				$backups[] = $id;
+			} elseif ( strcmp( $id, $current ) < 0 ) {
+				// Interrupted uploads don't count as backups (BKP-20). Only older ones go: a newer one can be another run's
+				// upload in progress, since the site lock is released before the EasyDash callback.
+				$incomplete[] = $id;
+			}
+		}
 		rsort( $backups );
 
-		if ( empty( $backups ) ) {
-			return;
+		// Exactly no-of-backups are kept; `> N + 1` kept N + 1 every other run (SC-10).
+		// Never the backup this run just uploaded, whatever the sort order says (BKP-7).
+		$backups_to_delete = count( $backups ) > $no_of_backups ? array_diff( array_slice( $backups, $no_of_backups ), [ $current ] ) : [];
+
+		foreach ( $incomplete as $backup ) {
+			EE::log( 'Deleting incomplete backup (interrupted upload): ' . $backup );
+			$this->purge_remote_backup( $host_root . '/' . $backup );
 		}
 
-		// Exactly no-of-backups are kept; `> N + 1` kept N + 1 every other run (SC-10).
-		if ( count( $backups ) > $no_of_backups ) {
-			// Never the backup this run just uploaded, whatever the sort order says (BKP-7).
-			$backups_to_delete = array_diff( array_slice( $backups, $no_of_backups ), [ basename( $this->get_remote_path() ) ] );
-
+		if ( ! empty( $backups_to_delete ) ) {
 			EE::log( sprintf( 'Cleaning up old backups. Keeping %d most recent backups.', $no_of_backups ) );
 			foreach ( $backups_to_delete as $backup ) {
 				EE::log( 'Deleting old backup: ' . $backup );
-				$result = EE::launch( sprintf( 'rclone purge %s', escapeshellarg( $this->get_host_backup_root() . '/' . $backup ) ) );
-				if ( $result->return_code ) {
-					EE::warning( 'Failed to delete old backup: ' . $backup );
-				} else {
-					EE::debug( 'Successfully deleted old backup: ' . $backup );
-				}
+				$this->purge_remote_backup( $host_root . '/' . $backup );
 			}
 			EE::success( sprintf( 'Cleaned up %d old backup(s).', count( $backups_to_delete ) ) );
 		} else {
 			EE::debug( sprintf( 'No cleanup needed. Current backups: %d, Maximum allowed: %d', count( $backups ), $no_of_backups ) );
 		}
+	}
+
+	/**
+	 * @param string $path rclone path of one backup dir.
+	 *
+	 * @return bool
+	 */
+	private function purge_remote_backup( $path ) {
+		$result = EE::launch( sprintf( 'rclone purge %s', escapeshellarg( $path ) ) );
+		if ( $result->return_code ) {
+			EE::warning( 'Failed to delete backup: ' . basename( $path ) );
+
+			return false;
+		}
+		EE::debug( 'Successfully deleted backup: ' . basename( $path ) );
+
+		return true;
 	}
 
 	/**
