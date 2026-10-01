@@ -357,10 +357,6 @@ class Site_Backup_Restore {
 		// Fails on an invalid backup-host-id before any lock is taken.
 		$this->get_backup_host_id();
 
-		if ( ! $this->fs->exists( $backup_dir ) ) {
-			$this->fs->mkdir( $backup_dir );
-		}
-
 		if ( $backup_id ) {
 
 			// resolve_restore_path() lists remote backups (rclone lsf) before the
@@ -370,6 +366,11 @@ class Site_Backup_Restore {
 			$this->check_rclone_available();
 
 			$this->rclone_config_path = $this->resolve_restore_path( $backup_id );
+		}
+
+		// Only once the id is valid: a refused --id left an empty download dir behind (BKP-22).
+		if ( ! $this->fs->exists( $backup_dir ) ) {
+			$this->fs->mkdir( $backup_dir );
 		}
 
 		// Registered before the site lock's release handler so a rollback runs while the lock is still held.
