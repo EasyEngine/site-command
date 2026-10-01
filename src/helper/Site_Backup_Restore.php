@@ -235,10 +235,14 @@ class Site_Backup_Restore {
 		$this->rclone_upload( $backup_dir );
 		$this->fs->remove( $backup_dir );
 
-		$this->fs->remove( EE_BACKUP_DIR . '/' . $this->site_data['site_url'] . '.lock' );
+		$this->release_site_lock();
 
 		// Mark backup as completed and send success callback
 		$this->dash_backup_completed = true;
+
+		// The callback retries for up to 15 minutes: other sites' backups must not wait for it (BKP-11).
+		$this->release_global_backup_lock();
+
 		if ( $this->dash_auth_enabled ) {
 			$api_success = $this->send_dash_success_callback(
 				$this->dash_api_url,
@@ -255,9 +259,6 @@ class Site_Backup_Restore {
 				$this->rollback_failed_backup();
 			}
 		}
-
-		// Release global backup lock (also released by shutdown handler as safety net)
-		$this->release_global_backup_lock();
 
 		EE::success( 'Backup created successfully.' );
 	}
@@ -304,6 +305,13 @@ class Site_Backup_Restore {
 					);
 				}
 			}
+
+			// The later shutdown handlers would only run after the callback's retries (up to 15 minutes): clean up and
+			// release the locks first, so other backups don't wait for EasyDash (BKP-11).
+			$this->remove_backup_dump();
+			$this->remove_mysql_defaults_files();
+			$this->release_site_lock();
+			$this->release_global_backup_lock();
 
 			$this->send_dash_failure_callback(
 				$this->dash_api_url,
@@ -402,7 +410,7 @@ class Site_Backup_Restore {
 			EE::run_command( [ 'site', 'reload', $this->site_data['site_url'] ], [], [] );
 		}
 
-		$this->fs->remove( EE_BACKUP_DIR . '/' . $this->site_data['site_url'] . '.lock' );
+		$this->release_site_lock();
 
 		EE::success( 'Site restored successfully.' );
 	}
@@ -2002,7 +2010,7 @@ class Site_Backup_Restore {
 	private function ensure_no_interrupted_restore() {
 		if ( null !== $this->read_unfinished_restore_journal() ) {
 			$this->capture_error( 'An interrupted restore left the site in an inconsistent state', self::ERROR_TYPE_VALIDATION, 1004 );
-			$this->fs->remove( EE_BACKUP_DIR . '/' . $this->site_data['site_url'] . '.lock' );
+			$this->release_site_lock();
 			EE::error( sprintf( 'An earlier restore of %1$s did not finish, so the site may be half restored. Run `ee site restore %1$s` (optionally with --id=<backup-id>): it rolls the earlier restore back first and then restores that backup (by default this host\'s newest). Then back up again.', $this->site_data['site_url'] ) );
 		}
 	}
@@ -2174,7 +2182,7 @@ class Site_Backup_Restore {
 				3001
 			);
 
-			$this->fs->remove( EE_BACKUP_DIR . '/' . $this->site_data['site_url'] . '.lock' );
+			$this->release_site_lock();
 			EE::error( $error_message );
 		}
 	}
