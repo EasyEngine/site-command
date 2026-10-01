@@ -3197,6 +3197,13 @@ class Site_Backup_Restore {
 		} else {
 			EE::debug( sprintf( 'No cleanup needed. Current backups: %d, Maximum allowed: %d', count( $backups ), $no_of_backups ) );
 		}
+
+		// Old-layout backups carry no host identity, so they may be another host's; they are never pruned (BKP-21).
+		$legacy = $this->list_remote_dirs( $this->get_rclone_config_path() );
+		$legacy = null === $legacy ? [] : array_filter( $legacy, [ $this, 'is_backup_id' ] );
+		if ( ! empty( $legacy ) ) {
+			EE::log( sprintf( '%d backup(s) of this site in the old shared layout (%s/<backup-id>) are not pruned automatically, since they may belong to another host using the same rclone-path. Delete them by hand when they are no longer needed.', count( $legacy ), $this->get_rclone_config_path() ) );
+		}
 	}
 
 	/**
