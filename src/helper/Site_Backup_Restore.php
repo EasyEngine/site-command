@@ -3081,8 +3081,8 @@ class Site_Backup_Restore {
 			return;
 		}
 
-		// Check if we have more backups than allowed
-		if ( count( $backups ) > ( $no_of_backups + 1 ) ) {
+		// Exactly no-of-backups are kept; `> N + 1` kept N + 1 every other run (SC-10).
+		if ( count( $backups ) > $no_of_backups ) {
 			// Never the backup this run just uploaded, whatever the sort order says (BKP-7).
 			$backups_to_delete = array_diff( array_slice( $backups, $no_of_backups ), [ basename( $this->get_remote_path() ) ] );
 
