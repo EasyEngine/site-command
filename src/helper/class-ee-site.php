@@ -272,7 +272,7 @@ abstract class EE_Site_Command {
 			if ( \EE_DOCKER::docker_compose_down( $site_fs_path ) ) {
 				\EE::log( "[$site_url] Docker Containers removed." );
 			} else {
-				\EE::exec( "docker rm -f $(docker ps -q -f=label=created_by=EasyEngine -f=label=site_name=$site_url)" );
+				\EE::exec( 'docker rm -f $(docker ps -q -f=label=created_by=EasyEngine -f=' . escapeshellarg( "label=site_name=$site_url" ) . ')' );
 				if ( $level > 3 ) {
 					\EE::warning( 'Error in removing docker containers.' );
 				}
@@ -281,7 +281,7 @@ abstract class EE_Site_Command {
 
 		$volumes = \EE_DOCKER::get_volumes_by_label( $site_url );
 		foreach ( $volumes as $volume ) {
-			\EE::exec( 'docker volume rm ' . $volume );
+			\EE::exec( 'docker volume rm ' . escapeshellarg( $volume ) );
 		}
 
 		$db_script_path = \EE\Utils\get_temp_dir() . 'db_exec';
@@ -366,7 +366,7 @@ abstract class EE_Site_Command {
 
 		if ( $reload ) {
 			\EE\Site\Utils\reload_global_nginx_proxy();
-			EE::exec( 'docker exec ' . EE_PROXY_TYPE . " bash -c 'rm -rf /var/cache/nginx/$site_url'" );
+			EE::exec( 'docker exec ' . EE_PROXY_TYPE . ' bash -c ' . escapeshellarg( 'rm -rf ' . escapeshellarg( "/var/cache/nginx/$site_url" ) ) );
 		}
 
 		try {

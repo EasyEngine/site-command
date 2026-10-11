@@ -803,15 +803,15 @@ function configure_postfix( $site_url, $site_fs_path ) {
 		$default_from = "no-reply@$site_url";
 	}
 
-	EE::exec( \EE_DOCKER::docker_compose_with_custom() . " exec php sh -c 'echo \"host postfix\ntls off\nfrom $default_from\" > /etc/msmtprc'" );
+	EE::exec( \EE_DOCKER::docker_compose_with_custom() . ' exec php sh -c ' . escapeshellarg( 'echo ' . escapeshellarg( "host postfix\ntls off\nfrom $default_from" ) . ' > /etc/msmtprc' ) );
 	$relay_host = EE::launch( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix sh -c \'echo $RELAY_HOST\'' )->stdout;
 	$relay_host = trim( $relay_host, "\n\r" );
-	EE::exec( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e \'relayhost = ' . $relay_host . '\'' );
+	EE::exec( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e ' . escapeshellarg( 'relayhost = ' . $relay_host ) );
 	EE::exec( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e \'smtpd_recipient_restrictions = permit_mynetworks\'' );
-	$launch      = EE::launch( sprintf( 'docker inspect -f \'{{ with (index .IPAM.Config 0) }}{{ .Subnet }}{{ end }}\' %s', $site_url ) );
+	$launch      = EE::launch( sprintf( 'docker inspect -f \'{{ with (index .IPAM.Config 0) }}{{ .Subnet }}{{ end }}\' %s', escapeshellarg( $site_url ) ) );
 	$subnet_cidr = trim( $launch->stdout );
-	EE::exec( sprintf( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e \'mynetworks = %s 127.0.0.0/8\'', $subnet_cidr ) );
-	EE::exec( sprintf( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e \'myhostname = %s\'', $site_url ) );
+	EE::exec( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e ' . escapeshellarg( "mynetworks = $subnet_cidr 127.0.0.0/8" ) );
+	EE::exec( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e ' . escapeshellarg( "myhostname = $site_url" ) );
 	EE::exec( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e \'syslog_name = $myhostname\'' );
 	EE::exec( \EE_DOCKER::docker_compose_with_custom() . ' restart postfix' );
 }
