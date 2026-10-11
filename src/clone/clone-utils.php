@@ -176,7 +176,8 @@ function rsync_command( string $source, string $destination, array $options = []
 	$ssh_command   = 'ssh -t';
 	$extra_options = implode( ' ', $options );
 
-	return 'rsync -azh --delete-after --ignore-errors ' . $extra_options . ' -e "' . $ssh_command . '" ' . $source . ' ' . $destination;
+	// No --ignore-errors: with --delete-after it deletes the destination's copy of files that failed to read.
+	return 'rsync -azh --delete-after ' . $extra_options . ' -e "' . $ssh_command . '" ' . $source . ' ' . $destination;
 }
 
 function check_site_access( Site $source_site, Site $destination_site, $sync = false ) {
