@@ -228,11 +228,55 @@ function get_transfer_details( string $source, string $destination ): array {
 		$destination_site->name = $source_site->name;
 	}
 
-	if ( 'localhost' === $source_site->host && 'localhost' === $destination_site->host && $source_site->name === $destination_site->name ) {
+	if ( $source_site->name === $destination_site->name && is_local_host( $source_site->host ) && is_local_host( $destination_site->host ) ) {
 		EE::error( 'Cannot copy \'' . $source_site->name . '\' on \'' . $source_site->host . '\' to \'' . $destination_site->name . '\' on \'' . $destination_site->host . '\'' );
 	}
 
 	return [ $source_site, $destination_site ];
+}
+
+// True when $host (the local side is 'localhost') is this machine: loopback, its own name or address, or an ssh alias of them.
+function is_local_host( string $host ): bool {
+	if ( 'localhost' === $host ) {
+		return true;
+	}
+
+	$names  = [ strtolower( $host ) ];
+	$config = EE::launch( 'ssh -G ' . escapeshellarg( $host ) );
+	if ( 0 === $config->return_code && preg_match( '/^hostname (\S+)/m', $config->stdout, $matches ) ) {
+		$names[] = strtolower( $matches[1] );
+	}
+
+	$local_names = [ 'localhost', 'localhost.localdomain', 'ip6-localhost', 'ip6-loopback', strtolower( (string) gethostname() ) ];
+	$local_ips   = [ '::1', '0.0.0.0' ];
+	foreach ( function_exists( 'net_get_interfaces' ) ? (array) net_get_interfaces() : [] as $interface ) {
+		foreach ( $interface['unicast'] ?? [] as $address ) {
+			if ( isset( $address['address'] ) ) {
+				$local_ips[] = $address['address'];
+			}
+		}
+	}
+
+	foreach ( array_unique( $names ) as $name ) {
+		if ( in_array( $name, $local_names, true ) ) {
+			return true;
+		}
+		$ips = filter_var( $name, FILTER_VALIDATE_IP ) ? [ $name ] : ( gethostbynamel( $name ) ?: [] );
+		foreach ( $ips as $ip ) {
+			if ( 0 === strpos( $ip, '127.' ) || in_array( $ip, $local_ips, true ) ) {
+				return true;
+			}
+		}
+	}
+
+	return false;
+}
+
+// Hostname labels, plus underscores that older sites may have; the name ends up in commands and paths.
+function is_valid_site_name( string $name ): bool {
+	$label = '[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?';
+
+	return strlen( $name ) <= 253 && 1 === preg_match( '/^' . $label . '(?:\.' . $label . ')*$/iD', $name );
 }
 
 function get_user_home_dir( string $user ) {

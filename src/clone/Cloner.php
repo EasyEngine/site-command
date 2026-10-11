@@ -4,6 +4,7 @@ namespace EE\Site\Cloner;
 
 use Composer\Semver\Comparator;
 use EE;
+use function EE\Site\Cloner\Utils\is_valid_site_name;
 use function EE\Site\Cloner\Utils\rsync_command;
 use function EE\Utils\get_temp_dir;
 
@@ -27,36 +28,33 @@ class Site {
 	}
 
 	public static function from_location( string $location ): Site {
-		$user = '';
-		$ssh  = '';
-
 		$location = trim( $location );
 
-		// Remote
-		$details = null;
-		preg_match( "/^(?'ssh'(?'username'\S+)@(?'host'[^:]+)):(?'sitename'\S+)/", $location, $details );
+		// Remote. Strict user and host patterns keep ssh options and shell syntax out of the ssh and rsync commands.
+		if ( false !== strpos( $location, ':' ) || false !== strpos( $location, '@' ) ) {
+			$details = null;
+			if ( ! preg_match( '/^(?<username>[A-Za-z0-9_][A-Za-z0-9_.-]*)@(?<host>[A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z0-9])?):(?<sitename>\S+)$/D', $location, $details ) ) {
+				EE::error( 'Invalid format for remote site. Please use [user@ssh-hostname:] sitename' );
+			}
+			$sitename = self::parse_site_name( $details['sitename'] );
 
-		if ( ! $details && ( strpos( $location, ':' ) || strpos( $location, '@' ) ) ) {
-			EE::error( 'Invalid format for remote site. Please use [user@ssh-hostname:] sitename' );
-		}
-		if ( $details ) {
-			$host     = $details['host'];
-			$user     = $details['username'];
-			$ssh      = $details['ssh'];
-			$sitename = $details['sitename'] ?? null;
-
-			$site = new EE\Site\Cloner\Site( $sitename, $host, $user, $ssh, [] );
-
-			return $site;
+			return new EE\Site\Cloner\Site( $sitename, $details['host'], $details['username'], $details['username'] . '@' . $details['host'], [] );
 		}
 
 		// Local
-		$host     = 'localhost';
-		$sitename = $location === '.' ? '' : $location;
+		return new EE\Site\Cloner\Site( self::parse_site_name( $location ), 'localhost', '', '', [] );
+	}
 
-		$site = new EE\Site\Cloner\Site( $sitename, $host, $user, $ssh, [] );
+	// `.` means "same name as the other side".
+	private static function parse_site_name( string $sitename ): string {
+		if ( '.' === $sitename ) {
+			return '';
+		}
+		if ( ! is_valid_site_name( $sitename ) ) {
+			EE::error( 'Invalid site name: ' . $sitename );
+		}
 
-		return $site;
+		return $sitename;
 	}
 
 	public function execute( string $command ): EE\ProcessRun {
