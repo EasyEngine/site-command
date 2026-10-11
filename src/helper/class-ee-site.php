@@ -2753,6 +2753,10 @@ abstract class EE_Site_Command {
 
 		list( $source, $destination ) = get_transfer_details( $args[0], $args[1] );
 
+		// The destination is a new site, created by running `ee site create` through the shell.
+		$destination->name = strtolower( $destination->name );
+		\EE\Site\Utils\validate_site_name( $destination->name );
+
 		try {
 
 			check_site_access( $source, $destination );

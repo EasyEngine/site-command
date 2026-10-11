@@ -285,11 +285,13 @@ class Site_Command {
 			return $args;
 		}
 
-		$site_url = $args[1];
+		$site_url = strtolower( $args[1] );
 
 		$ends_with_string = '.test';
 		$diff             = strlen( $site_url ) - strlen( $ends_with_string );
 		if ( $diff >= 0 && false !== strpos( $site_url, $ends_with_string, $diff ) ) {
+			EE\Site\Utils\validate_site_name( $site_url );
+
 			return $args;
 		}
 
@@ -301,6 +303,8 @@ class Site_Command {
 			$site_url .= $ends_with_string;
 			$args[1]  = $site_url;
 		}
+
+		EE\Site\Utils\validate_site_name( $site_url );
 
 		return $args;
 	}

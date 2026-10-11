@@ -562,6 +562,35 @@ function get_ssl_policy() {
 }
 
 /**
+ * Checks whether a site name is a lowercase hostname with at least two labels.
+ *
+ * @param string $site_url Name of the site.
+ *
+ * @return bool
+ */
+function is_valid_site_name( $site_url ) {
+
+	// The name ends up in shell commands, file paths and docker names, so allow only RFC 1123 hostnames (IDNs in punycode).
+	$label = '[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?';
+
+	return is_string( $site_url )
+		&& strlen( $site_url ) <= 253
+		&& 1 === preg_match( '/^' . $label . '(?:\.' . $label . ')+$/D', $site_url );
+}
+
+/**
+ * Exits with an error if the site name is not a valid hostname.
+ *
+ * @param string $site_url Name of the site.
+ */
+function validate_site_name( $site_url ) {
+
+	if ( ! is_valid_site_name( $site_url ) ) {
+		\EE::error( sprintf( 'Invalid site name: %s. A site name must be a hostname like example.com: two or more dot-separated labels of 1-63 letters, digits or hyphens that do not start or end with a hyphen, at most 253 characters in total. Use the punycode (xn--) form for internationalized domain names.', $site_url ) );
+	}
+}
+
+/**
  * Function to create entry in /etc/hosts.
  *
  * @param string $site_url Name of the site.
