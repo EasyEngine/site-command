@@ -8,6 +8,9 @@ use function EE\Site\Cloner\Utils\rsync_command;
 use function EE\Utils\get_temp_dir;
 
 class Site {
+	// First release with clone and sync (site-command v3.0.0).
+	const MIN_EE_VERSION = '4.5.0';
+
 	public $name, $host, $user, $ssh_string, $site_details, $rsp;
 
 	function __construct( string $name, string $host, string $user, string $ssh_string, array $site_details ) {
@@ -76,8 +79,13 @@ class Site {
 		$result  = $this->execute( 'ee cli version' );
 		$matches = null;
 
-		preg_match( "/^EE (?'version'\S+)/", $result->stdout, $matches );
-		$matches['version'] = preg_replace( '/-nightly.*$/', '', $matches['version'] );
+		if ( 0 !== $result->return_code || ! preg_match( '/^EE (?<version>\d+\.\d+\.\d+)/m', $result->stdout, $matches ) ) {
+			throw new \Exception( 'Unable to find EasyEngine on ' . $this->host . ': `ee cli version` failed or printed no version.' );
+		}
+
+		if ( Comparator::lessThan( $matches['version'], self::MIN_EE_VERSION ) ) {
+			throw new \Exception( 'EasyEngine ' . $matches['version'] . ' on ' . $this->host . ' is too old for clone and sync. Please update it to ' . self::MIN_EE_VERSION . ' or later.' );
+		}
 	}
 
 	public function validate_parent_site_present_on_host( string $site ): void {
