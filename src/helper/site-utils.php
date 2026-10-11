@@ -610,8 +610,8 @@ function create_etc_hosts_entry( $site_url ) {
 	}
 	$host_line = LOCALHOST_IP . "\t$site_url";
 	$etc_hosts = file_get_contents( '/etc/hosts' );
-	if ( ! preg_match( "/\s+$site_url\$/m", $etc_hosts ) ) {
-		if ( EE::exec( "/bin/bash -c 'echo \"$host_line\" >> /etc/hosts'" ) ) {
+	if ( ! preg_match( '/\s+' . preg_quote( $site_url, '/' ) . '$/m', $etc_hosts ) ) {
+		if ( EE::exec( '/bin/bash -c ' . escapeshellarg( 'echo ' . escapeshellarg( $host_line ) . ' >> /etc/hosts' ) ) ) {
 			EE::success( 'Host entry successfully added.' );
 		} else {
 			EE::warning( "Failed to add $site_url in host entry, Please do it manually!" );
@@ -1263,7 +1263,7 @@ function remove_etc_hosts_entry( $site_url ) {
 
 	$hosts_file = file_get_contents( '/etc/hosts' );
 
-	$site_url_escaped = preg_replace( '/\./', '\.', $site_url );
+	$site_url_escaped = preg_quote( $site_url, '/' );
 	$hosts_file_new   = preg_replace( "/127\.0\.0\.1\s+$site_url_escaped\n/", '', $hosts_file );
 
 	$fs->dumpFile( '/etc/hosts', $hosts_file_new );
