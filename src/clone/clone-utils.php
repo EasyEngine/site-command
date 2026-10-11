@@ -114,15 +114,25 @@ function remove_db_files( $source, $destination, $filename ) {
 }
 
 function copy_site_certs( Site $source, Site $destination ) {
-	$rsync_command = rsync_command( $source->get_rsync_path( EE_ROOT_DIR . '/services/nginx-proxy/certs/' . $source->name . '.{key,crt}' ), $destination->get_rsync_path( get_temp_dir() ) );
+	$certs_dir = EE_ROOT_DIR . '/services/nginx-proxy/certs/';
+	$temp_dir  = get_temp_dir();
+	// One rsync per file: /bin/sh has no brace expansion, and newer rsync doesn't let the remote shell expand it.
+	$files = [ $source->name . '.key', $source->name . '.crt' ];
 
 	$rsp = new EE\RevertableStepProcessor();
-	$rsp->add_step( 'clone-cert-copy', function () use ( $rsync_command, $destination, $source ) {
-		if ( ! EE::exec( $rsync_command ) || $destination->execute( 'ls -1 ' . get_temp_dir() . $destination->name . '.* | wc -l' )->stdout !== "2\n" ) {
+	$rsp->add_step( 'clone-cert-copy', function () use ( $source, $destination, $certs_dir, $temp_dir, $files ) {
+		foreach ( $files as $file ) {
+			if ( ! EE::exec( rsync_command( $source->get_rsync_path( $certs_dir . $file ), $destination->get_rsync_path( $temp_dir ) ) ) ) {
+				throw new \Exception( 'Unable to sync certs from source site ' . $source->name . ' on host ' . $source->host );
+			}
+		}
+		// Exit status, not output: over `ssh -t` the output ends in \r\n.
+		$check = 'test -f ' . escapeshellarg( $temp_dir . $files[0] ) . ' && test -f ' . escapeshellarg( $temp_dir . $files[1] );
+		if ( $destination->execute( $check )->return_code ) {
 			throw new \Exception( 'Unable to sync certs from source site ' . $source->name . ' on host ' . $source->host );
 		}
-	}, function () use ( $destination ) {
-		$destination->execute( 'rm ' . get_temp_dir() . $destination->name . '.*' );
+	}, function () use ( $destination, $temp_dir, $files ) {
+		$destination->execute( 'rm -f ' . escapeshellarg( $temp_dir . $files[0] ) . ' ' . escapeshellarg( $temp_dir . $files[1] ) );
 	} );
 
 	if ( ! $rsp->execute( false ) ) {
