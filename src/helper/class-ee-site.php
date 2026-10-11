@@ -2843,11 +2843,8 @@ abstract class EE_Site_Command {
 	 *     # Sync site to remote
 	 *     $ ee site sync foo.com root@foo.com:bar.com
 	 *
-	 *     # Sync site from remote. Only clone files and db, not uploads
+	 *     # Sync site from remote. Only sync files and db, not uploads
 	 *     $ ee site sync root@foo.com:foo.com bar.com --files --db
-	 *
-	 *     # Sync site from remote and enable ssl
-	 *     $ ee site sync root@foo.com:foo.com bar.com --ssl=le --wildcard
 	 *
 	 */
 	public function sync( $args, $assoc_args ) {

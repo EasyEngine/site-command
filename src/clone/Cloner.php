@@ -114,11 +114,17 @@ class Site {
 		$site_details = $source_site->site_details;
 		$ssl_args     = '';
 
-		if ( $assoc_args['ssl'] ?? false ) {
-			if ( $assoc_args['ssl'] !== 'off' ) {
-				$ssl_args .= ' --ssl=' . $assoc_args['ssl'];
-				if ( $assoc_args['ssl'] === 'custom' ) {
-					if ( ! ( $assoc_args['ssl-key'] ?? false && $assoc_args['ssl-crt'] ?? false ) ) {
+		// A bare --ssl means le, as in `ee site create`.
+		$ssl = EE\Utils\get_value_if_flag_isset( $assoc_args, 'ssl', 'le' );
+
+		if ( $ssl ) {
+			if ( ! in_array( $ssl, [ 'le', 'off', 'self', 'inherit', 'custom' ], true ) ) {
+				throw new \Exception( 'Invalid --ssl value: ' . $ssl );
+			}
+			if ( 'off' !== $ssl ) {
+				$ssl_args .= ' --ssl=' . $ssl;
+				if ( 'custom' === $ssl ) {
+					if ( empty( $assoc_args['ssl-key'] ) || empty( $assoc_args['ssl-crt'] ) ) {
 						throw new \Exception( 'You need to specify --ssl-crt and --ssl-key with --ssl=custom' );
 					}
 					if ( ! is_file( $assoc_args['ssl-crt'] ) ) {
@@ -135,8 +141,8 @@ class Site {
 						throw new \Exception( 'Unable to sync certs.' );
 					}
 
-					$ssl_args .= ' --ssl-crt=\'' . get_temp_dir() . basename( $assoc_args['ssl-crt'] ) . '\'';
-					$ssl_args .= ' --ssl-key=\'' . get_temp_dir() . basename( $assoc_args['ssl-key'] ) . '\'';
+					$ssl_args .= ' --ssl-crt=' . escapeshellarg( get_temp_dir() . basename( $assoc_args['ssl-crt'] ) );
+					$ssl_args .= ' --ssl-key=' . escapeshellarg( get_temp_dir() . basename( $assoc_args['ssl-key'] ) );
 				}
 				if ( $assoc_args['wildcard'] ?? false ) {
 					$ssl_args .= ' --wildcard';
@@ -151,10 +157,10 @@ class Site {
 			if ( $this->name === $source_site->name ) {
 				if ( $site_details['site_ssl'] === 'custom' ) {
 					EE\Site\Cloner\Utils\copy_site_certs( $source_site, $this );
-					$ssl_args .= ' --ssl=custom --ssl-key=\'' . get_temp_dir() . $source_site->name . '.key\' --ssl-crt=\'' . get_temp_dir() . $source_site->name . '.crt\'';
+					$ssl_args .= ' --ssl=custom --ssl-key=' . escapeshellarg( get_temp_dir() . $source_site->name . '.key' ) . ' --ssl-crt=' . escapeshellarg( get_temp_dir() . $source_site->name . '.crt' );
 				} elseif ( $site_details['site_ssl'] === 'inherit' ) {
 					$this->validate_parent_site_present_on_host( $source_site->name );
-					$ssl_args .= ' --ssl=' . $site_details['site_ssl'];
+					$ssl_args .= ' --ssl=inherit';
 				}
 			} else {
 				// If name of src and dest site are not same
