@@ -780,9 +780,13 @@ function set_postfix_files( $site_url, $site_service_dir ) {
 	$fs = new Filesystem();
 	$fs->mkdir( $site_service_dir . '/postfix/ssl' );
 	$ssl_dir = $site_service_dir . '/postfix/ssl';
+	$key     = $ssl_dir . '/server.key';
 
-	if ( ! EE::exec( sprintf( "openssl req -new -x509 -nodes -days 365 -subj \"/CN=smtp.%s\" -out $ssl_dir/server.crt -keyout $ssl_dir/server.key", $site_url ) )
-	     && EE::exec( "chmod 0600 $ssl_dir/server.key" ) ) {
+	// A CN longer than 64 characters makes openssl fail; the cert is only used for opportunistic STARTTLS.
+	$common_name = substr( 'smtp.' . $site_url, 0, 64 );
+
+	$generated = EE::exec( sprintf( 'openssl req -new -x509 -nodes -days 365 -subj %s -out %s -keyout %s', escapeshellarg( '/CN=' . $common_name ), escapeshellarg( $ssl_dir . '/server.crt' ), escapeshellarg( $key ) ) );
+	if ( ! $generated || ! EE::exec( 'chmod 0600 ' . escapeshellarg( $key ) ) ) {
 		throw new \Exception( 'Unable to generate ssl key for postfix' );
 	}
 }
