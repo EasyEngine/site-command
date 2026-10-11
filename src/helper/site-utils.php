@@ -573,8 +573,9 @@ function is_valid_site_name( $site_url ) {
 	// The name ends up in shell commands, file paths and docker names, so allow only RFC 1123 hostnames (IDNs in punycode).
 	$label = '[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?';
 
+	// 64, not 253: the name is also a container hostname and a certificate CN, both capped at 64.
 	return is_string( $site_url )
-		&& strlen( $site_url ) <= 253
+		&& strlen( $site_url ) <= 64
 		&& 1 === preg_match( '/^' . $label . '(?:\.' . $label . ')+$/D', $site_url );
 }
 
@@ -586,7 +587,7 @@ function is_valid_site_name( $site_url ) {
 function validate_site_name( $site_url ) {
 
 	if ( ! is_valid_site_name( $site_url ) ) {
-		\EE::error( sprintf( 'Invalid site name: %s. A site name must be a hostname like example.com: two or more dot-separated labels of 1-63 letters, digits or hyphens that do not start or end with a hyphen, at most 253 characters in total. Use the punycode (xn--) form for internationalized domain names.', $site_url ) );
+		\EE::error( sprintf( 'Invalid site name: %s. A site name must be a hostname like example.com: two or more dot-separated labels of 1-63 letters, digits or hyphens that do not start or end with a hyphen, at most 64 characters in total. Use the punycode (xn--) form for internationalized domain names.', $site_url ) );
 	}
 }
 
