@@ -1472,7 +1472,9 @@ abstract class EE_Site_Command {
 		if ( ! empty( $object ) ) {
 			if ( 1 === intval( $this->site_data->cache_mysql_query ) ) {
 				$purge_key = $this->site_data->site_url . '_obj';
-				EE\Site\Utils\clean_site_cache( $purge_key );
+				if ( ! EE\Site\Utils\clean_site_cache( $purge_key ) ) {
+					$error[] = 'Unable to clear the object cache.';
+				}
 			} else {
 				$error[] = 'Site object cache is not enabled.';
 			}
@@ -1482,7 +1484,9 @@ abstract class EE_Site_Command {
 		if ( ! empty( $page ) ) {
 			if ( 1 === intval( $this->site_data->cache_nginx_fullpage ) ) {
 				$purge_key = $this->site_data->site_url . '_page';
-				EE\Site\Utils\clean_site_cache( $purge_key );
+				if ( ! EE\Site\Utils\clean_site_cache( $purge_key ) ) {
+					$error[] = 'Unable to clear the page cache.';
+				}
 			} else {
 				$error[] = 'Site page cache is not enabled.';
 			}
@@ -1491,9 +1495,12 @@ abstract class EE_Site_Command {
 		// Clear proxy cache.
 		if ( ! empty( $proxy ) ) {
 			if ( 'on' === $this->site_data->proxy_cache ) {
-				EE::exec( sprintf( 'docker exec -it %s bash -c "rm -r /var/cache/nginx/%s/*"', EE_PROXY_TYPE, $this->site_data->site_url ) );
+				// No -it, as in clean_site_cache(). rm fails harmlessly when the cache dir is already empty.
+				EE::exec( sprintf( 'docker exec %s bash -c "rm -r /var/cache/nginx/%s/*"', EE_PROXY_TYPE, $this->site_data->site_url ) );
 				EE::log( 'Restarting nginx-proxy after clearing proxy cache.' );
-				EE::exec( sprintf( 'docker exec -it %1$s bash -c "nginx -t" && docker restart %1$s', EE_PROXY_TYPE ) );
+				if ( ! EE::exec( sprintf( 'docker exec %1$s bash -c "nginx -t" && docker restart %1$s', EE_PROXY_TYPE ) ) ) {
+					$error[] = 'Unable to restart nginx-proxy after clearing the proxy cache.';
+				}
 			} else {
 				$error[] = 'Proxy cache is not enabled on site.';
 			}
@@ -2795,7 +2802,7 @@ abstract class EE_Site_Command {
 				copy_site_db( $source, $destination );
 			}
 
-			echo $destination->execute( 'ee site info ' . $destination->name )->stdout;
+			echo $destination->execute( 'ee site info ' . escapeshellarg( $destination->name ) )->stdout;
 			$message = 'Site cloned successfully.';
 
 			if ( $destination->site_details['site_type'] === 'wp' ) {
@@ -2847,11 +2854,8 @@ abstract class EE_Site_Command {
 	 *     # Sync site to remote
 	 *     $ ee site sync foo.com root@foo.com:bar.com
 	 *
-	 *     # Sync site from remote. Only clone files and db, not uploads
+	 *     # Sync site from remote. Only sync files and db, not uploads
 	 *     $ ee site sync root@foo.com:foo.com bar.com --files --db
-	 *
-	 *     # Sync site from remote and enable ssl
-	 *     $ ee site sync root@foo.com:foo.com bar.com --ssl=le --wildcard
 	 *
 	 */
 	public function sync( $args, $assoc_args ) {

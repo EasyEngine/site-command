@@ -1019,9 +1019,12 @@ function get_global_auth() {
  * Clear site cache with specific key.
  *
  * @param string $key Cache key to clear.
+ *
+ * @return bool Whether the purge ran.
  */
 function clean_site_cache( $key ) {
-	EE::exec( sprintf( 'docker exec -it %s redis-cli --eval purge_all_cache.lua 0 , "%s*"', GLOBAL_REDIS_CONTAINER, $key ) );
+	// No -it: without a terminal (cron, clone, scripts) docker refuses to attach a TTY and nothing is purged.
+	return EE::exec( sprintf( 'docker exec %s redis-cli --eval purge_all_cache.lua 0 , %s', GLOBAL_REDIS_CONTAINER, escapeshellarg( $key . '*' ) ) );
 }
 
 /**
