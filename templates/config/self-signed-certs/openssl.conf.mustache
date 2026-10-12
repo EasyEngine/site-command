@@ -12,3 +12,9 @@ O=EasyEngine
 OU=EasyEngine
 emailAddress=support@easyengine.io
 CN=EE_DOMAIN
+
+[v3_ca]
+basicConstraints = critical, CA:TRUE
+keyUsage = critical, keyCertSign, cRLSign
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always
