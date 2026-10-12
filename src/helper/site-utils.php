@@ -178,6 +178,31 @@ function sql_quote_identifier( $value ) {
 }
 
 /**
+ * Quotes a database name for a database-level GRANT or REVOKE.
+ *
+ * `_`, `%` and `\` are pattern characters there, even inside backticks: unescaped, `a_b` would also match `axb`.
+ * The name may not exceed 64 characters, so when there is no room to escape them all, each one left over becomes `_`, which still matches it.
+ *
+ * @param string $db_name Database name.
+ *
+ * @return string
+ */
+function sql_quote_grant_database( $db_name ) {
+
+	$length  = preg_match_all( '/./su', $db_name );
+	$spare   = 64 - ( false === $length ? strlen( $db_name ) : $length );
+	$pattern = preg_replace_callback(
+		'/[\\\\_%]/',
+		function ( $match ) use ( &$spare ) {
+			return $spare-- > 0 ? '\\' . $match[0] : '_';
+		},
+		$db_name
+	);
+
+	return sql_quote_identifier( $pattern );
+}
+
+/**
  * Runs SQL as root on the global database.
  *
  * The SQL goes through a file, so names and passwords never pass through a shell.
@@ -352,9 +377,7 @@ function create_user_in_db( $db_host, $db_name = '', $db_user = '', $db_pass = '
 
 			return false;
 		}
-		// `_` and `%` are wildcards in a GRANT's database name: unescaped, `a_b` would also grant on `axb`.
-		$grant_on = sql_quote_identifier( addcslashes( $db_name, '\\_%' ) );
-		if ( ! $ok( sprintf( 'GRANT ALL PRIVILEGES ON %s.* TO %s; FLUSH PRIVILEGES;', $grant_on, $user ) ) ) {
+		if ( ! $ok( sprintf( 'GRANT ALL PRIVILEGES ON %s.* TO %s; FLUSH PRIVILEGES;', sql_quote_grant_database( $db_name ), $user ) ) ) {
 			// Separate calls: a batch stops at its first error.
 			$ok( sprintf( 'DROP DATABASE %s;', $database ) );
 			$ok( sprintf( 'DROP USER %s;', $user ) );
