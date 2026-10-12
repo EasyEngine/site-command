@@ -187,7 +187,8 @@ class HTML extends EE_Site_Command {
 		if ( 'json' === $format ) {
 			$site = (array) Site::find( $this->site_data['site_url'] );
 			$site = reset( $site );
-			EE::log( json_encode( $site ) );
+			// Printed for the user only: it holds the site's credentials.
+			EE::line( json_encode( $site ) );
 
 			return;
 		}

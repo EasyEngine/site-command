@@ -108,6 +108,11 @@ function get_site_info( $args, $site_enabled_check = true, $exit_if_not_found = 
 		return false;
 	}
 
+	// Keeps this site's credentials out of the logs of whatever the command runs next.
+	if ( method_exists( 'EE', 'obfuscate' ) ) {
+		EE::obfuscate( [ $data->db_password, $data->db_root_password, $data->app_admin_password ] );
+	}
+
 	if ( ! $data->site_enabled && $site_enabled_check ) {
 		\EE::error( sprintf( 'Site %1$s is not enabled. Use `ee site enable %1$s` to enable it.', $data->site_url ) );
 	}
@@ -262,11 +267,12 @@ function cut_db_name_for_grant( $db_name, $suffix = '' ) {
  *
  * The SQL goes through a file, so names and passwords never pass through a shell.
  *
- * @param string $sql SQL statements to run.
+ * @param string $sql       SQL statements to run.
+ * @param array  $obfuscate Secrets in the SQL, masked in the logged output.
  *
  * @return bool|object Result of EE::launch(), or false if the SQL could not be copied to the container.
  */
-function run_global_db_sql( $sql ) {
+function run_global_db_sql( $sql, $obfuscate = [] ) {
 
 	$sql_path = tempnam( \EE\Utils\get_temp_dir(), 'ee-db-' );
 	file_put_contents( $sql_path, $sql );
@@ -277,9 +283,10 @@ function run_global_db_sql( $sql ) {
 		return false;
 	}
 
-	$script = sprintf( 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -N -B < %1$s; rc=$?; rm -f %1$s; exit $rc', $container_path );
+	// The client echoes a failing statement to STDERR, which is logged; `--loose-` only warns on clients without the option.
+	$script = sprintf( 'mysql --loose-skip-print-query-on-error -uroot -p"$MYSQL_ROOT_PASSWORD" -N -B < %1$s; rc=$?; rm -f %1$s; exit $rc', $container_path );
 
-	return EE::launch( sprintf( 'docker exec %s sh -c %s', GLOBAL_DB_CONTAINER, escapeshellarg( $script ) ) );
+	return EE::launch( sprintf( 'docker exec %s sh -c %s', GLOBAL_DB_CONTAINER, escapeshellarg( $script ) ), false, true, $obfuscate );
 }
 
 /**
@@ -418,13 +425,13 @@ function create_user_in_db( $db_host, $db_name = '', $db_user = '', $db_pass = '
 
 		$user     = sql_quote_string( $db_user ) . "@'%'";
 		$database = sql_quote_identifier( $db_name );
-		$ok       = function ( $sql ) {
-			$result = run_global_db_sql( $sql );
+		$ok       = function ( $sql, $obfuscate = [] ) {
+			$result = run_global_db_sql( $sql, $obfuscate );
 
 			return $result && 0 === $result->return_code;
 		};
 
-		if ( ! $ok( sprintf( 'CREATE USER %s IDENTIFIED BY %s;', $user, sql_quote_string( $db_pass ) ) ) ) {
+		if ( ! $ok( sprintf( 'CREATE USER %s IDENTIFIED BY %s;', $user, sql_quote_string( $db_pass ) ), [ sql_quote_string( $db_pass ), $db_pass ] ) ) {
 			return false;
 		}
 		if ( ! $ok( sprintf( 'CREATE DATABASE %s;', $database ) ) ) {
