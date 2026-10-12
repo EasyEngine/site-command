@@ -20,6 +20,12 @@ use function EE\Site\Utils\wait_for_global_db;
 class RestrictGlobalDbGrants extends Base {
 
 	/**
+	 * Privilege columns of `mysql.db` in MariaDB 10.2, the oldest global DB. Columns added later come in as 'N' when
+	 * mariadb-upgrade adds them to an existing datadir, so only these must be 'Y' in the grant EasyEngine created.
+	 */
+	const BASE_PRIVILEGES = [ 'Select_priv', 'Insert_priv', 'Update_priv', 'Delete_priv', 'Create_priv', 'Drop_priv', 'References_priv', 'Index_priv', 'Alter_priv', 'Create_tmp_table_priv', 'Lock_tables_priv', 'Create_view_priv', 'Show_view_priv', 'Create_routine_priv', 'Alter_routine_priv', 'Execute_priv', 'Event_priv', 'Trigger_priv' ];
+
+	/**
 	 * @throws EE\ExitException
 	 */
 	public function up() {
@@ -53,7 +59,7 @@ class RestrictGlobalDbGrants extends Base {
 		}
 
 		if ( 'running' !== \EE_DOCKER::container_status( GLOBAL_DB_CONTAINER ) ) {
-			$this->warn_manual( $sites, 'the global database is not running' );
+			$this->warn_manual( $sites, $global_sites, 'the global database is not running' );
 
 			return;
 		}
@@ -63,7 +69,7 @@ class RestrictGlobalDbGrants extends Base {
 		$columns = $this->get_privilege_columns();
 		$state   = $columns ? $this->read_state( $sites, $columns ) : false;
 		if ( false === $state ) {
-			$this->warn_manual( $sites, 'their grants could not be read' );
+			$this->warn_manual( $sites, $global_sites, 'their grants could not be read' );
 
 			return;
 		}
@@ -111,10 +117,14 @@ class RestrictGlobalDbGrants extends Base {
 	 */
 	private function read_state( array $sites, array $columns ) {
 
-		// The GRANT ALL row EasyEngine creates: every privilege except GRANT OPTION.
+		// The GRANT ALL row EasyEngine creates: every privilege except GRANT OPTION; newer columns may be either.
 		$checks = [];
 		foreach ( $columns as $column ) {
-			$checks[] = sprintf( "%s = '%s'", sql_quote_identifier( $column ), 'Grant_priv' === $column ? 'N' : 'Y' );
+			if ( 'Grant_priv' === $column ) {
+				$checks[] = "`Grant_priv` = 'N'";
+			} elseif ( in_array( $column, self::BASE_PRIVILEGES, true ) ) {
+				$checks[] = sprintf( "%s = 'Y'", sql_quote_identifier( $column ) );
+			}
 		}
 		$is_ee_grant = implode( ' AND ', $checks );
 
@@ -323,37 +333,49 @@ class RestrictGlobalDbGrants extends Base {
 	 */
 	private function warn_not_exact( $site ) {
 
-		EE::warning( sprintf( 'The database grant of site %s may also cover databases whose names differ from %s only in the last characters: the name is too long for a grant on exactly that database.', $site->site_url, $site->db_name ) );
+		EE::warning( sprintf( 'The database grant of site %s may still match other database names of the same length as %s: the name is too long for a grant on exactly that database.', $site->site_url, $site->db_name ) );
 	}
 
 	/**
-	 * One warning for sites whose grants could not be checked, with the SQL for the common case.
+	 * One warning for sites whose grants could not be checked, with SQL for the case the migration would handle.
 	 *
-	 * @param Site[] $sites  Sites.
-	 * @param string $reason Why they were not checked.
+	 * @param Site[] $sites        Sites.
+	 * @param Site[] $global_sites All global-db site rows.
+	 * @param string $reason       Why they were not checked.
 	 */
-	private function warn_manual( array $sites, $reason ) {
+	private function warn_manual( array $sites, array $global_sites, $reason ) {
 
-		$sql  = '';
-		$urls = [];
+		$users = [];
+		foreach ( $global_sites as $other ) {
+			$users[ $other->db_user ] = isset( $users[ $other->db_user ] ) ? $users[ $other->db_user ] + 1 : 1;
+		}
+		$sql    = '';
+		$shared = '';
+		$urls   = [];
 		foreach ( $sites as $site ) {
 			$urls[] = $site->site_url;
-			// Only the unescaped grant of older versions, and only where the new grant differs from it.
+			// Only where the new grant differs from the unescaped grant of older versions.
 			if ( ! in_array( $site->db_name, $this->get_stale_grant_names( $site->db_name ), true ) ) {
 				continue;
 			}
-			$user = sprintf( "%s@'%%'", sql_quote_string( $site->db_user ) );
-			$sql .= sprintf( "GRANT ALL PRIVILEGES ON %s.* TO %s; REVOKE ALL PRIVILEGES ON %s.* FROM %s;\n", sql_quote_grant_database( $site->db_name ), $user, sql_quote_identifier( $site->db_name ), $user );
+			$user  = sprintf( "%s@'%%'", sql_quote_string( $site->db_user ) );
+			$grant = sprintf( "GRANT ALL PRIVILEGES ON %s.* TO %s;\n", sql_quote_grant_database( $site->db_name ), $user );
+			if ( $users[ $site->db_user ] > 1 ) {
+				$shared .= $grant;
+			} else {
+				$sql .= $grant . sprintf( "REVOKE ALL PRIVILEGES ON %s.* FROM %s;\n", sql_quote_identifier( $site->db_name ), $user );
+			}
 		}
 
-		EE::warning(
-			sprintf(
-				'Could not restrict the database grants of site(s) %s to their own database: %s.%s',
-				implode( ', ', $urls ),
-				$reason,
-				'' === $sql ? '' : " For each user whose SHOW GRANTS lists the old grant, run as root on the global database:\n" . $sql . 'FLUSH PRIVILEGES;'
-			)
-		);
+		$message = sprintf( 'Could not restrict the database grants of site(s) %s to their own database: %s.', implode( ', ', $urls ), $reason );
+		if ( '' !== $sql . $shared ) {
+			$message .= sprintf( " Once it runs, open a root shell with `docker exec -it %s sh -c 'mysql -uroot -p\"\$MYSQL_ROOT_PASSWORD\"'` and check each user with SHOW GRANTS. Run these lines one at a time, only for a user whose grant on the old name is still the ALL PRIVILEGES grant EasyEngine created; a REVOKE that fails with \"There is no such grant\" can be skipped:\n%s", GLOBAL_DB_CONTAINER, $sql );
+			if ( '' !== $shared ) {
+				$message .= "These users are shared with another site, so keep their old grant until they have a grant of their own on each site's database:\n" . $shared;
+			}
+			$message .= 'FLUSH PRIVILEGES;';
+		}
+		EE::warning( $message );
 	}
 
 	/**
