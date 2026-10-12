@@ -286,10 +286,11 @@ function is_local_host( string $host ): bool {
 		return true;
 	}
 
-	$names  = [ strtolower( $host ) ];
+	// Judge what ssh connects to (the alias itself when there's no HostName); the typed name only when `ssh -G` fails.
+	$name   = strtolower( $host );
 	$config = EE::launch( 'ssh -G ' . escapeshellarg( $host ) );
 	if ( 0 === $config->return_code && preg_match( '/^hostname (\S+)/m', $config->stdout, $matches ) ) {
-		$names[] = strtolower( $matches[1] );
+		$name = strtolower( $matches[1] );
 	}
 
 	$local_names = [ 'localhost', 'localhost.localdomain', 'ip6-localhost', 'ip6-loopback', strtolower( (string) gethostname() ) ];
@@ -302,15 +303,13 @@ function is_local_host( string $host ): bool {
 		}
 	}
 
-	foreach ( array_unique( $names ) as $name ) {
-		if ( in_array( $name, $local_names, true ) ) {
+	if ( in_array( $name, $local_names, true ) ) {
+		return true;
+	}
+	$ips = filter_var( $name, FILTER_VALIDATE_IP ) ? [ $name ] : ( gethostbynamel( $name ) ?: [] );
+	foreach ( $ips as $ip ) {
+		if ( 0 === strpos( $ip, '127.' ) || in_array( $ip, $local_ips, true ) ) {
 			return true;
-		}
-		$ips = filter_var( $name, FILTER_VALIDATE_IP ) ? [ $name ] : ( gethostbynamel( $name ) ?: [] );
-		foreach ( $ips as $ip ) {
-			if ( 0 === strpos( $ip, '127.' ) || in_array( $ip, $local_ips, true ) ) {
-				return true;
-			}
 		}
 	}
 
