@@ -229,7 +229,7 @@ function db_name_fits_exact_grant( $db_name ) {
 }
 
 /**
- * Cuts a database name so that, with $suffix appended, its escaped GRANT name fits in 64 characters.
+ * Cuts a database name so that, with $suffix appended, its escaped GRANT name fits in 64 characters and the name in 64 bytes.
  *
  * @param string $db_name Database name.
  * @param string $suffix  Suffix to append.
@@ -242,11 +242,13 @@ function cut_db_name_for_grant( $db_name, $suffix = '' ) {
 	if ( false === $chars ) {
 		$chars = str_split( $db_name );
 	}
-	$room = 64 - get_grant_name_length( $suffix );
-	$name = '';
+	$room  = 64 - get_grant_name_length( $suffix );
+	$bytes = 64 - strlen( $suffix );
+	$name  = '';
 	foreach ( $chars as $char ) {
-		$room -= false === strpos( '\\_%', $char ) ? 1 : 2;
-		if ( $room < 0 ) {
+		$room  -= false === strpos( '\\_%', $char ) ? 1 : 2;
+		$bytes -= strlen( $char );
+		if ( $room < 0 || $bytes < 0 ) {
 			break;
 		}
 		$name .= $char;
@@ -431,7 +433,7 @@ function create_user_in_db( $db_host, $db_name = '', $db_user = '', $db_pass = '
 			return false;
 		}
 		if ( ! db_name_fits_exact_grant( $db_name ) ) {
-			EE::warning( sprintf( 'Database name `%s` is too long for its grant to cover only this database: user `%s` may also get access to databases whose names differ from it only in the last characters. A shorter --dbname avoids this.', $db_name, $db_user ) );
+			EE::warning( sprintf( 'Database name `%s` is too long for its grant to cover only this database: user `%s` may also get access to other databases whose names have the same length. A shorter --dbname avoids this.', $db_name, $db_user ) );
 		}
 		if ( ! $ok( sprintf( 'GRANT ALL PRIVILEGES ON %s.* TO %s; FLUSH PRIVILEGES;', sql_quote_grant_database( $db_name ), $user ) ) ) {
 			// Separate calls: a batch stops at its first error.
