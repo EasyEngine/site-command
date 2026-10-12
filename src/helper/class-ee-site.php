@@ -1472,7 +1472,9 @@ abstract class EE_Site_Command {
 		if ( ! empty( $object ) ) {
 			if ( 1 === intval( $this->site_data->cache_mysql_query ) ) {
 				$purge_key = $this->site_data->site_url . '_obj';
-				EE\Site\Utils\clean_site_cache( $purge_key );
+				if ( ! EE\Site\Utils\clean_site_cache( $purge_key ) ) {
+					$error[] = 'Unable to clear the object cache.';
+				}
 			} else {
 				$error[] = 'Site object cache is not enabled.';
 			}
@@ -1482,7 +1484,9 @@ abstract class EE_Site_Command {
 		if ( ! empty( $page ) ) {
 			if ( 1 === intval( $this->site_data->cache_nginx_fullpage ) ) {
 				$purge_key = $this->site_data->site_url . '_page';
-				EE\Site\Utils\clean_site_cache( $purge_key );
+				if ( ! EE\Site\Utils\clean_site_cache( $purge_key ) ) {
+					$error[] = 'Unable to clear the page cache.';
+				}
 			} else {
 				$error[] = 'Site page cache is not enabled.';
 			}
