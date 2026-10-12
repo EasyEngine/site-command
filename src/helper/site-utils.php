@@ -562,6 +562,36 @@ function get_ssl_policy() {
 }
 
 /**
+ * Checks whether a site name is a lowercase hostname with at least two labels.
+ *
+ * @param string $site_url Name of the site.
+ *
+ * @return bool
+ */
+function is_valid_site_name( $site_url ) {
+
+	// The name ends up in shell commands, file paths and docker names, so allow only RFC 1123 hostnames (IDNs in punycode).
+	$label = '[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?';
+
+	// 64, not 253: the name is also a container hostname and a certificate CN, both capped at 64.
+	return is_string( $site_url )
+		&& strlen( $site_url ) <= 64
+		&& 1 === preg_match( '/^' . $label . '(?:\.' . $label . ')+$/D', $site_url );
+}
+
+/**
+ * Exits with an error if the site name is not a valid hostname.
+ *
+ * @param string $site_url Name of the site.
+ */
+function validate_site_name( $site_url ) {
+
+	if ( ! is_valid_site_name( $site_url ) ) {
+		\EE::error( sprintf( 'Invalid site name: %s. A site name must be a hostname like example.com: two or more dot-separated labels of 1-63 letters, digits or hyphens that do not start or end with a hyphen, at most 64 characters in total. Use the punycode (xn--) form for internationalized domain names.', $site_url ) );
+	}
+}
+
+/**
  * Function to create entry in /etc/hosts.
  *
  * @param string $site_url Name of the site.
@@ -581,8 +611,8 @@ function create_etc_hosts_entry( $site_url ) {
 	}
 	$host_line = LOCALHOST_IP . "\t$site_url";
 	$etc_hosts = file_get_contents( '/etc/hosts' );
-	if ( ! preg_match( "/\s+$site_url\$/m", $etc_hosts ) ) {
-		if ( EE::exec( "/bin/bash -c 'echo \"$host_line\" >> /etc/hosts'" ) ) {
+	if ( ! preg_match( '/\s+' . preg_quote( $site_url, '/' ) . '$/m', $etc_hosts ) ) {
+		if ( EE::exec( '/bin/bash -c ' . escapeshellarg( 'echo ' . escapeshellarg( $host_line ) . ' >> /etc/hosts' ) ) ) {
 			EE::success( 'Host entry successfully added.' );
 		} else {
 			EE::warning( "Failed to add $site_url in host entry, Please do it manually!" );
@@ -751,9 +781,13 @@ function set_postfix_files( $site_url, $site_service_dir ) {
 	$fs = new Filesystem();
 	$fs->mkdir( $site_service_dir . '/postfix/ssl' );
 	$ssl_dir = $site_service_dir . '/postfix/ssl';
+	$key     = $ssl_dir . '/server.key';
 
-	if ( ! EE::exec( sprintf( "openssl req -new -x509 -nodes -days 365 -subj \"/CN=smtp.%s\" -out $ssl_dir/server.crt -keyout $ssl_dir/server.key", $site_url ) )
-	     && EE::exec( "chmod 0600 $ssl_dir/server.key" ) ) {
+	// A CN longer than 64 characters makes openssl fail; the cert is only used for opportunistic STARTTLS.
+	$common_name = substr( 'smtp.' . $site_url, 0, 64 );
+
+	$generated = EE::exec( sprintf( 'openssl req -new -x509 -nodes -days 365 -subj %s -out %s -keyout %s', escapeshellarg( '/CN=' . $common_name ), escapeshellarg( $ssl_dir . '/server.crt' ), escapeshellarg( $key ) ) );
+	if ( ! $generated || ! EE::exec( 'chmod 0600 ' . escapeshellarg( $key ) ) ) {
 		throw new \Exception( 'Unable to generate ssl key for postfix' );
 	}
 }
@@ -774,15 +808,15 @@ function configure_postfix( $site_url, $site_fs_path ) {
 		$default_from = "no-reply@$site_url";
 	}
 
-	EE::exec( \EE_DOCKER::docker_compose_with_custom() . " exec php sh -c 'echo \"host postfix\ntls off\nfrom $default_from\" > /etc/msmtprc'" );
+	EE::exec( \EE_DOCKER::docker_compose_with_custom() . ' exec php sh -c ' . escapeshellarg( 'echo ' . escapeshellarg( "host postfix\ntls off\nfrom $default_from" ) . ' > /etc/msmtprc' ) );
 	$relay_host = EE::launch( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix sh -c \'echo $RELAY_HOST\'' )->stdout;
 	$relay_host = trim( $relay_host, "\n\r" );
-	EE::exec( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e \'relayhost = ' . $relay_host . '\'' );
+	EE::exec( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e ' . escapeshellarg( 'relayhost = ' . $relay_host ) );
 	EE::exec( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e \'smtpd_recipient_restrictions = permit_mynetworks\'' );
-	$launch      = EE::launch( sprintf( 'docker inspect -f \'{{ with (index .IPAM.Config 0) }}{{ .Subnet }}{{ end }}\' %s', $site_url ) );
+	$launch      = EE::launch( sprintf( 'docker inspect -f \'{{ with (index .IPAM.Config 0) }}{{ .Subnet }}{{ end }}\' %s', escapeshellarg( $site_url ) ) );
 	$subnet_cidr = trim( $launch->stdout );
-	EE::exec( sprintf( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e \'mynetworks = %s 127.0.0.0/8\'', $subnet_cidr ) );
-	EE::exec( sprintf( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e \'myhostname = %s\'', $site_url ) );
+	EE::exec( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e ' . escapeshellarg( "mynetworks = $subnet_cidr 127.0.0.0/8" ) );
+	EE::exec( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e ' . escapeshellarg( "myhostname = $site_url" ) );
 	EE::exec( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e \'syslog_name = $myhostname\'' );
 	EE::exec( \EE_DOCKER::docker_compose_with_custom() . ' restart postfix' );
 }
@@ -1234,7 +1268,7 @@ function remove_etc_hosts_entry( $site_url ) {
 
 	$hosts_file = file_get_contents( '/etc/hosts' );
 
-	$site_url_escaped = preg_replace( '/\./', '\.', $site_url );
+	$site_url_escaped = preg_quote( $site_url, '/' );
 	$hosts_file_new   = preg_replace( "/127\.0\.0\.1\s+$site_url_escaped\n/", '', $hosts_file );
 
 	$fs->dumpFile( '/etc/hosts', $hosts_file_new );
