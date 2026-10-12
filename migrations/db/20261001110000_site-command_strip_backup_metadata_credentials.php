@@ -11,7 +11,7 @@ use EE;
  */
 class StripBackupMetadataCredentials extends Base {
 
-	const SECRET_KEYS = [ 'db_password', 'db_root_password', 'app_admin_password' ];
+	const SECRET_KEYS = [ 'db_password', 'db_root_password', 'app_admin_password', 'site_auth_password' ];
 
 	public function up() {
 
@@ -41,7 +41,7 @@ class StripBackupMetadataCredentials extends Base {
 			// A half-written file would make restore refuse the backup, so it is replaced only when complete.
 			$tmp = $file . '.ee-tmp';
 			$json = json_encode( $data, JSON_PRETTY_PRINT );
-			if ( false === $json || false === file_put_contents( $tmp, $json ) || ! chmod( $tmp, fileperms( $file ) & 0777 ) || ! rename( $tmp, $file ) ) {
+			if ( false === $json || strlen( $json ) !== file_put_contents( $tmp, $json ) || ! chmod( $tmp, fileperms( $file ) & 0777 ) || ! rename( $tmp, $file ) ) {
 				@unlink( $tmp );
 				EE::warning( "Could not remove the credentials from $file." );
 				continue;

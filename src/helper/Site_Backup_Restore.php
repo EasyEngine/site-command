@@ -30,7 +30,7 @@ class Site_Backup_Restore {
 	const RCLONE_MIN_VERSION_MT_WRITE_BUFFER = '1.63.0'; // --multi-thread-write-buffer-size (rclone v1.63.0)
 	const RCLONE_MIN_VERSION_MT_CHUNK_SIZE   = '1.64.0'; // --multi-thread-chunk-size (rclone v1.64.0)
 
-	const METADATA_SECRET_KEYS = [ 'db_password', 'db_root_password', 'app_admin_password' ];
+	const METADATA_SECRET_KEYS = [ 'db_password', 'db_root_password', 'app_admin_password', 'site_auth_password' ];
 
 	private $fs;
 	public $site_data;
