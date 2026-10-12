@@ -203,6 +203,59 @@ function sql_quote_grant_database( $db_name ) {
 }
 
 /**
+ * Length of a database name in a GRANT once its pattern characters are escaped.
+ *
+ * @param string $db_name Database name.
+ *
+ * @return int Characters.
+ */
+function get_grant_name_length( $db_name ) {
+
+	$length = preg_match_all( '/./su', $db_name );
+
+	return ( false === $length ? strlen( $db_name ) : $length ) + preg_match_all( '/[\\\\_%]/', $db_name );
+}
+
+/**
+ * Whether a GRANT can cover exactly this database: the escaped name has to fit in 64 characters.
+ *
+ * @param string $db_name Database name.
+ *
+ * @return bool
+ */
+function db_name_fits_exact_grant( $db_name ) {
+
+	return get_grant_name_length( $db_name ) <= 64;
+}
+
+/**
+ * Cuts a database name so that, with $suffix appended, its escaped GRANT name fits in 64 characters.
+ *
+ * @param string $db_name Database name.
+ * @param string $suffix  Suffix to append.
+ *
+ * @return string
+ */
+function cut_db_name_for_grant( $db_name, $suffix = '' ) {
+
+	$chars = preg_split( '//u', $db_name, -1, PREG_SPLIT_NO_EMPTY );
+	if ( false === $chars ) {
+		$chars = str_split( $db_name );
+	}
+	$room = 64 - get_grant_name_length( $suffix );
+	$name = '';
+	foreach ( $chars as $char ) {
+		$room -= false === strpos( '\\_%', $char ) ? 1 : 2;
+		if ( $room < 0 ) {
+			break;
+		}
+		$name .= $char;
+	}
+
+	return $name . $suffix;
+}
+
+/**
  * Runs SQL as root on the global database.
  *
  * The SQL goes through a file, so names and passwords never pass through a shell.
@@ -269,7 +322,7 @@ function global_db_has_user( $db_user ) {
 }
 
 /**
- * Default database name of a site, cut to MySQL's 64-character limit.
+ * Default database name of a site, cut so that a GRANT can cover exactly this database.
  *
  * @param string $site_url Name of the site.
  *
@@ -277,7 +330,7 @@ function global_db_has_user( $db_user ) {
  */
 function get_default_db_name( $site_url ) {
 
-	return substr( str_replace( [ '.', '-' ], '_', $site_url ), 0, 64 );
+	return cut_db_name_for_grant( str_replace( [ '.', '-' ], '_', $site_url ) );
 }
 
 /**
@@ -328,7 +381,7 @@ function reserve_global_db_names( $db_name, $db_user, $explicit_db_name ) {
 
 	for ( $i = 2; $i <= 100; $i++ ) {
 		$suffix    = '_' . $i;
-		$candidate = substr( $db_name, 0, 64 - strlen( $suffix ) ) . $suffix;
+		$candidate = cut_db_name_for_grant( $db_name, $suffix );
 		if ( ! $is_taken( $candidate ) ) {
 			EE::log( sprintf( 'Database `%s` already exists, using `%s` instead.', $db_name, $candidate ) );
 
@@ -376,6 +429,9 @@ function create_user_in_db( $db_host, $db_name = '', $db_user = '', $db_pass = '
 			$ok( sprintf( 'DROP USER %s;', $user ) );
 
 			return false;
+		}
+		if ( ! db_name_fits_exact_grant( $db_name ) ) {
+			EE::warning( sprintf( 'Database name `%s` is too long for its grant to cover only this database: user `%s` may also get access to databases whose names differ from it only in the last characters. A shorter --dbname avoids this.', $db_name, $db_user ) );
 		}
 		if ( ! $ok( sprintf( 'GRANT ALL PRIVILEGES ON %s.* TO %s; FLUSH PRIVILEGES;', sql_quote_grant_database( $db_name ), $user ) ) ) {
 			// Separate calls: a batch stops at its first error.
