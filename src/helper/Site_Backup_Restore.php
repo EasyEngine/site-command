@@ -1732,7 +1732,7 @@ class Site_Backup_Restore {
 			'metadata' => $metadata,
 		];
 
-		EE::debug( 'Payload being sent: ' . json_encode( $payload ) );
+		EE::debug( 'Payload being sent: ' . json_encode( array_merge( $payload, [ 'verify' => '******' ] ) ) );
 
 		return $this->send_dash_request( $endpoint, $payload );
 	}

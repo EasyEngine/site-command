@@ -40,7 +40,8 @@ class StripBackupMetadataCredentials extends Base {
 
 			// A half-written file would make restore refuse the backup, so it is replaced only when complete.
 			$tmp = $file . '.ee-tmp';
-			if ( false === file_put_contents( $tmp, json_encode( $data, JSON_PRETTY_PRINT ) ) || ! chmod( $tmp, fileperms( $file ) & 0777 ) || ! rename( $tmp, $file ) ) {
+			$json = json_encode( $data, JSON_PRETTY_PRINT );
+			if ( false === $json || false === file_put_contents( $tmp, $json ) || ! chmod( $tmp, fileperms( $file ) & 0777 ) || ! rename( $tmp, $file ) ) {
 				@unlink( $tmp );
 				EE::warning( "Could not remove the credentials from $file." );
 				continue;
