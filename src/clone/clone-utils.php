@@ -21,13 +21,20 @@ function copy_site_db( Site $source, Site $destination ) {
 	}
 
 	if ( 'wp' === $site_type ) {
+		// `ee shell --command` still runs inside a double-quoted `bash -c` on that host, where escaping can't protect these.
+		foreach ( [ 'db_user', 'db_password', 'db_host', 'db_name' ] as $field ) {
+			if ( has_shell_special_chars( $destination->site_details[ $field ] ?? '' ) ) {
+				throw new \Exception( 'Unable to import the database: ' . $field . ' of ' . $destination->name . ' contains quotes, $, ` or \\.' );
+			}
+		}
+
 		EE::log( 'Exporting database from source' );
 
 		$filename = $source->site_details['site_url'] . '-' . random_password() . '.sql';
 
 		$source->rsp->add_step( 'clone-export-db', function () use ( $source, $destination, $filename ) {
 			$source_site_name = $source->site_details['site_url'];
-			$export_command   = 'ee shell --skip-tty ' . $source_site_name . ' --command=\'wp db export --skip-ssl ../' . $filename . '\'';
+			$export_command   = shell_command( $source_site_name, 'wp db export --skip-ssl ' . escapeshellarg( '../' . $filename ) );
 
 			if ( $source->execute( $export_command )->return_code ) {
 				throw new \Exception( 'Unable to export database on source. Please check for file system permissions and disk space.' );
@@ -50,17 +57,20 @@ function copy_site_db( Site $source, Site $destination ) {
 		$destination->rsp->add_step( 'clone-import-db', function () use ( $source, $destination, $filename ) {
 			$source_site_name      = $source->site_details['site_url'];
 			$destination_site_name = $destination->site_details['site_url'];
-			$source_fs_path        = trailingslashit( $source->site_details['site_fs_path'] ) . 'app/' . $filename;
-			$destination_fs_path   = trailingslashit( $destination->site_details['site_fs_path'] ) . 'app/' . $filename;
 
 			EE::log( 'Importing database in destination' );
 
-			$DB_USER     = $destination->site_details['db_user'];
-			$DB_PASSWORD = $destination->site_details['db_password'];
-			$DB_HOST     = $destination->site_details['db_host'];
-			$DB_NAME     = $destination->site_details['db_name'];
-
-			$import_command = "ee shell --skip-tty $destination_site_name --command='mysql --skip-ssl -u\"$DB_USER\" -p\"$DB_PASSWORD\" -h\"$DB_HOST\" \"$DB_NAME\" < ../$filename'";
+			$import_command = shell_command(
+				$destination_site_name,
+				sprintf(
+					'mysql --skip-ssl -u%s -p%s -h%s %s < %s',
+					escapeshellarg( $destination->site_details['db_user'] ),
+					escapeshellarg( $destination->site_details['db_password'] ),
+					escapeshellarg( $destination->site_details['db_host'] ),
+					escapeshellarg( $destination->site_details['db_name'] ),
+					escapeshellarg( '../' . $filename )
+				)
+			);
 
 			if ( $destination->execute( $import_command )->return_code ) {
 				throw new \Exception( 'Unable to import database on destination. Please check for file system permissions and disk space.' );
@@ -68,8 +78,8 @@ function copy_site_db( Site $source, Site $destination ) {
 
 			EE::log( 'Executing search-replace' );
 
-			$http_search_replace_command  = 'ee shell --skip-tty ' . $destination_site_name . ' --command=\'wp search-replace http://' . $source_site_name . ' http://' . $destination_site_name . ' --network --all-tables\'';
-			$https_search_replace_command = 'ee shell --skip-tty ' . $destination_site_name . ' --command=\'wp search-replace https://' . $source_site_name . ' https://' . $destination_site_name . ' --network --all-tables\'';
+			$http_search_replace_command  = search_replace_command( $destination_site_name, 'http://' . $source_site_name, 'http://' . $destination_site_name );
+			$https_search_replace_command = search_replace_command( $destination_site_name, 'https://' . $source_site_name, 'https://' . $destination_site_name );
 
 			if ( $destination->execute( $http_search_replace_command )->return_code ) {
 				throw new \Exception( 'Unable to execute http search-replace on database at destination.' );
@@ -83,7 +93,7 @@ function copy_site_db( Site $source, Site $destination ) {
 				$source_site_name_http      = empty ( $source->site_details['site_ssl'] ) ? 'http://' . $destination_site_name : 'https://' . $destination_site_name;
 				$destination_site_name_http = empty ( $destination->site_details['site_ssl'] ) ? 'http://' . $destination_site_name : 'https://' . $destination_site_name;
 
-				$http_https_search_replace_command = 'ee shell --skip-tty ' . $destination_site_name . ' --command=\'wp search-replace ' . $source_site_name_http . ' ' . $destination_site_name_http . ' --network --all-tables\'';
+				$http_https_search_replace_command = search_replace_command( $destination_site_name, $source_site_name_http, $destination_site_name_http );
 
 				if ( $destination->execute( $http_https_search_replace_command )->return_code ) {
 					throw new \Exception( 'Unable to execute http-https search-replace on database at destination.' );
@@ -100,17 +110,23 @@ function copy_site_db( Site $source, Site $destination ) {
 	}
 }
 
+// `ee shell <site> --command=<command>`; values inside $command must already be escaped.
+function shell_command( string $site_name, string $command ): string {
+	return 'ee shell --skip-tty ' . escapeshellarg( $site_name ) . ' --command=' . escapeshellarg( $command );
+}
+
+function search_replace_command( string $site_name, string $from, string $to ): string {
+	return shell_command( $site_name, 'wp search-replace ' . escapeshellarg( $from ) . ' ' . escapeshellarg( $to ) . ' --network --all-tables' );
+}
+
 function remove_db_files( $source, $destination, $filename ) {
 	$source_fs_path      = trailingslashit( $source->site_details['site_fs_path'] ) . 'app/' . $filename;
 	$destination_fs_path = trailingslashit( $destination->site_details['site_fs_path'] ) . 'app/' . $filename;
 
-	$rm_db_src_command  = 'rm ' . $source_fs_path;
-	$rm_db_dest_command = 'rm ' . $destination_fs_path;
-
 	EE::log( 'Cleanup export file from source and destination' );
 
-	$source->execute( $rm_db_src_command );
-	$destination->execute( $rm_db_dest_command );
+	$source->execute( 'rm ' . escapeshellarg( $source_fs_path ) );
+	$destination->execute( 'rm ' . escapeshellarg( $destination_fs_path ) );
 }
 
 function copy_site_certs( Site $source, Site $destination ) {
@@ -145,17 +161,17 @@ function copy_site_files( Site $source, Site $destination, array $sync_type ) {
 	$source_public_path      = str_replace( '/var/www/htdocs', '', $source->site_details['site_container_fs_path'] );
 	$destination_public_path = str_replace( '/var/www/htdocs', '', $destination->site_details['site_container_fs_path'] );
 
-	$exclude = '--exclude \'/wp-config.php\'';
+	$excludes = [ '/wp-config.php' ];
 
 	// Exclude wp-config.php from source's custom public directory structure.
 	// rsync --exclude patterns are relative to the source directory being synced.
 	if ( ! empty( $source_public_path ) ) {
-		$exclude .= ' --exclude \'' . $source_public_path . '/wp-config.php\'';
+		$excludes[] = $source_public_path . '/wp-config.php';
 
 		// Also exclude wp-config.php one level up from public directory (WordPress convention).
 		$parent_dir = dirname( $source_public_path );
 		if ( $parent_dir !== '.' && $parent_dir !== '/' ) {
-			$exclude .= ' --exclude \'' . $parent_dir . '/wp-config.php\'';
+			$excludes[] = $parent_dir . '/wp-config.php';
 		}
 	}
 
@@ -172,22 +188,29 @@ function copy_site_files( Site $source, Site $destination, array $sync_type ) {
 	}
 
 	if ( $sync_type['files'] && ! $sync_type['uploads'] ) {
-		$exclude .= ' --exclude \'' . $source_uploads_path . '\'';
-		$exclude .= ' --exclude \'' . $uploads_path_share . '\'';
+		$excludes[] = $source_uploads_path;
+		$excludes[] = $uploads_path_share;
 	}
 
-	$rsync_command = rsync_command( trailingslashit( $source_dir ), trailingslashit( $destination_dir ), [ $exclude ] );
+	$options = array_map(
+		function ( $pattern ) {
+			return '--exclude=' . $pattern;
+		},
+		$excludes
+	);
+
+	$rsync_command = rsync_command( trailingslashit( $source_dir ), trailingslashit( $destination_dir ), $options );
 	if ( ! EE::exec( $rsync_command ) ) {
 		throw new \Exception( 'Unable to sync files.' );
 	}
 }
 
+// $options are single rsync arguments; everything is escaped here.
 function rsync_command( string $source, string $destination, array $options = [] ) {
-	$ssh_command   = 'ssh -t';
-	$extra_options = implode( ' ', $options );
+	$options = array_map( 'escapeshellarg', $options );
 
 	// No --ignore-errors: with --delete-after it deletes the destination's copy of files that failed to read.
-	return 'rsync -azh --delete-after ' . $extra_options . ' -e "' . $ssh_command . '" ' . $source . ' ' . $destination;
+	return 'rsync -azh --delete-after ' . ( $options ? implode( ' ', $options ) . ' ' : '' ) . "-e 'ssh -t' " . escapeshellarg( $source ) . ' ' . escapeshellarg( $destination );
 }
 
 function check_site_access( Site $source_site, Site $destination_site, $sync = false ) {
@@ -277,6 +300,11 @@ function is_valid_site_name( string $name ): bool {
 	$label = '[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?';
 
 	return strlen( $name ) <= 253 && 1 === preg_match( '/^' . $label . '(?:\.' . $label . ')*$/iD', $name );
+}
+
+// Quotes, $, ` and \ (still special inside double quotes) and control characters.
+function has_shell_special_chars( $value ): bool {
+	return 1 === preg_match( '/[\'"`$\\\\\x00-\x1f\x7f]/', (string) $value );
 }
 
 function get_user_home_dir( string $user ) {

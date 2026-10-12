@@ -2791,7 +2791,7 @@ abstract class EE_Site_Command {
 				copy_site_db( $source, $destination );
 			}
 
-			echo $destination->execute( 'ee site info ' . $destination->name )->stdout;
+			echo $destination->execute( 'ee site info ' . escapeshellarg( $destination->name ) )->stdout;
 			$message = 'Site cloned successfully.';
 
 			if ( $destination->site_details['site_type'] === 'wp' ) {
