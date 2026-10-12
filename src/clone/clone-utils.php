@@ -291,6 +291,11 @@ function is_local_host( string $host ): bool {
 	$config = EE::launch( 'ssh -G ' . escapeshellarg( $host ) );
 	if ( 0 === $config->return_code && preg_match( '/^hostname (\S+)/m', $config->stdout, $matches ) ) {
 		$name = strtolower( $matches[1] );
+
+		// Best effort against syncing a site onto itself: a proxy or another port (tunnels, VM forwards) likely reaches another machine.
+		if ( preg_match( '/^proxy(?:jump|command) (?!none$)\S/m', $config->stdout ) || ( preg_match( '/^port (\d+)$/m', $config->stdout, $port ) && '22' !== $port[1] ) ) {
+			return false;
+		}
 	}
 
 	$local_names = [ 'localhost', 'localhost.localdomain', 'ip6-localhost', 'ip6-loopback', strtolower( (string) gethostname() ) ];
