@@ -113,8 +113,11 @@ class Site {
 		$site_details = $source_site->site_details;
 		$ssl_args     = '';
 
-		// A bare --ssl means le, as in `ee site create`.
-		$ssl = EE\Utils\get_value_if_flag_isset( $assoc_args, 'ssl', 'le' );
+		// A bare --ssl means le, as in `ee site create`; --no-ssl and an empty --ssl= keep the source's SSL.
+		$ssl = $assoc_args['ssl'] ?? false;
+		if ( true === $ssl ) {
+			$ssl = 'le';
+		}
 
 		if ( $ssl ) {
 			if ( ! in_array( $ssl, [ 'le', 'off', 'self', 'inherit', 'custom' ], true ) ) {
