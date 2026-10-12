@@ -1911,7 +1911,22 @@ abstract class EE_Site_Command {
 		$successful    = false;
 		$extra_path    = str_replace( '/var/www/htdocs', '', $site_container_path );
 		$file_path     = $site_path . '/app/htdocs' . $extra_path . '/check.html';
-		file_put_contents( $file_path, $random_string );
+
+		// The site can write here: drop whatever is at the path so a planted symlink isn't followed, then create the file exclusively.
+		if ( is_link( $file_path ) || is_file( $file_path ) ) {
+			unlink( $file_path );
+		}
+		// The site's nginx has to read the file whatever the umask is.
+		$old_umask = umask( 0022 );
+		$handle    = @fopen( $file_path, 'x' );
+		umask( $old_umask );
+		if ( false === $handle ) {
+			EE::debug( "Unable to create $file_path" );
+
+			return false;
+		}
+		fwrite( $handle, $random_string );
+		fclose( $handle );
 
 		if ( 0 === strpos( $site_url, 'www.' ) ) {
 			$site_url = ltrim( $site_url, 'www.' );
