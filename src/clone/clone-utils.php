@@ -101,12 +101,34 @@ function copy_site_db( Site $source, Site $destination ) {
 			}
 
 			remove_db_files( $source, $destination, $filename );
+			clear_site_cache( $destination );
 		}, function () use ( $source, $destination, $filename ) {
 			remove_db_files( $source, $destination, $filename );
 		} );
 
-		$source->rsp->execute();
-		$destination->rsp->execute();
+		// A failed step has already been rolled back; don't run the import after a failed export or report success.
+		if ( ! $source->rsp->execute() || ! $destination->rsp->execute() ) {
+			throw new \Exception( 'Unable to copy the database.' );
+		}
+	}
+}
+
+// Its object and page cache still hold what the site's own install cached, not the imported data.
+function clear_site_cache( Site $site ) {
+	$flags = '';
+	if ( ! empty( $site->site_details['cache_mysql_query'] ) ) {
+		$flags .= ' --object';
+	}
+	if ( ! empty( $site->site_details['cache_nginx_fullpage'] ) ) {
+		$flags .= ' --page';
+	}
+	if ( ! $flags ) {
+		return;
+	}
+
+	EE::log( 'Clearing the cache of ' . $site->name );
+	if ( $site->execute( 'ee site clean ' . escapeshellarg( $site->name ) . $flags )->return_code ) {
+		EE::warning( 'Unable to clear the cache of ' . $site->name . '. Run `ee site clean ' . $site->name . '` on ' . $site->host . ', or it serves stale data until the cache expires.' );
 	}
 }
 
