@@ -1917,7 +1917,9 @@ abstract class EE_Site_Command {
 		$random_string = EE\Utils\random_password();
 		$successful    = false;
 		$extra_path    = str_replace( '/var/www/htdocs', '', $site_container_path );
-		$file_path     = $site_path . '/app/htdocs' . $extra_path . '/check.html';
+		// A new name per check: the site's nginx caches open files for 2 minutes (open_file_cache), so a reused name serves the previous check's file.
+		$check_file    = 'ee-www-check-' . bin2hex( random_bytes( 8 ) ) . '.html';
+		$file_path     = $site_path . '/app/htdocs' . $extra_path . '/' . $check_file;
 
 		// The site can write here: drop whatever is at the path so a planted symlink isn't followed, then create the file exclusively.
 		if ( is_link( $file_path ) || is_file( $file_path ) ) {
@@ -1941,19 +1943,24 @@ abstract class EE_Site_Command {
 			$site_url = 'www.' . $site_url;
 		}
 
-		$site_url .= '/check.html';
+		$site_url .= '/' . $check_file;
 
 		$curl = curl_init();
 		curl_setopt( $curl, CURLOPT_URL, $site_url );
 		curl_setopt( $curl, CURLOPT_RETURNTRANSFER, true );
 		curl_setopt( $curl, CURLOPT_FOLLOWLOCATION, true );
 		curl_setopt( $curl, CURLOPT_HEADER, false );
-		$data = curl_exec( $curl );
+		$data      = curl_exec( $curl );
+		$http_code = curl_getinfo( $curl, CURLINFO_HTTP_CODE );
+		$final_url = curl_getinfo( $curl, CURLINFO_EFFECTIVE_URL );
+		$error     = curl_error( $curl );
 		curl_close( $curl );
 
 		if ( ! empty( $data ) && $random_string === $data ) {
 			$successful = true;
 			EE::debug( "pointed for $site_url" );
+		} else {
+			EE::debug( sprintf( 'www check failed for %s: HTTP %d from %s%s', $site_url, $http_code, $final_url, $error ? " ($error)" : '' ) );
 		}
 
 		if ( file_exists( $file_path ) ) {
