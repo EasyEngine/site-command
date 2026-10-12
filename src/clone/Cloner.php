@@ -378,6 +378,10 @@ class Site {
 			throw new \Exception( 'Unable to get info for site ' . $this->name );
 		}
 		$this->validate_site_details( $details );
+		// The credentials go into the database copy commands, which are logged.
+		if ( method_exists( 'EE', 'obfuscate' ) ) {
+			EE::obfuscate( array_intersect_key( $details, array_flip( [ 'db_password', 'db_root_password', 'app_admin_password' ] ) ) );
+		}
 		$this->site_details = $details;
 	}
 
