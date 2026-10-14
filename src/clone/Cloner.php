@@ -88,10 +88,10 @@ class Site {
 	}
 
 	public function validate_parent_site_present_on_host( string $site ): void {
-		$list_run = $this->execute( 'ee site list --format=json' );
-		$list_result = json_decode( $list_run->stdout, true );
+		$list_run    = $this->execute( 'ee site list --format=json' );
+		$list_result = self::parse_site_list( $list_run->stdout );
 
-		if ( ! is_array( $list_result ) ) {
+		if ( null === $list_result ) {
 			// An empty host has no parent to match; any other failure must surface, not be masked as "parent not found".
 			if ( ! $this->is_no_sites_error( $list_run ) ) {
 				throw new \Exception( 'Unable to get site list on ' . $this->user . '@' . $this->host );
@@ -343,6 +343,22 @@ class Site {
 		return false !== strpos( $output, 'Error: No sites found!' );
 	}
 
+	// The rows of `ee site list --format=json` output, or null when it isn't a JSON list of site rows.
+	private static function parse_site_list( string $stdout ) {
+		$sites = json_decode( $stdout, true );
+		// A JSON object decodes to an array too.
+		if ( ! is_array( $sites ) || '[' !== substr( ltrim( $stdout ), 0, 1 ) ) {
+			return null;
+		}
+		foreach ( $sites as $site ) {
+			if ( ! is_array( $site ) || ! isset( $site['site'] ) || ! is_string( $site['site'] ) ) {
+				return null;
+			}
+		}
+
+		return $sites;
+	}
+
 	public function site_exists(): bool {
 		$site_list = $this->execute( 'ee site list --format=json --no-color' );
 
@@ -354,10 +370,10 @@ class Site {
 			throw new \Exception( 'Unable to get site list on ' . $this->user . '@' . $this->host );
 		}
 
-		$sites = json_decode( $site_list->stdout, true );
+		$sites = self::parse_site_list( $site_list->stdout );
 
 		// Unparseable output must not read as "site doesn't exist": a clone rollback would then delete an existing destination site.
-		if ( ! is_array( $sites ) ) {
+		if ( null === $sites ) {
 			throw new \Exception( 'Unable to get site list on ' . $this->user . '@' . $this->host );
 		}
 
