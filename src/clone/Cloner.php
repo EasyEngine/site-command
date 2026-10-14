@@ -88,10 +88,8 @@ class Site {
 	}
 
 	public function validate_parent_site_present_on_host( string $site ): void {
-		$list_result = $this->execute( 'ee site list --format=json' );
-		$list_result = json_decode( $list_result->stdout, true );
-
-		foreach ( $list_result as $site_details ) {
+		// An empty host has no parent to match; any other failure surfaces instead of reading as "parent not found".
+		foreach ( $this->get_site_list() as $site_details ) {
 			$parent_site  = $site_details['site'];
 			$substr_match = strpos( $site, $parent_site );
 
@@ -268,16 +266,26 @@ class Site {
 		EE::debug( 'Creating site "' . $this->name . '" on "' . $this->host . '"' );
 
 		$new_site = '';
+		$created  = false;
 		$this->ensure_site_not_exists();
-		$this->rsp->add_step( 'clone-create-site', function () use ( $source_site, $assoc_args, &$new_site ) {
+		$this->rsp->add_step( 'clone-create-site', function () use ( $source_site, $assoc_args, &$new_site, &$created ) {
 			$new_site = $this->execute( $this->get_site_create_command( $source_site, $assoc_args ) );
+			$created  = 0 === $new_site->return_code;
 			$this->set_site_details();
-		}, function () {
-			$this->execute( 'ee site delete --skip-tty --yes ' . escapeshellarg( $this->name ) );
+		}, function () use ( &$created ) {
+			// A failed create may mean the name was already taken; only remove a site this run made.
+			if ( $created ) {
+				$this->execute( 'ee site delete --skip-tty --yes ' . escapeshellarg( $this->name ) );
+			}
 		} );
 
 		if ( ! $this->rsp->execute() ) {
 			throw new \Exception( 'Unable to create site.' );
+		}
+
+		// Don't set up admin-tools or mailhog on a site this run didn't create.
+		if ( ! $created ) {
+			return $new_site;
 		}
 
 		$admin_tools_command = $this->get_admin_tools_command( $source_site, $assoc_args );
@@ -313,23 +321,54 @@ class Site {
 		return $new_site;
 	}
 
-	public function site_exists(): bool {
-		$site_list = $this->execute( 'ee site list --format=json --no-color' );
+	// True when `ee site list` failed specifically because the host has no sites.
+	// `\EE::error( 'No sites found!' )` exits 1 and writes to stderr (merged into stdout under `ssh -t`).
+	private function is_no_sites_error( EE\ProcessRun $result ): bool {
+		if ( 1 !== $result->return_code ) {
+			return false;
+		}
 
-		if ( 1 === $site_list->return_code ) {
-			$error = trim ( preg_replace( '#\\x1b[[][^A-Za-z]*[A-Za-z]#', '', $site_list->stdout ) );
-			if ( 'Error: No sites found!' === $error ) {
-				return false;
+		$output = trim( preg_replace( '#\\x1b[[][^A-Za-z]*[A-Za-z]#', '', $result->stderr . $result->stdout ) );
+
+		return false !== strpos( $output, 'Error: No sites found!' );
+	}
+
+	// The rows of `ee site list --format=json` output, or null when it isn't a JSON list of site rows.
+	private static function parse_site_list( string $stdout ) {
+		$sites = json_decode( $stdout, true );
+		// A JSON object decodes to an array too.
+		if ( ! is_array( $sites ) || '[' !== substr( ltrim( $stdout ), 0, 1 ) ) {
+			return null;
+		}
+		foreach ( $sites as $site ) {
+			if ( ! is_array( $site ) || ! isset( $site['site'], $site['status'] ) || ! is_string( $site['site'] ) || ! in_array( $site['status'], [ 'enabled', 'disabled' ], true ) ) {
+				return null;
 			}
 		}
 
-		if ( 0 !== $site_list->return_code ) {
+		return $sites;
+	}
+
+	// The host's sites ([] when it has none).
+	private function get_site_list(): array {
+		$result = $this->execute( 'ee site list --format=json --no-color' );
+
+		if ( $this->is_no_sites_error( $result ) ) {
+			return [];
+		}
+
+		$sites = 0 === $result->return_code ? self::parse_site_list( $result->stdout ) : null;
+
+		// Unreadable output must not read as "site doesn't exist": a clone rollback would then delete an existing destination site.
+		if ( null === $sites ) {
 			throw new \Exception( 'Unable to get site list on ' . $this->user . '@' . $this->host );
 		}
 
-		$sites = json_decode( $site_list->stdout, true );
+		return $sites;
+	}
 
-		foreach ( $sites as $site ) {
+	public function site_exists(): bool {
+		foreach ( $this->get_site_list() as $site ) {
 			if ( $site['site'] === $this->name ) {
 				if ( 'disabled' === $site['status'] ) {
 					throw new \Exception( 'The site that you want to clone has been disabled. Please enable the site and clone again.' );
