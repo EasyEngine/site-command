@@ -30,6 +30,8 @@ class Site_Backup_Restore {
 	const RCLONE_MIN_VERSION_MT_WRITE_BUFFER = '1.63.0'; // --multi-thread-write-buffer-size (rclone v1.63.0)
 	const RCLONE_MIN_VERSION_MT_CHUNK_SIZE   = '1.64.0'; // --multi-thread-chunk-size (rclone v1.64.0)
 
+	const METADATA_SECRET_KEYS = [ 'db_password', 'db_root_password', 'app_admin_password', 'site_auth_password' ];
+
 	private $fs;
 	public $site_data;
 	private $rclone_config_path;
@@ -80,9 +82,6 @@ class Site_Backup_Restore {
 
 		// Handle --dash-auth flag for EasyDash integration
 		if ( $dash_auth ) {
-			// Debug: Log the raw dash_auth value received
-			EE::debug( 'Received --dash-auth value: ' . $dash_auth );
-
 			// Parse backup-id:backup-verification-token format
 			$auth_parts = explode( ':', $dash_auth, 2 );
 			if ( count( $auth_parts ) !== 2 || empty( $auth_parts[0] ) || empty( $auth_parts[1] ) ) {
@@ -101,10 +100,13 @@ class Site_Backup_Restore {
 			$this->dash_backup_id    = $auth_parts[0];
 			$this->dash_verify_token = $auth_parts[1];
 			$this->dash_api_url      = $ed_api_url;
+			// The token also goes into the logged callback payloads.
+			if ( method_exists( 'EE', 'obfuscate' ) ) {
+				EE::obfuscate( [ $dash_auth, $this->dash_verify_token ] );
+			}
 
 			// Debug: Log parsed values
 			EE::debug( 'Parsed backup_id: ' . $this->dash_backup_id );
-			EE::debug( 'Parsed verify_token: ' . $this->dash_verify_token );
 			EE::debug( 'API URL: ' . $this->dash_api_url );
 
 			// Register shutdown handler to send failure callback if backup doesn't complete
@@ -434,6 +436,10 @@ class Site_Backup_Restore {
 		$remote_path                = $this->get_remote_path();
 		$backup_data['remote_path'] = explode( ':', $remote_path )[1];
 		$backup_data                = array_merge( $this->site_data, $backup_data );
+		// Credentials stay out of the backup: restore uses the current site's, and the metadata is also kept unencrypted on the remote and in EE_BACKUP_DIR.
+		foreach ( self::METADATA_SECRET_KEYS as $key ) {
+			unset( $backup_data[ $key ] );
+		}
 
 		$backup_data_file = $backup_dir . '/metadata.json';
 		$metadata_copy    = EE_BACKUP_DIR . '/' . $this->site_data['site_url'] . '.metadata.json';
@@ -834,15 +840,17 @@ class Site_Backup_Restore {
 		// metacharacter can survive either shell layer.
 		$wp_version = preg_replace( '/[^0-9A-Za-z.\-]/', '', (string) $wp_version );
 
-		// wp core download extracts the WordPress archive in PHP, which needs more
-		// than a typical site's 128M memory_limit and OOMs on low-RAM hosts. Run it
-		// under a higher limit via `php -d memory_limit=256M $(which wp)`, matching
-		// the site-creation path in site-type-wp. The command runs through `bash -c`
-		// in the container, so the `$` in `$(which wp)` is escaped here to defer the
-		// substitution to the container's shell (EE's `wp` is the phar, invoked
-		// directly, so the WP_CLI_PHP_ARGS env var would not apply).
+		// Same download, extraction and checksum gate as site creation (see get_wp_core_download_command()).
 		$args       = [ 'shell', $this->site_data['site_url'] ];
-		$assoc_args = [ 'command' => sprintf( "php -d memory_limit=256M \\$(which wp) core download --force --version=%s", $wp_version ) ];
+		$assoc_args = [
+			'command' => \EE\Site\Utils\get_wp_core_download_command(
+				$this->site_data['site_container_fs_path'],
+				[
+					'version' => $wp_version,
+					'force'   => true,
+				]
+			),
+		];
 		$options    = [ 'skip-tty' => true ];
 		EE::run_command( $args, $assoc_args, $options );
 
@@ -1702,7 +1710,6 @@ class Site_Backup_Restore {
 
 		// Debug: Log the values being used for callback
 		EE::debug( 'Sending success callback with backup_id: ' . $backup_id );
-		EE::debug( 'Sending success callback with verify_token: ' . $verify_token );
 
 		// Build metadata for the API call - always include all fields
 		$metadata = [
@@ -1725,7 +1732,7 @@ class Site_Backup_Restore {
 			'metadata' => $metadata,
 		];
 
-		EE::debug( 'Payload being sent: ' . json_encode( $payload ) );
+		EE::debug( 'Payload being sent: ' . json_encode( array_merge( $payload, [ 'verify' => '******' ] ) ) );
 
 		return $this->send_dash_request( $endpoint, $payload );
 	}
