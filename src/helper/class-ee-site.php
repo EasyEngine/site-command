@@ -272,7 +272,7 @@ abstract class EE_Site_Command {
 			if ( \EE_DOCKER::docker_compose_down( $site_fs_path ) ) {
 				\EE::log( "[$site_url] Docker Containers removed." );
 			} else {
-				\EE::exec( "docker rm -f $(docker ps -q -f=label=created_by=EasyEngine -f=label=site_name=$site_url)" );
+				\EE::exec( 'docker rm -f $(docker ps -q -f=label=created_by=EasyEngine -f=' . escapeshellarg( "label=site_name=$site_url" ) . ')' );
 				if ( $level > 3 ) {
 					\EE::warning( 'Error in removing docker containers.' );
 				}
@@ -281,7 +281,7 @@ abstract class EE_Site_Command {
 
 		$volumes = \EE_DOCKER::get_volumes_by_label( $site_url );
 		foreach ( $volumes as $volume ) {
-			\EE::exec( 'docker volume rm ' . $volume );
+			\EE::exec( 'docker volume rm ' . escapeshellarg( $volume ) );
 		}
 
 		$db_script_path = \EE\Utils\get_temp_dir() . 'db_exec';
@@ -366,7 +366,7 @@ abstract class EE_Site_Command {
 
 		if ( $reload ) {
 			\EE\Site\Utils\reload_global_nginx_proxy();
-			EE::exec( 'docker exec ' . EE_PROXY_TYPE . " bash -c 'rm -rf /var/cache/nginx/$site_url'" );
+			EE::exec( 'docker exec ' . EE_PROXY_TYPE . ' bash -c ' . escapeshellarg( 'rm -rf ' . escapeshellarg( "/var/cache/nginx/$site_url" ) ) );
 		}
 
 		try {
@@ -1472,7 +1472,9 @@ abstract class EE_Site_Command {
 		if ( ! empty( $object ) ) {
 			if ( 1 === intval( $this->site_data->cache_mysql_query ) ) {
 				$purge_key = $this->site_data->site_url . '_obj';
-				EE\Site\Utils\clean_site_cache( $purge_key );
+				if ( ! EE\Site\Utils\clean_site_cache( $purge_key ) ) {
+					$error[] = 'Unable to clear the object cache.';
+				}
 			} else {
 				$error[] = 'Site object cache is not enabled.';
 			}
@@ -1482,7 +1484,9 @@ abstract class EE_Site_Command {
 		if ( ! empty( $page ) ) {
 			if ( 1 === intval( $this->site_data->cache_nginx_fullpage ) ) {
 				$purge_key = $this->site_data->site_url . '_page';
-				EE\Site\Utils\clean_site_cache( $purge_key );
+				if ( ! EE\Site\Utils\clean_site_cache( $purge_key ) ) {
+					$error[] = 'Unable to clear the page cache.';
+				}
 			} else {
 				$error[] = 'Site page cache is not enabled.';
 			}
@@ -1491,9 +1495,12 @@ abstract class EE_Site_Command {
 		// Clear proxy cache.
 		if ( ! empty( $proxy ) ) {
 			if ( 'on' === $this->site_data->proxy_cache ) {
-				EE::exec( sprintf( 'docker exec -it %s bash -c "rm -r /var/cache/nginx/%s/*"', EE_PROXY_TYPE, $this->site_data->site_url ) );
+				// No -it, as in clean_site_cache(). rm fails harmlessly when the cache dir is already empty.
+				EE::exec( sprintf( 'docker exec %s bash -c "rm -r /var/cache/nginx/%s/*"', EE_PROXY_TYPE, $this->site_data->site_url ) );
 				EE::log( 'Restarting nginx-proxy after clearing proxy cache.' );
-				EE::exec( sprintf( 'docker exec -it %1$s bash -c "nginx -t" && docker restart %1$s', EE_PROXY_TYPE ) );
+				if ( ! EE::exec( sprintf( 'docker exec %1$s bash -c "nginx -t" && docker restart %1$s', EE_PROXY_TYPE ) ) ) {
+					$error[] = 'Unable to restart nginx-proxy after clearing the proxy cache.';
+				}
 			} else {
 				$error[] = 'Proxy cache is not enabled on site.';
 			}
@@ -1910,8 +1917,25 @@ abstract class EE_Site_Command {
 		$random_string = EE\Utils\random_password();
 		$successful    = false;
 		$extra_path    = str_replace( '/var/www/htdocs', '', $site_container_path );
-		$file_path     = $site_path . '/app/htdocs' . $extra_path . '/check.html';
-		file_put_contents( $file_path, $random_string );
+		// A new name per check: the site's nginx caches open files for 2 minutes (open_file_cache), so a reused name serves the previous check's file.
+		$check_file    = 'ee-www-check-' . bin2hex( random_bytes( 8 ) ) . '.html';
+		$file_path     = $site_path . '/app/htdocs' . $extra_path . '/' . $check_file;
+
+		// The site can write here: drop whatever is at the path so a planted symlink isn't followed, then create the file exclusively.
+		if ( is_link( $file_path ) || is_file( $file_path ) ) {
+			unlink( $file_path );
+		}
+		// The site's nginx has to read the file whatever the umask is.
+		$old_umask = umask( 0022 );
+		$handle    = @fopen( $file_path, 'x' );
+		umask( $old_umask );
+		if ( false === $handle ) {
+			EE::debug( "Unable to create $file_path" );
+
+			return false;
+		}
+		fwrite( $handle, $random_string );
+		fclose( $handle );
 
 		if ( 0 === strpos( $site_url, 'www.' ) ) {
 			$site_url = ltrim( $site_url, 'www.' );
@@ -1919,19 +1943,24 @@ abstract class EE_Site_Command {
 			$site_url = 'www.' . $site_url;
 		}
 
-		$site_url .= '/check.html';
+		$site_url .= '/' . $check_file;
 
 		$curl = curl_init();
 		curl_setopt( $curl, CURLOPT_URL, $site_url );
 		curl_setopt( $curl, CURLOPT_RETURNTRANSFER, true );
 		curl_setopt( $curl, CURLOPT_FOLLOWLOCATION, true );
 		curl_setopt( $curl, CURLOPT_HEADER, false );
-		$data = curl_exec( $curl );
+		$data      = curl_exec( $curl );
+		$http_code = curl_getinfo( $curl, CURLINFO_HTTP_CODE );
+		$final_url = curl_getinfo( $curl, CURLINFO_EFFECTIVE_URL );
+		$error     = curl_error( $curl );
 		curl_close( $curl );
 
 		if ( ! empty( $data ) && $random_string === $data ) {
 			$successful = true;
 			EE::debug( "pointed for $site_url" );
+		} else {
+			EE::debug( sprintf( 'www check failed for %s: HTTP %d from %s%s', $site_url, $http_code, $final_url, $error ? " ($error)" : '' ) );
 		}
 
 		if ( file_exists( $file_path ) ) {
@@ -2753,6 +2782,10 @@ abstract class EE_Site_Command {
 
 		list( $source, $destination ) = get_transfer_details( $args[0], $args[1] );
 
+		// The destination is a new site, created by running `ee site create` through the shell.
+		$destination->name = strtolower( $destination->name );
+		\EE\Site\Utils\validate_site_name( $destination->name );
+
 		try {
 
 			check_site_access( $source, $destination );
@@ -2791,7 +2824,7 @@ abstract class EE_Site_Command {
 				copy_site_db( $source, $destination );
 			}
 
-			echo $destination->execute( 'ee site info ' . $destination->name )->stdout;
+			echo $destination->execute( 'ee site info ' . escapeshellarg( $destination->name ) )->stdout;
 			$message = 'Site cloned successfully.';
 
 			if ( $destination->site_details['site_type'] === 'wp' ) {
@@ -2843,11 +2876,8 @@ abstract class EE_Site_Command {
 	 *     # Sync site to remote
 	 *     $ ee site sync foo.com root@foo.com:bar.com
 	 *
-	 *     # Sync site from remote. Only clone files and db, not uploads
+	 *     # Sync site from remote. Only sync files and db, not uploads
 	 *     $ ee site sync root@foo.com:foo.com bar.com --files --db
-	 *
-	 *     # Sync site from remote and enable ssl
-	 *     $ ee site sync root@foo.com:foo.com bar.com --ssl=le --wildcard
 	 *
 	 */
 	public function sync( $args, $assoc_args ) {

@@ -38,6 +38,11 @@ class Site_Self_signed {
 	 */
 	private $password;
 
+	/**
+	 * @var string $trusted_copy Copy of the root certificate in the system trust store (Linux).
+	 */
+	private $trusted_copy = '/usr/local/share/ca-certificates/easyengine.crt';
+
 	public function __construct() {
 
 		$this->fs       = new Filesystem();
@@ -83,6 +88,12 @@ class Site_Self_signed {
 		$root_conf = $this->conf_dir . '/rootCA.conf';
 
 		if ( $this->fs->exists( $this->root_pem ) && ! empty( $this->password ) ) {
+			try {
+				$this->repair_root_cert();
+			} catch ( \Throwable $e ) {
+				EE::warning( 'Could not repair the self-signed root CA: ' . $e->getMessage() );
+			}
+
 			return true;
 		}
 
@@ -92,14 +103,122 @@ class Site_Self_signed {
 
 		// Escape every interpolated value: these strings run through /bin/sh -c, so an
 		// unescaped password (or path) could inject an attacker subshell as root.
-		EE::exec( sprintf( 'openssl genrsa -des3 -passout pass:%s -out %s 2048', escapeshellarg( $this->password ), escapeshellarg( $this->root_key ) ) );
-		EE::exec( sprintf( 'openssl req -x509 -new -nodes -key %s -sha256 -days 36500 -passin pass:%s -out %s -config %s', escapeshellarg( $this->root_key ), escapeshellarg( $this->password ), escapeshellarg( $this->root_pem ), escapeshellarg( $root_conf ) ) );
+		EE::exec( sprintf( 'openssl genrsa -des3 -passout pass:%s -out %s 2048', escapeshellarg( $this->password ), escapeshellarg( $this->root_key ) ), false, false, [ $this->password ] );
+		$this->issue_root_cert( $this->root_pem, $root_conf );
 
 		$this->trust_certificate( $this->root_pem );
 
 		Option::set( 'self-signed-secret', $this->password );
 		// Cleanup files.
 		$this->fs->remove( $root_conf );
+	}
+
+	/**
+	 * Self-sign the root certificate with the existing root key and the v3_ca extensions.
+	 *
+	 * @param string $out_path  Where to write the certificate.
+	 * @param string $root_conf Root openssl config built from openssl.conf.mustache.
+	 *
+	 * @return bool
+	 */
+	private function issue_root_cert( $out_path, $root_conf ) {
+		// Without explicit CA extensions, OpenSSL >= 3.2 issues a v3 root lacking basicConstraints CA:TRUE, which nothing accepts as a CA.
+		return EE::exec( sprintf( 'openssl req -x509 -new -nodes -key %s -sha256 -days 36500 -passin pass:%s -out %s -config %s -extensions v3_ca', escapeshellarg( $this->root_key ), escapeshellarg( $this->password ), escapeshellarg( $out_path ), escapeshellarg( $root_conf ) ), false, false, [ $this->password ] );
+	}
+
+	/**
+	 * Whether the root certificate is a v3 certificate that is not marked as a CA.
+	 *
+	 * v1 roots (issued by OpenSSL < 3.2) are accepted as trust anchors as they are. Their leaves name the root by
+	 * issuer and serial number, so a re-issued root would either break them or reuse the serial of the copies users
+	 * imported into browsers.
+	 *
+	 * @param string $pem Root certificate.
+	 *
+	 * @return bool
+	 */
+	public static function root_cert_needs_repair( $pem ) {
+		$cert = openssl_x509_parse( $pem );
+		if ( false === $cert || empty( $cert['version'] ) ) {
+			return false;
+		}
+		$constraints = isset( $cert['extensions']['basicConstraints'] ) ? $cert['extensions']['basicConstraints'] : '';
+
+		return false === strpos( $constraints, 'CA:TRUE' );
+	}
+
+	/**
+	 * Re-issue a root certificate that is not marked as a CA, keeping its key and subject.
+	 *
+	 * Existing leaves identify the root by key id, so they verify against the new root unchanged and no site
+	 * certificate is re-signed. Nothing is replaced unless every leaf signed by the root key verifies.
+	 *
+	 * @return bool True if the root certificate was replaced.
+	 * @throws \Exception When the new root can't be issued or doesn't validate the existing leaves.
+	 */
+	public function repair_root_cert() {
+		if ( empty( $this->password ) || ! $this->fs->exists( [ $this->root_pem, $this->root_key ] ) ) {
+			return false;
+		}
+
+		$old_pem = file_get_contents( $this->root_pem );
+		if ( ! self::root_cert_needs_repair( $old_pem ) ) {
+			// Also completes a repair whose trust store refresh failed.
+			$this->retrust_root_cert();
+
+			return false;
+		}
+
+		EE::log( 'Re-issuing the self-signed root CA with CA:TRUE (same key, existing site certificates stay valid).' );
+
+		$root_conf = $this->conf_dir . '/rootCA-repair.' . getmypid() . '.conf';
+		$new_pem   = $this->conf_dir . '/rootCA.pem.' . getmypid() . '.new';
+		$this->build_certificate_conf( $root_conf, 'EasyEngine' );
+		try {
+			if ( ! $this->issue_root_cert( $new_pem, $root_conf ) || ! $this->fs->exists( $new_pem ) ) {
+				throw new \Exception( 'openssl could not issue the new root certificate.' );
+			}
+
+			$old = openssl_x509_parse( $old_pem );
+			$new = openssl_x509_parse( file_get_contents( $new_pem ) );
+			if ( false === $new || $old['subject'] !== $new['subject'] || self::root_cert_needs_repair( file_get_contents( $new_pem ) ) ) {
+				throw new \Exception( 'the new root certificate does not match the old one.' );
+			}
+
+			foreach ( glob( EE_ROOT_DIR . '/services/nginx-proxy/certs/*.crt' ) ?: [] as $leaf ) {
+				if ( 1 !== openssl_x509_verify( file_get_contents( $leaf ), $old_pem ) ) {
+					continue;
+				}
+				if ( ! EE::exec( sprintf( 'openssl verify -CAfile %s %s', escapeshellarg( $new_pem ), escapeshellarg( $leaf ) ) ) ) {
+					throw new \Exception( "$leaf does not verify against the new root certificate." );
+				}
+			}
+
+			$this->fs->rename( $new_pem, $this->root_pem, true );
+		} finally {
+			$this->fs->remove( [ $root_conf, $new_pem ] );
+		}
+
+		$this->retrust_root_cert();
+		if ( IS_DARWIN ) {
+			// The keychain needs an interactive sudo, which a migration can't ask for.
+			EE::warning( "Trust the new EasyEngine root CA: sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain {$this->root_pem}" );
+		}
+		EE::log( "If you imported the old EasyEngine root CA into a browser, import {$this->root_pem} again." );
+
+		return true;
+	}
+
+	/**
+	 * Refresh the system trust store's copy of the root certificate (Linux) when it is outdated.
+	 *
+	 * A removed copy stays removed: an admin may have stopped trusting the root on purpose.
+	 */
+	public function retrust_root_cert() {
+		if ( IS_DARWIN || ! is_file( $this->trusted_copy ) || file_get_contents( $this->trusted_copy ) === file_get_contents( $this->root_pem ) ) {
+			return;
+		}
+		$this->trust_certificate( $this->root_pem );
 	}
 
 	/**
@@ -137,10 +256,10 @@ class Site_Self_signed {
 
 		// Paths here derive from the (unvalidated) site name and run through /bin/sh -c,
 		// so escape every interpolated value to prevent shell injection via the site name.
-		EE::exec( sprintf( 'openssl req -new -sha256 -nodes -passout pass:%s -out %s -newkey rsa:2048 -keyout %s -config %s', escapeshellarg( $this->password ), escapeshellarg( $csr_path ), escapeshellarg( $key_path ), escapeshellarg( $conf_path ) ) );
+		EE::exec( sprintf( 'openssl req -new -sha256 -nodes -passout pass:%s -out %s -newkey rsa:2048 -keyout %s -config %s', escapeshellarg( $this->password ), escapeshellarg( $csr_path ), escapeshellarg( $key_path ), escapeshellarg( $conf_path ) ), false, false, [ $this->password ] );
 
 		$serial_string = $this->fs->exists( $this->root_srl ) ? sprintf( '-CAserial %s', escapeshellarg( $this->root_srl ) ) : sprintf( '-CAcreateserial -CAserial %s', escapeshellarg( $this->root_srl ) );
-		EE::exec( sprintf( 'openssl x509 -req -in %s -CA %s -CAkey %s %s -passin pass:%s -out %s -days 36500 -sha256 -extfile %s', escapeshellarg( $csr_path ), escapeshellarg( $this->root_pem ), escapeshellarg( $this->root_key ), $serial_string, escapeshellarg( $this->password ), escapeshellarg( $crt_path ), escapeshellarg( $v3_path ) ) );
+		EE::exec( sprintf( 'openssl x509 -req -in %s -CA %s -CAkey %s %s -passin pass:%s -out %s -days 36500 -sha256 -extfile %s', escapeshellarg( $csr_path ), escapeshellarg( $this->root_pem ), escapeshellarg( $this->root_key ), $serial_string, escapeshellarg( $this->password ), escapeshellarg( $crt_path ), escapeshellarg( $v3_path ) ), false, false, [ $this->password ] );
 	}
 
 	/**
@@ -158,8 +277,7 @@ class Site_Self_signed {
 				'sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain %s', escapeshellarg( $crt_path )
 			) );
 		} else {
-			$cert_path = '/usr/local/share/ca-certificates';
-			$this->fs->copy( $this->root_pem, '/usr/local/share/ca-certificates/easyengine.crt' );
+			$this->fs->copy( $this->root_pem, $this->trusted_copy, true );
 			EE::exec( 'update-ca-certificates' );
 		}
 	}

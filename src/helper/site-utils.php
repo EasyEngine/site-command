@@ -108,6 +108,11 @@ function get_site_info( $args, $site_enabled_check = true, $exit_if_not_found = 
 		return false;
 	}
 
+	// Keeps this site's credentials out of the logs of whatever the command runs next.
+	if ( method_exists( 'EE', 'obfuscate' ) ) {
+		EE::obfuscate( [ $data->db_password, $data->db_root_password, $data->app_admin_password ] );
+	}
+
 	if ( ! $data->site_enabled && $site_enabled_check ) {
 		\EE::error( sprintf( 'Site %1$s is not enabled. Use `ee site enable %1$s` to enable it.', $data->site_url ) );
 	}
@@ -178,15 +183,96 @@ function sql_quote_identifier( $value ) {
 }
 
 /**
+ * Quotes a database name for a database-level GRANT or REVOKE.
+ *
+ * `_`, `%` and `\` are pattern characters there, even inside backticks: unescaped, `a_b` would also match `axb`.
+ * The name may not exceed 64 characters, so when there is no room to escape them all, each one left over becomes `_`, which still matches it.
+ *
+ * @param string $db_name Database name.
+ *
+ * @return string
+ */
+function sql_quote_grant_database( $db_name ) {
+
+	$length  = preg_match_all( '/./su', $db_name );
+	$spare   = 64 - ( false === $length ? strlen( $db_name ) : $length );
+	$pattern = preg_replace_callback(
+		'/[\\\\_%]/',
+		function ( $match ) use ( &$spare ) {
+			return $spare-- > 0 ? '\\' . $match[0] : '_';
+		},
+		$db_name
+	);
+
+	return sql_quote_identifier( $pattern );
+}
+
+/**
+ * Length of a database name in a GRANT once its pattern characters are escaped.
+ *
+ * @param string $db_name Database name.
+ *
+ * @return int Characters.
+ */
+function get_grant_name_length( $db_name ) {
+
+	$length = preg_match_all( '/./su', $db_name );
+
+	return ( false === $length ? strlen( $db_name ) : $length ) + preg_match_all( '/[\\\\_%]/', $db_name );
+}
+
+/**
+ * Whether a GRANT can cover exactly this database: the escaped name has to fit in 64 characters.
+ *
+ * @param string $db_name Database name.
+ *
+ * @return bool
+ */
+function db_name_fits_exact_grant( $db_name ) {
+
+	return get_grant_name_length( $db_name ) <= 64;
+}
+
+/**
+ * Cuts a database name so that, with $suffix appended, its escaped GRANT name fits in 64 characters and the name in 64 bytes.
+ *
+ * @param string $db_name Database name.
+ * @param string $suffix  Suffix to append.
+ *
+ * @return string
+ */
+function cut_db_name_for_grant( $db_name, $suffix = '' ) {
+
+	$chars = preg_split( '//u', $db_name, -1, PREG_SPLIT_NO_EMPTY );
+	if ( false === $chars ) {
+		$chars = str_split( $db_name );
+	}
+	$room  = 64 - get_grant_name_length( $suffix );
+	$bytes = 64 - strlen( $suffix );
+	$name  = '';
+	foreach ( $chars as $char ) {
+		$room  -= false === strpos( '\\_%', $char ) ? 1 : 2;
+		$bytes -= strlen( $char );
+		if ( $room < 0 || $bytes < 0 ) {
+			break;
+		}
+		$name .= $char;
+	}
+
+	return $name . $suffix;
+}
+
+/**
  * Runs SQL as root on the global database.
  *
  * The SQL goes through a file, so names and passwords never pass through a shell.
  *
- * @param string $sql SQL statements to run.
+ * @param string $sql       SQL statements to run.
+ * @param array  $obfuscate Secrets in the SQL, masked in the logged output.
  *
  * @return bool|object Result of EE::launch(), or false if the SQL could not be copied to the container.
  */
-function run_global_db_sql( $sql ) {
+function run_global_db_sql( $sql, $obfuscate = [] ) {
 
 	$sql_path = tempnam( \EE\Utils\get_temp_dir(), 'ee-db-' );
 	file_put_contents( $sql_path, $sql );
@@ -197,9 +283,10 @@ function run_global_db_sql( $sql ) {
 		return false;
 	}
 
-	$script = sprintf( 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -N -B < %1$s; rc=$?; rm -f %1$s; exit $rc', $container_path );
+	// The client echoes a failing statement to STDERR, which is logged; `--loose-` only warns on clients without the option.
+	$script = sprintf( 'mysql --loose-skip-print-query-on-error -uroot -p"$MYSQL_ROOT_PASSWORD" -N -B < %1$s; rc=$?; rm -f %1$s; exit $rc', $container_path );
 
-	return EE::launch( sprintf( 'docker exec %s sh -c %s', GLOBAL_DB_CONTAINER, escapeshellarg( $script ) ) );
+	return EE::launch( sprintf( 'docker exec %s sh -c %s', GLOBAL_DB_CONTAINER, escapeshellarg( $script ) ), false, true, $obfuscate );
 }
 
 /**
@@ -244,7 +331,7 @@ function global_db_has_user( $db_user ) {
 }
 
 /**
- * Default database name of a site, cut to MySQL's 64-character limit.
+ * Default database name of a site, cut so that a GRANT can cover exactly this database.
  *
  * @param string $site_url Name of the site.
  *
@@ -252,7 +339,7 @@ function global_db_has_user( $db_user ) {
  */
 function get_default_db_name( $site_url ) {
 
-	return substr( str_replace( [ '.', '-' ], '_', $site_url ), 0, 64 );
+	return cut_db_name_for_grant( str_replace( [ '.', '-' ], '_', $site_url ) );
 }
 
 /**
@@ -303,7 +390,7 @@ function reserve_global_db_names( $db_name, $db_user, $explicit_db_name ) {
 
 	for ( $i = 2; $i <= 100; $i++ ) {
 		$suffix    = '_' . $i;
-		$candidate = substr( $db_name, 0, 64 - strlen( $suffix ) ) . $suffix;
+		$candidate = cut_db_name_for_grant( $db_name, $suffix );
 		if ( ! $is_taken( $candidate ) ) {
 			EE::log( sprintf( 'Database `%s` already exists, using `%s` instead.', $db_name, $candidate ) );
 
@@ -338,13 +425,13 @@ function create_user_in_db( $db_host, $db_name = '', $db_user = '', $db_pass = '
 
 		$user     = sql_quote_string( $db_user ) . "@'%'";
 		$database = sql_quote_identifier( $db_name );
-		$ok       = function ( $sql ) {
-			$result = run_global_db_sql( $sql );
+		$ok       = function ( $sql, $obfuscate = [] ) {
+			$result = run_global_db_sql( $sql, $obfuscate );
 
 			return $result && 0 === $result->return_code;
 		};
 
-		if ( ! $ok( sprintf( 'CREATE USER %s IDENTIFIED BY %s;', $user, sql_quote_string( $db_pass ) ) ) ) {
+		if ( ! $ok( sprintf( 'CREATE USER %s IDENTIFIED BY %s;', $user, sql_quote_string( $db_pass ) ), [ sql_quote_string( $db_pass ), $db_pass ] ) ) {
 			return false;
 		}
 		if ( ! $ok( sprintf( 'CREATE DATABASE %s;', $database ) ) ) {
@@ -352,9 +439,10 @@ function create_user_in_db( $db_host, $db_name = '', $db_user = '', $db_pass = '
 
 			return false;
 		}
-		// `_` and `%` are wildcards in a GRANT's database name: unescaped, `a_b` would also grant on `axb`.
-		$grant_on = sql_quote_identifier( addcslashes( $db_name, '\\_%' ) );
-		if ( ! $ok( sprintf( 'GRANT ALL PRIVILEGES ON %s.* TO %s; FLUSH PRIVILEGES;', $grant_on, $user ) ) ) {
+		if ( ! db_name_fits_exact_grant( $db_name ) ) {
+			EE::warning( sprintf( 'Database name `%s` is too long for its grant to cover only this database: user `%s` may also get access to other databases whose names have the same length. A shorter --dbname avoids this.', $db_name, $db_user ) );
+		}
+		if ( ! $ok( sprintf( 'GRANT ALL PRIVILEGES ON %s.* TO %s; FLUSH PRIVILEGES;', sql_quote_grant_database( $db_name ), $user ) ) ) {
 			// Separate calls: a batch stops at its first error.
 			$ok( sprintf( 'DROP DATABASE %s;', $database ) );
 			$ok( sprintf( 'DROP USER %s;', $user ) );
@@ -562,6 +650,36 @@ function get_ssl_policy() {
 }
 
 /**
+ * Checks whether a site name is a lowercase hostname with at least two labels.
+ *
+ * @param string $site_url Name of the site.
+ *
+ * @return bool
+ */
+function is_valid_site_name( $site_url ) {
+
+	// The name ends up in shell commands, file paths and docker names, so allow only RFC 1123 hostnames (IDNs in punycode).
+	$label = '[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?';
+
+	// 64, not 253: the name is also a container hostname and a certificate CN, both capped at 64.
+	return is_string( $site_url )
+		&& strlen( $site_url ) <= 64
+		&& 1 === preg_match( '/^' . $label . '(?:\.' . $label . ')+$/D', $site_url );
+}
+
+/**
+ * Exits with an error if the site name is not a valid hostname.
+ *
+ * @param string $site_url Name of the site.
+ */
+function validate_site_name( $site_url ) {
+
+	if ( ! is_valid_site_name( $site_url ) ) {
+		\EE::error( sprintf( 'Invalid site name: %s. A site name must be a hostname like example.com: two or more dot-separated labels of 1-63 letters, digits or hyphens that do not start or end with a hyphen, at most 64 characters in total. Use the punycode (xn--) form for internationalized domain names.', $site_url ) );
+	}
+}
+
+/**
  * Function to create entry in /etc/hosts.
  *
  * @param string $site_url Name of the site.
@@ -581,8 +699,8 @@ function create_etc_hosts_entry( $site_url ) {
 	}
 	$host_line = LOCALHOST_IP . "\t$site_url";
 	$etc_hosts = file_get_contents( '/etc/hosts' );
-	if ( ! preg_match( "/\s+$site_url\$/m", $etc_hosts ) ) {
-		if ( EE::exec( "/bin/bash -c 'echo \"$host_line\" >> /etc/hosts'" ) ) {
+	if ( ! preg_match( '/\s+' . preg_quote( $site_url, '/' ) . '$/m', $etc_hosts ) ) {
+		if ( EE::exec( '/bin/bash -c ' . escapeshellarg( 'echo ' . escapeshellarg( $host_line ) . ' >> /etc/hosts' ) ) ) {
 			EE::success( 'Host entry successfully added.' );
 		} else {
 			EE::warning( "Failed to add $site_url in host entry, Please do it manually!" );
@@ -751,9 +869,13 @@ function set_postfix_files( $site_url, $site_service_dir ) {
 	$fs = new Filesystem();
 	$fs->mkdir( $site_service_dir . '/postfix/ssl' );
 	$ssl_dir = $site_service_dir . '/postfix/ssl';
+	$key     = $ssl_dir . '/server.key';
 
-	if ( ! EE::exec( sprintf( "openssl req -new -x509 -nodes -days 365 -subj \"/CN=smtp.%s\" -out $ssl_dir/server.crt -keyout $ssl_dir/server.key", $site_url ) )
-	     && EE::exec( "chmod 0600 $ssl_dir/server.key" ) ) {
+	// A CN longer than 64 characters makes openssl fail; the cert is only used for opportunistic STARTTLS.
+	$common_name = substr( 'smtp.' . $site_url, 0, 64 );
+
+	$generated = EE::exec( sprintf( 'openssl req -new -x509 -nodes -days 365 -subj %s -out %s -keyout %s', escapeshellarg( '/CN=' . $common_name ), escapeshellarg( $ssl_dir . '/server.crt' ), escapeshellarg( $key ) ) );
+	if ( ! $generated || ! EE::exec( 'chmod 0600 ' . escapeshellarg( $key ) ) ) {
 		throw new \Exception( 'Unable to generate ssl key for postfix' );
 	}
 }
@@ -774,15 +896,15 @@ function configure_postfix( $site_url, $site_fs_path ) {
 		$default_from = "no-reply@$site_url";
 	}
 
-	EE::exec( \EE_DOCKER::docker_compose_with_custom() . " exec php sh -c 'echo \"host postfix\ntls off\nfrom $default_from\" > /etc/msmtprc'" );
+	EE::exec( \EE_DOCKER::docker_compose_with_custom() . ' exec php sh -c ' . escapeshellarg( 'echo ' . escapeshellarg( "host postfix\ntls off\nfrom $default_from" ) . ' > /etc/msmtprc' ) );
 	$relay_host = EE::launch( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix sh -c \'echo $RELAY_HOST\'' )->stdout;
 	$relay_host = trim( $relay_host, "\n\r" );
-	EE::exec( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e \'relayhost = ' . $relay_host . '\'' );
+	EE::exec( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e ' . escapeshellarg( 'relayhost = ' . $relay_host ) );
 	EE::exec( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e \'smtpd_recipient_restrictions = permit_mynetworks\'' );
-	$launch      = EE::launch( sprintf( 'docker inspect -f \'{{ with (index .IPAM.Config 0) }}{{ .Subnet }}{{ end }}\' %s', $site_url ) );
+	$launch      = EE::launch( sprintf( 'docker inspect -f \'{{ with (index .IPAM.Config 0) }}{{ .Subnet }}{{ end }}\' %s', escapeshellarg( $site_url ) ) );
 	$subnet_cidr = trim( $launch->stdout );
-	EE::exec( sprintf( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e \'mynetworks = %s 127.0.0.0/8\'', $subnet_cidr ) );
-	EE::exec( sprintf( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e \'myhostname = %s\'', $site_url ) );
+	EE::exec( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e ' . escapeshellarg( "mynetworks = $subnet_cidr 127.0.0.0/8" ) );
+	EE::exec( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e ' . escapeshellarg( "myhostname = $site_url" ) );
 	EE::exec( \EE_DOCKER::docker_compose_with_custom() . ' exec postfix postconf -e \'syslog_name = $myhostname\'' );
 	EE::exec( \EE_DOCKER::docker_compose_with_custom() . ' restart postfix' );
 }
@@ -985,9 +1107,12 @@ function get_global_auth() {
  * Clear site cache with specific key.
  *
  * @param string $key Cache key to clear.
+ *
+ * @return bool Whether the purge ran.
  */
 function clean_site_cache( $key ) {
-	EE::exec( sprintf( 'docker exec -it %s redis-cli --eval purge_all_cache.lua 0 , "%s*"', GLOBAL_REDIS_CONTAINER, $key ) );
+	// No -it: without a terminal (cron, clone, scripts) docker refuses to attach a TTY and nothing is purged.
+	return EE::exec( sprintf( 'docker exec %s redis-cli --eval purge_all_cache.lua 0 , %s', GLOBAL_REDIS_CONTAINER, escapeshellarg( $key . '*' ) ) );
 }
 
 /**
@@ -1234,7 +1359,7 @@ function remove_etc_hosts_entry( $site_url ) {
 
 	$hosts_file = file_get_contents( '/etc/hosts' );
 
-	$site_url_escaped = preg_replace( '/\./', '\.', $site_url );
+	$site_url_escaped = preg_quote( $site_url, '/' );
 	$hosts_file_new   = preg_replace( "/127\.0\.0\.1\s+$site_url_escaped\n/", '', $hosts_file );
 
 	$fs->dumpFile( '/etc/hosts', $hosts_file_new );

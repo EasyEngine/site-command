@@ -375,15 +375,16 @@ class Site_Letsencrypt {
 				$token   = $authorizationChallenge->toArray()['token'];
 				$payload = $authorizationChallenge->toArray()['payload'];
 
-				$fs = new \Symfony\Component\Filesystem\Filesystem();
-				$fs->copy( SITE_TEMPLATE_ROOT . '/vhost.d_default_letsencrypt.mustache', EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/default' );
-				$challange_dir = EE_ROOT_DIR . '/services/nginx-proxy/html/.well-known/acme-challenge';
-				if ( ! $fs->exists( $challange_dir ) ) {
-					$fs->mkdir( $challange_dir );
-				}
+				$fs        = new \Symfony\Component\Filesystem\Filesystem();
+				$rule_file = EE_ROOT_DIR . '/services/nginx-proxy/vhost.d/default';
+				$fs->copy( SITE_TEMPLATE_ROOT . '/vhost.d_default_letsencrypt.mustache', $rule_file );
+				$this->chmod_unless_link( $rule_file, 0644 );
+				$challange_dir  = $this->prepare_http_challenge_dir( true );
 				$challange_file = $challange_dir . '/' . $token;
 				\EE::debug( 'Creating challange file ' . $challange_file );
 				$fs->dumpFile( $challange_file, $payload );
+				// dumpFile() keeps the mode of a file it replaces, or follows the umask for a new one.
+				$this->chmod_unless_link( $challange_file, 0644 );
 				reload_global_nginx_proxy();
 			}
 		}
@@ -476,6 +477,12 @@ class Site_Letsencrypt {
 			$solver = empty ( get_config_value( 'cloudflare-api-key' ) ) ? new SimpleDnsSolver( null, new ConsoleOutput() ) : new SimpleDnsCloudflareSolver( null, new ConsoleOutput() );
 		} else {
 			$solver = new SimpleHttpSolver();
+			// A pending order is validated against the token file an earlier authorize() wrote, so fix up what it left behind.
+			try {
+				$this->prepare_http_challenge_dir( false );
+			} catch ( \Exception $e ) {
+				\EE::debug( 'Unable to repair the HTTP-01 challenge dir: ' . $e->getMessage() );
+			}
 		}
 		$validator = new ChainValidator(
 			[
@@ -1020,6 +1027,53 @@ class Site_Letsencrypt {
 		$this->repository->storeDomainDistinguishedName( $domain, $distinguishedName );
 
 		return $distinguishedName;
+	}
+
+	/**
+	 * Create the HTTP-01 challenge dir, or repair one a strict umask left 0700 (it outlives a failed verify), so nginx-proxy can read it.
+	 * Stale token files are kept: `ssl-verify` retries a pending order against the token on disk.
+	 *
+	 * @param bool $create Create the dir when it is missing.
+	 *
+	 * @throws \Symfony\Component\Filesystem\Exception\IOException
+	 * @return string The acme-challenge dir.
+	 */
+	private function prepare_http_challenge_dir( $create ) {
+		$fs  = new \Symfony\Component\Filesystem\Filesystem();
+		$dir = EE_ROOT_DIR . '/services/nginx-proxy/html';
+		clearstatcache();
+		foreach ( [ '.well-known', 'acme-challenge' ] as $part ) {
+			$dir .= '/' . $part;
+			// Only EE creates these, as real dirs; never chmod through a link planted here.
+			if ( is_link( $dir ) || is_file( $dir ) ) {
+				$fs->remove( $dir );
+			}
+			if ( ! is_dir( $dir ) ) {
+				if ( ! $create ) {
+					return $dir;
+				}
+				$fs->mkdir( $dir, 0755 );
+			}
+			$fs->chmod( $dir, 0755 );
+		}
+
+		foreach ( scandir( $dir ) as $entry ) {
+			if ( '.' !== $entry && '..' !== $entry ) {
+				$this->chmod_unless_link( $dir . '/' . $entry, 0644 );
+			}
+		}
+
+		return $dir;
+	}
+
+	/**
+	 * Set a regular file's mode, leaving symlinks (and their targets) alone.
+	 */
+	private function chmod_unless_link( $file, $mode ) {
+		clearstatcache( true, $file );
+		if ( ! is_link( $file ) && is_file( $file ) ) {
+			( new \Symfony\Component\Filesystem\Filesystem() )->chmod( $file, $mode );
+		}
 	}
 
 	/**

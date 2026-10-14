@@ -110,6 +110,7 @@ class HTML extends EE_Site_Command {
 		$this->logger->debug( 'args:', $args );
 		$this->logger->debug( 'assoc_args:', empty( $assoc_args ) ? [ 'NULL' ] : $assoc_args );
 		$this->site_data['site_url']  = strtolower( \EE\Utils\remove_trailing_slash( $args[0] ) );
+		\EE\Site\Utils\validate_site_name( $this->site_data['site_url'] );
 		$this->site_data['site_type'] = \EE\Utils\get_flag_value( $assoc_args, 'type', 'html' );
 		if ( 'html' !== $this->site_data['site_type'] ) {
 			\EE::error( sprintf( 'Invalid site-type: %s', $this->site_data['site_type'] ) );
@@ -186,7 +187,8 @@ class HTML extends EE_Site_Command {
 		if ( 'json' === $format ) {
 			$site = (array) Site::find( $this->site_data['site_url'] );
 			$site = reset( $site );
-			EE::log( json_encode( $site ) );
+			// Printed for the user only: it holds the site's credentials.
+			EE::line( json_encode( $site ) );
 
 			return;
 		}
