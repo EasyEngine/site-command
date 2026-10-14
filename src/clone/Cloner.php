@@ -276,16 +276,26 @@ class Site {
 		EE::debug( 'Creating site "' . $this->name . '" on "' . $this->host . '"' );
 
 		$new_site = '';
+		$created  = false;
 		$this->ensure_site_not_exists();
-		$this->rsp->add_step( 'clone-create-site', function () use ( $source_site, $assoc_args, &$new_site ) {
+		$this->rsp->add_step( 'clone-create-site', function () use ( $source_site, $assoc_args, &$new_site, &$created ) {
 			$new_site = $this->execute( $this->get_site_create_command( $source_site, $assoc_args ) );
+			$created  = 0 === $new_site->return_code;
 			$this->set_site_details();
-		}, function () {
-			$this->execute( 'ee site delete --skip-tty --yes ' . escapeshellarg( $this->name ) );
+		}, function () use ( &$created ) {
+			// A failed create may mean the name was already taken; only remove a site this run made.
+			if ( $created ) {
+				$this->execute( 'ee site delete --skip-tty --yes ' . escapeshellarg( $this->name ) );
+			}
 		} );
 
 		if ( ! $this->rsp->execute() ) {
 			throw new \Exception( 'Unable to create site.' );
+		}
+
+		// Don't set up admin-tools or mailhog on a site this run didn't create.
+		if ( ! $created ) {
+			return $new_site;
 		}
 
 		$admin_tools_command = $this->get_admin_tools_command( $source_site, $assoc_args );
