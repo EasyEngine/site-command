@@ -88,18 +88,8 @@ class Site {
 	}
 
 	public function validate_parent_site_present_on_host( string $site ): void {
-		$list_run    = $this->execute( 'ee site list --format=json' );
-		$list_result = self::parse_site_list( $list_run->stdout );
-
-		if ( null === $list_result ) {
-			// An empty host has no parent to match; any other failure must surface, not be masked as "parent not found".
-			if ( ! $this->is_no_sites_error( $list_run ) ) {
-				throw new \Exception( 'Unable to get site list on ' . $this->user . '@' . $this->host );
-			}
-			$list_result = [];
-		}
-
-		foreach ( $list_result as $site_details ) {
+		// An empty host has no parent to match; any other failure surfaces instead of reading as "parent not found".
+		foreach ( $this->get_site_list() as $site_details ) {
 			$parent_site  = $site_details['site'];
 			$substr_match = strpos( $site, $parent_site );
 
@@ -351,7 +341,7 @@ class Site {
 			return null;
 		}
 		foreach ( $sites as $site ) {
-			if ( ! is_array( $site ) || ! isset( $site['site'] ) || ! is_string( $site['site'] ) ) {
+			if ( ! is_array( $site ) || ! isset( $site['site'], $site['status'] ) || ! is_string( $site['site'] ) || ! in_array( $site['status'], [ 'enabled', 'disabled' ], true ) ) {
 				return null;
 			}
 		}
@@ -359,25 +349,26 @@ class Site {
 		return $sites;
 	}
 
-	public function site_exists(): bool {
-		$site_list = $this->execute( 'ee site list --format=json --no-color' );
+	// The host's sites ([] when it has none).
+	private function get_site_list(): array {
+		$result = $this->execute( 'ee site list --format=json --no-color' );
 
-		if ( $this->is_no_sites_error( $site_list ) ) {
-			return false;
+		if ( $this->is_no_sites_error( $result ) ) {
+			return [];
 		}
 
-		if ( 0 !== $site_list->return_code ) {
-			throw new \Exception( 'Unable to get site list on ' . $this->user . '@' . $this->host );
-		}
+		$sites = 0 === $result->return_code ? self::parse_site_list( $result->stdout ) : null;
 
-		$sites = self::parse_site_list( $site_list->stdout );
-
-		// Unparseable output must not read as "site doesn't exist": a clone rollback would then delete an existing destination site.
+		// Unreadable output must not read as "site doesn't exist": a clone rollback would then delete an existing destination site.
 		if ( null === $sites ) {
 			throw new \Exception( 'Unable to get site list on ' . $this->user . '@' . $this->host );
 		}
 
-		foreach ( $sites as $site ) {
+		return $sites;
+	}
+
+	public function site_exists(): bool {
+		foreach ( $this->get_site_list() as $site ) {
 			if ( $site['site'] === $this->name ) {
 				if ( 'disabled' === $site['status'] ) {
 					throw new \Exception( 'The site that you want to clone has been disabled. Please enable the site and clone again.' );
