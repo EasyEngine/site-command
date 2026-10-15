@@ -43,6 +43,7 @@ class Site_Backup_Restore {
 	private $dash_api_url;
 	private $dash_backup_metadata;
 	private $dash_backup_completed = false;
+	private $dash_callback_sent = false; // Guard: exactly one terminal callback (success XOR failure) may be emitted
 	private $dash_new_backup_path; // Track new backup path for potential rollback
 
 	// Error tracking for EasyDash failure callbacks
@@ -156,8 +157,6 @@ class Site_Backup_Restore {
 
 		$this->fs->remove( EE_BACKUP_DIR . '/' . $this->site_data['site_url'] . '.lock' );
 
-		// Mark backup as completed and send success callback
-		$this->dash_backup_completed = true;
 		if ( $this->dash_auth_enabled ) {
 			$api_success = $this->send_dash_success_callback(
 				$this->dash_api_url,
@@ -166,13 +165,29 @@ class Site_Backup_Restore {
 				$this->dash_backup_metadata
 			);
 
-			// Only cleanup old backups if API callback succeeded
-			// If API failed, rollback the newly uploaded backup
 			if ( $api_success ) {
+				// Backup is now registered with EasyDash; only then is it safe to
+				// mark complete (suppressing the shutdown failure callback) and prune.
+				$this->dash_backup_completed = true;
 				$this->cleanup_old_backups();
 			} else {
+				// Success callback failed: the upload is orphaned (EasyDash never
+				// recorded it), so roll it back and report failure. dash_backup_completed
+				// stays false so the shutdown handler emits the single failure callback;
+				// EE::error() makes the exit code/message reflect that no backup remains.
+				$this->capture_error(
+					'Backup uploaded but EasyDash success callback failed; rolled back the orphaned upload.',
+					self::ERROR_TYPE_NETWORK,
+					4004
+				);
+				// Don't hold the lock through the shutdown failure callback's retries.
+				$this->release_global_backup_lock();
 				$this->rollback_failed_backup();
+				EE::error( 'EasyDash success callback failed; the uploaded backup was rolled back. No backup was created.' );
 			}
+		} else {
+			// Non-dash path: backup is done once the upload succeeds.
+			$this->dash_backup_completed = true;
 		}
 
 		// Release global backup lock (also released by shutdown handler as safety net)
@@ -191,8 +206,9 @@ class Site_Backup_Restore {
 	 * explicitly captured during backup execution.
 	 */
 	public function dash_shutdown_handler() {
-		// Only send failure callback if dash auth was enabled and backup didn't complete
-		if ( $this->dash_auth_enabled && ! $this->dash_backup_completed ) {
+		// Only send a failure callback if dash auth was enabled, the backup didn't
+		// complete, and no terminal callback (success or failure) has been sent yet.
+		if ( $this->dash_auth_enabled && ! $this->dash_backup_completed && ! $this->dash_callback_sent ) {
 
 			// If no error was captured yet, try to capture shutdown error
 			if ( empty( $this->dash_error_message ) ) {
@@ -1643,12 +1659,21 @@ class Site_Backup_Restore {
 		$result = EE::launch( sprintf( 'rclone purge %s', escapeshellarg( $this->dash_new_backup_path ) ) );
 
 		if ( $result->return_code ) {
-			EE::warning( sprintf(
-				'Failed to delete backup from remote storage. Please manually delete: %s',
+			// Rollback purge failed: the untracked backup genuinely survives on the
+			// remote, so the operator must delete it manually. Force-overwrite any
+			// optimistic "rolled back" error captured by the caller (capture_error is
+			// first-wins) so EasyDash receives this accurate path, not the inverse.
+			$message = sprintf(
+				'Failed to delete orphaned backup from remote storage. Please manually delete: %s',
 				$this->dash_new_backup_path
-			) );
+			);
+			$this->dash_error_message = '';
+			$this->capture_error( $message, self::ERROR_TYPE_FILESYSTEM, 4003 );
+			EE::error( $message );
 		} else {
-			EE::success( 'Successfully removed unregistered backup from remote storage.' );
+			// Demoted from EE::success: this always precedes a terminal EE::error, so a
+			// green success line would be misleading on a failing command.
+			EE::log( 'Successfully removed unregistered backup from remote storage.' );
 		}
 	}
 
@@ -1734,7 +1759,15 @@ class Site_Backup_Restore {
 
 		EE::debug( 'Payload being sent: ' . json_encode( array_merge( $payload, [ 'verify' => '******' ] ) ) );
 
-		return $this->send_dash_request( $endpoint, $payload );
+		$success = $this->send_dash_request( $endpoint, $payload );
+
+		// A success that actually reached EasyDash is the terminal callback; a failed
+		// attempt is not, so the failure path can still emit the failure callback.
+		if ( $success ) {
+			$this->dash_callback_sent = true;
+		}
+
+		return $success;
 	}
 
 	/**
@@ -1763,6 +1796,9 @@ class Site_Backup_Restore {
 				'error_code'    => $payload['error_code'],
 			] ) );
 
+		// Failure is terminal: mark before sending so a concurrent shutdown pass
+		// can never emit a second (duplicate) terminal callback.
+		$this->dash_callback_sent = true;
 		$this->send_dash_request( $endpoint, $payload );
 	}
 
