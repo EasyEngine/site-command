@@ -190,6 +190,8 @@ class DropDeprecatedSessionSidSettings extends Base {
 	 * @param string $content php.ini content.
 	 *
 	 * @return array New content, and the removed directive lines => whether the value is the shipped one.
+	 *
+	 * @throws \Exception When the edit would change how PHP reads any other setting, or the file doesn't parse.
 	 */
 	public static function strip_settings( $content ) {
 
@@ -234,7 +236,25 @@ class DropDeprecatedSessionSidSettings extends Base {
 			}
 		}
 
-		return [ implode( '', array_diff_key( $lines, $drop ) ), $removed ];
+		$new_content = implode( '', array_diff_key( $lines, $drop ) );
+
+		// A quoted value can span lines, so PHP must read the result as the original minus the two directives.
+		if ( $new_content !== $content ) {
+			$expected = @parse_ini_string( $content, true, INI_SCANNER_NORMAL );
+			if ( is_array( $expected ) ) {
+				foreach ( $expected as $key => $value ) {
+					if ( is_array( $value ) ) {
+						$expected[ $key ] = array_diff_key( $value, self::SHIPPED_VALUES );
+					}
+				}
+				$expected = array_diff_key( $expected, self::SHIPPED_VALUES );
+			}
+			if ( ! is_array( $expected ) || @parse_ini_string( $new_content, true, INI_SCANNER_NORMAL ) !== $expected ) {
+				throw new \Exception( 'the file does not parse, or removing them line by line would change other settings (a quoted value spanning lines), so it was left as it is; remove session.sid_length and session.sid_bits_per_character by hand.' );
+			}
+		}
+
+		return [ $new_content, $removed ];
 	}
 
 	/**
