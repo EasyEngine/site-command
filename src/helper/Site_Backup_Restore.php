@@ -1728,9 +1728,25 @@ class Site_Backup_Restore {
 		$not_restored           = [];
 		$skipped                = [];
 		$mode_not_set           = [];
+		$dir_modes              = [];
+		$set_mode               = function ( $path, $mode ) use ( &$mode_not_set ) {
+			try {
+				if ( ! $this->php_container_op( 'mode', $path, $mode ) ) {
+					throw new \Exception( 'could not change it in its php container' );
+				}
+
+				return true;
+			} catch ( \Exception $e ) {
+				$mode_not_set[] = "config/php/$path ({$e->getMessage()})";
+
+				return false;
+			}
+		};
 		foreach ( $entries as $path => $stat ) {
 			$is_dir  = 0040000 === ( $stat['mode'] & 0170000 );
 			$mode    = sprintf( '%04o', $stat['mode'] & 0777 );
+			// A directory stays writable and searchable by its owner until everything below it is restored.
+			$mode_now = $is_dir ? sprintf( '%04o', $stat['mode'] & 0777 | 0700 ) : $mode;
 			$parent  = dirname( $path );
 			$content = null;
 			if ( isset( $skipped[ $parent ] ) ) {
@@ -1762,8 +1778,10 @@ class Site_Backup_Restore {
 						$skipped[ $path ] = true;
 						continue;
 					}
-					if ( ! $this->php_container_op( $is_dir ? 'dir' : 'file', $path, $mode, $content ) ) {
+					if ( ! $this->php_container_op( $is_dir ? 'dir' : 'file', $path, $mode_now, $content ) ) {
 						$mode_not_set[] = "config/php/$path (could not change it in its php container)";
+					} elseif ( $mode_now !== $mode ) {
+						$dir_modes[ $path ] = $mode;
 					}
 				} elseif ( $is_dir ) {
 					if ( 0040000 !== ( $current['mode'] & 0170000 ) || realpath( $dest ) !== $dest ) {
@@ -1773,13 +1791,9 @@ class Site_Backup_Restore {
 					\EE\Site\Utils\put_container_file_contents( $dest, $dir, $content );
 				}
 				// Not on macOS, where the container doesn't see config/php.
-				if ( $current && 'Darwin' !== PHP_OS_FAMILY && $mode !== sprintf( '%04o', $current['mode'] & 0777 ) ) {
-					try {
-						if ( ! $this->php_container_op( 'mode', $path, $mode ) ) {
-							throw new \Exception( 'could not change it in its php container' );
-						}
-					} catch ( \Exception $e ) {
-						$mode_not_set[] = "config/php/$path ({$e->getMessage()})";
+				if ( $current && 'Darwin' !== PHP_OS_FAMILY ) {
+					if ( ( sprintf( '%04o', $current['mode'] & 0777 ) === $mode_now || $set_mode( $path, $mode_now ) ) && $mode_now !== $mode ) {
+						$dir_modes[ $path ] = $mode;
 					}
 				}
 			} catch ( \Exception $e ) {
@@ -1796,6 +1810,10 @@ class Site_Backup_Restore {
 				}
 				EE::warning( $message );
 			}
+		}
+		// Deepest first, so a directory is tightened only after everything below it.
+		foreach ( array_reverse( $dir_modes, true ) as $path => $mode ) {
+			$set_mode( $path, $mode );
 		}
 		if ( $mode_not_set ) {
 			EE::warning( 'Restored, but could not set the backed-up mode of: ' . implode( ', ', $mode_not_set ) . '.' );
