@@ -1918,13 +1918,14 @@ class Site_Backup_Restore {
 		}
 
 		// Changes into the parent and acts relative to it, so a directory swapped above it afterwards can't redirect the step.
+		// dd's conv=excl creates with O_EXCL, so anything put there after the check (a FIFO too) is refused without being opened.
 		$script = 'set -e; op=$2; m=$3; p=$1/$4; d=${p%/*}; n=./${p##*/}
 cd -P -- "$d" 2>/dev/null && [ "$(pwd -P)" = "$d" ] || exit 3
 if [ "$op" = owner ]; then stat -c %u:%g .; exit 0; fi
 if [ "$op" = mode ]; then [ ! -L "$n" ] || exit 4; chmod -- "$m" "$n" || exit 5; exit 0; fi
 [ ! -e "$n" ] && [ ! -L "$n" ] || exit 4
 if [ "$op" = dir ]; then mkdir -m "$m" -- "$n"; exit 0; fi
-(umask 077; set -C; cat > "$n")
+(umask 077; dd of="$n" conv=excl status=none 2>/dev/null) || { if [ -e "$n" ] || [ -L "$n" ]; then exit 4; fi; exit 1; }
 chmod -- "$m" "$n" || exit 5';
 		$run    = function ( $user, $op, $stdin = null ) use ( $path, $mode, $script ) {
 			return EE::launch( sprintf( 'docker exec %s-u %s %s sh -c %s sh /usr/local/etc %s %s %s%s', $stdin ? '-i ' : '', escapeshellarg( $user ), escapeshellarg( $this->php_container_id ), escapeshellarg( $script ), escapeshellarg( $op ), escapeshellarg( $mode ), escapeshellarg( $path ), $stdin ? ' < ' . escapeshellarg( $stdin ) : '' ) );
