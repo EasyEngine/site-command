@@ -1838,11 +1838,17 @@ class Site_Backup_Restore {
 		if ( '.' !== $parent && ! isset( $entries[ $parent ] ) ) {
 			return true;
 		}
+		$shown = addcslashes( $path, "\0..\37\177" );
 		// Refused entries count too, so a crafted tree can't produce unbounded warnings.
 		if ( count( $entries ) + count( $refused ) >= 1000 ) {
-			$refused[ $path ] = 'the backup holds more than 1000 entries, so this and the rest were not restored';
+			$refused[ $shown ] = 'the backup holds more than 1000 entries, so this and the rest were not restored';
 
 			return false;
+		}
+		if ( $shown !== $path ) {
+			$refused[ $shown ] = 'its name holds control characters';
+
+			return true;
 		}
 		$stat = @lstat( "$source/$path" );
 		if ( ! $stat ) {
@@ -1870,10 +1876,6 @@ class Site_Backup_Restore {
 		$more = true;
 		while ( $more && false !== ( $name = readdir( $handle ) ) ) {
 			if ( '.' === $name || '..' === $name ) {
-				continue;
-			}
-			if ( preg_match( '/[\x00-\x1f\x7f]/', $name ) ) {
-				$refused[ $path . '/' . addcslashes( $name, "\0..\37\177" ) ] = 'its name holds control characters';
 				continue;
 			}
 			$more = $this->list_php_conf_backup( $source, "$path/$name", true, $entries, $refused, $depth + 1 );
