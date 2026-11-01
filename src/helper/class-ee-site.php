@@ -1408,6 +1408,10 @@ abstract class EE_Site_Command {
 		try {
 			update_site_db_entry( $this->site_data['site_url'], $this->site_data );
 		} catch ( \Exception $e ) {
+			// A caller that rolls back (update --php) handles it.
+			if ( ! $exit_on_error ) {
+				throw $e;
+			}
 			EE::error( $e->getMessage() );
 		}
 
