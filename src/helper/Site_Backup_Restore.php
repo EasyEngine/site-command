@@ -36,7 +36,7 @@ class Site_Backup_Restore {
 	public $site_data;
 	private $rclone_config_path;
 
-	// Properties for EasyDash callback handling
+	// Properties for EasyEngine Dashboard callback handling
 	private $dash_auth_enabled = false;
 	private $dash_backup_id;
 	private $dash_verify_token;
@@ -45,7 +45,7 @@ class Site_Backup_Restore {
 	private $dash_backup_completed = false;
 	private $dash_new_backup_path; // Track new backup path for potential rollback
 
-	// Error tracking for EasyDash failure callbacks
+	// Error tracking for EasyEngine Dashboard failure callbacks
 	private $dash_error_message = '';
 	private $dash_error_type = 'unknown';
 	private $dash_error_code = 0;
@@ -80,7 +80,7 @@ class Site_Backup_Restore {
 			return; // Exit after listing backups
 		}
 
-		// Handle --dash-auth flag for EasyDash integration
+		// Handle --dash-auth flag for EasyEngine Dashboard integration
 		if ( $dash_auth ) {
 			// Parse backup-id:backup-verification-token format
 			$auth_parts = explode( ':', $dash_auth, 2 );
@@ -184,7 +184,7 @@ class Site_Backup_Restore {
 	}
 
 	/**
-	 * Shutdown handler to send failure callback to EasyDash if backup didn't complete.
+	 * Shutdown handler to send failure callback to EasyEngine Dashboard if backup didn't complete.
 	 * This is called when script terminates (including via EE::error which calls exit).
 	 *
 	 * Automatically captures fatal errors and interrupted processes if no error was
@@ -235,7 +235,7 @@ class Site_Backup_Restore {
 	}
 
 	/**
-	 * Capture error details for EasyDash failure callback.
+	 * Capture error details for EasyEngine Dashboard failure callback.
 	 * Stores error information to be sent when backup fails.
 	 *
 	 * @param string $message Error message describing what went wrong.
@@ -250,7 +250,7 @@ class Site_Backup_Restore {
 			$this->dash_error_code    = $code;
 
 			EE::debug( sprintf(
-				'Captured error for EasyDash: [%s] %s (code: %d)',
+				'Captured error for EasyEngine Dashboard: [%s] %s (code: %d)',
 				$type,
 				$message,
 				$code
@@ -1627,8 +1627,8 @@ class Site_Backup_Restore {
 	}
 
 	/**
-	 * Rollback (delete) the newly uploaded backup when EasyDash API callback fails.
-	 * This prevents orphaned backups in remote storage that aren't tracked by EasyDash.
+	 * Rollback (delete) the newly uploaded backup when EasyEngine Dashboard API callback fails.
+	 * This prevents orphaned backups in remote storage that aren't tracked by the EasyEngine Dashboard.
 	 */
 	private function rollback_failed_backup() {
 		if ( empty( $this->dash_new_backup_path ) ) {
@@ -1637,7 +1637,7 @@ class Site_Backup_Restore {
 			return;
 		}
 
-		EE::warning( 'EasyDash API callback failed. Rolling back newly uploaded backup...' );
+		EE::warning( 'EasyEngine Dashboard API callback failed. Rolling back newly uploaded backup...' );
 		EE::log( 'Deleting unregistered backup: ' . $this->dash_new_backup_path );
 
 		$result = EE::launch( sprintf( 'rclone purge %s', escapeshellarg( $this->dash_new_backup_path ) ) );
@@ -1696,9 +1696,9 @@ class Site_Backup_Restore {
 	}
 
 	/**
-	 * Send success callback to EasyDash API after successful backup.
+	 * Send success callback to EasyEngine Dashboard API after successful backup.
 	 *
-	 * @param string $ed_api_url     The EasyDash API URL.
+	 * @param string $ed_api_url     The EasyEngine Dashboard API URL.
 	 * @param string $backup_id      The backup ID.
 	 * @param string $verify_token   The verification token.
 	 * @param array $backup_metadata The backup metadata.
@@ -1738,10 +1738,10 @@ class Site_Backup_Restore {
 	}
 
 	/**
-	 * Send failure callback to EasyDash API after failed backup.
+	 * Send failure callback to EasyEngine Dashboard API after failed backup.
 	 * Includes error details (message, type, code) for debugging and user feedback.
 	 *
-	 * @param string $ed_api_url   The EasyDash API URL.
+	 * @param string $ed_api_url   The EasyEngine Dashboard API URL.
 	 * @param string $backup_id    The backup ID.
 	 * @param string $verify_token The verification token.
 	 */
