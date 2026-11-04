@@ -12,6 +12,8 @@ use function EE\Site\Utils\get_site_info;
 use function EE\Site\Utils\get_public_dir;
 use function EE\Site\Utils\get_webroot;
 use function EE\Site\Utils\check_alias_in_db;
+use function EE\Site\Utils\split_alias_domains;
+use function EE\Site\Utils\validate_alias_domains;
 use function EE\Utils\get_flag_value;
 
 /**
@@ -108,6 +110,7 @@ class HTML extends EE_Site_Command {
 		$this->logger->debug( 'args:', $args );
 		$this->logger->debug( 'assoc_args:', empty( $assoc_args ) ? [ 'NULL' ] : $assoc_args );
 		$this->site_data['site_url']  = strtolower( \EE\Utils\remove_trailing_slash( $args[0] ) );
+		\EE\Site\Utils\validate_site_name( $this->site_data['site_url'] );
 		$this->site_data['site_type'] = \EE\Utils\get_flag_value( $assoc_args, 'type', 'html' );
 		if ( 'html' !== $this->site_data['site_type'] ) {
 			\EE::error( sprintf( 'Invalid site-type: %s', $this->site_data['site_type'] ) );
@@ -116,9 +119,10 @@ class HTML extends EE_Site_Command {
 			\EE::error( sprintf( "Site %1\$s already exists. If you want to re-create it please delete the older one using:\n`ee site delete %1\$s`", $this->site_data['site_url'] ) );
 		}
 
-		$alias_domains = \EE\Utils\get_flag_value( $assoc_args, 'alias-domains', '' );
+		$alias_domains = split_alias_domains( \EE\Utils\get_flag_value( $assoc_args, 'alias-domains', '' ) );
+		validate_alias_domains( $alias_domains );
 
-		$alias_domain_to_check   = explode( ',', $alias_domains );
+		$alias_domain_to_check   = $alias_domains;
 		$alias_domain_to_check[] = $this->site_data['site_url'];
 		check_alias_in_db( $alias_domain_to_check );
 
@@ -127,17 +131,7 @@ class HTML extends EE_Site_Command {
 		$this->skip_status_check                   = \EE\Utils\get_flag_value( $assoc_args, 'skip-status-check' );
 		$this->site_data['site_container_fs_path'] = get_public_dir( $assoc_args );
 
-		$this->site_data['alias_domains'] = $this->site_data['site_url'];
-		$this->site_data['alias_domains'] .= ',';
-		if ( ! empty( $alias_domains ) ) {
-			$comma_seprated_domains = explode( ',', $alias_domains );
-			foreach ( $comma_seprated_domains as $domain ) {
-				$trimmed_domain                   = trim( $domain );
-				$this->site_data['alias_domains'] .= $trimmed_domain . ',';
-			}
-		}
-    
-		$this->site_data['alias_domains'] = substr( $this->site_data['alias_domains'], 0, - 1 );
+		$this->site_data['alias_domains'] = implode( ',', array_merge( [ $this->site_data['site_url'] ], $alias_domains ) );
 		$this->site_data['site_ssl'] = get_value_if_flag_isset( $assoc_args, 'ssl', 'le' );
 
 		if ( 'custom' === $this->site_data['site_ssl'] ) {
@@ -147,6 +141,8 @@ class HTML extends EE_Site_Command {
 				$this->catch_clean( $e );
 			}
 		}
+
+		\EE\Site\Utils\check_site_name_conflicts( $this->site_data['site_url'], $this->site_data['site_fs_path'] );
 
 		\EE\Service\Utils\nginx_proxy_check();
 
@@ -191,7 +187,8 @@ class HTML extends EE_Site_Command {
 		if ( 'json' === $format ) {
 			$site = (array) Site::find( $this->site_data['site_url'] );
 			$site = reset( $site );
-			EE::log( json_encode( $site ) );
+			// Printed for the user only: it holds the site's credentials.
+			EE::line( json_encode( $site ) );
 
 			return;
 		}
@@ -351,12 +348,13 @@ class HTML extends EE_Site_Command {
 	 */
 	private function create_site() {
 
-		$this->level = 1;
 		try {
 			if ( 'inherit' === $this->site_data['site_ssl'] ) {
 				$this->check_parent_site_certs( $this->site_data['site_url'] );
 			}
 
+			// Raised before the call: a signal during it is only handled once it returns.
+			$this->level = 1;
 			\EE\Site\Utils\create_site_root( $this->site_data['site_fs_path'], $this->site_data['site_url'] );
 			$this->level = 3;
 			$this->configure_site_files();
