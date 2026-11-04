@@ -31,6 +31,11 @@ env:
   COMPOSE_INTERACTIVE_NO_CLI: 1
   RCLONE_CONFIG: /etc/rclone/rclone.conf
   EE_BEHAT_DESTRUCTIVE: 1
+  # CI only, for `composer update` of the cloned core (develop and PRs): Composer blocks these versions for security advisories. Remove after the symfony/yaml and guzzlehttp/psr7 upgrade.
+  ADVISORY_IGNORE: >-
+    {"symfony/yaml": {"constraint": "4.4.*", "reason": "pinned by core and behat/behat 3.8.1", "on-audit": false},
+    "guzzlehttp/psr7": {"constraint": "1.9.*", "reason": "required by acmephp/core 1.3.0", "on-audit": false},
+    "guzzlehttp/guzzle": {"constraint": "7.8.*", "reason": "last guzzle 7 line that accepts guzzlehttp/psr7 1.x", "on-audit": false}}
 
 jobs:
   behat:
@@ -117,6 +122,7 @@ jobs:
             $j["repositories"] = $repos;
             file_put_contents("composer.json", json_encode($j, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n");
             file_put_contents(getenv("GITHUB_ENV"), "PKG=$pkg\n", FILE_APPEND);'
+          composer config --json --merge policy.advisories.ignore "$ADVISORY_IGNORE"
           composer update --prefer-dist --no-progress --no-interaction
           composer show "$(jq -r .name ../pkg/composer.json)" | grep -E '^(versions|source|dist) ' || true
           rm -rf features
