@@ -166,24 +166,24 @@ class Site_Backup_Restore {
 			);
 
 			if ( $api_success ) {
-				// Backup is now registered with EasyDash; only then is it safe to
+				// Backup is now registered with the EasyEngine Dashboard; only then is it safe to
 				// mark complete (suppressing the shutdown failure callback) and prune.
 				$this->dash_backup_completed = true;
 				$this->cleanup_old_backups();
 			} else {
-				// Success callback failed: the upload is orphaned (EasyDash never
+				// Success callback failed: the upload is orphaned (the EasyEngine Dashboard never
 				// recorded it), so roll it back and report failure. dash_backup_completed
 				// stays false so the shutdown handler emits the single failure callback;
 				// EE::error() makes the exit code/message reflect that no backup remains.
 				$this->capture_error(
-					'Backup uploaded but EasyDash success callback failed; rolled back the orphaned upload.',
+					'Backup uploaded but EasyEngine Dashboard success callback failed; rolled back the orphaned upload.',
 					self::ERROR_TYPE_NETWORK,
 					4004
 				);
 				// Don't hold the lock through the shutdown failure callback's retries.
 				$this->release_global_backup_lock();
 				$this->rollback_failed_backup();
-				EE::error( 'EasyDash success callback failed; the uploaded backup was rolled back. No backup was created.' );
+				EE::error( 'EasyEngine Dashboard success callback failed; the uploaded backup was rolled back. No backup was created.' );
 			}
 		} else {
 			// Non-dash path: backup is done once the upload succeeds.
@@ -1662,7 +1662,7 @@ class Site_Backup_Restore {
 			// Rollback purge failed: the untracked backup genuinely survives on the
 			// remote, so the operator must delete it manually. Force-overwrite any
 			// optimistic "rolled back" error captured by the caller (capture_error is
-			// first-wins) so EasyDash receives this accurate path, not the inverse.
+			// first-wins) so the EasyEngine Dashboard receives this accurate path, not the inverse.
 			$message = sprintf(
 				'Failed to delete orphaned backup from remote storage. Please manually delete: %s',
 				$this->dash_new_backup_path
@@ -1761,7 +1761,7 @@ class Site_Backup_Restore {
 
 		$success = $this->send_dash_request( $endpoint, $payload );
 
-		// A success that actually reached EasyDash is the terminal callback; a failed
+		// A success that actually reached the EasyEngine Dashboard is the terminal callback; a failed
 		// attempt is not, so the failure path can still emit the failure callback.
 		if ( $success ) {
 			$this->dash_callback_sent = true;
