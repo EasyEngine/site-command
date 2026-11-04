@@ -1693,6 +1693,63 @@ class Site_Backup_Restore {
 			$restore_command = sprintf( 'rsync -a %s/php/php/conf.d/custom.ini %s/config/php/php/conf.d/custom.ini', $backup_dir, EE_ROOT_DIR . '/sites/' . $this->site_data['site_url'] );
 			EE::exec( $restore_command );
 		}
+
+		$this->keep_session_upload_progress_off();
+	}
+
+	/**
+	 * A backup taken before v4.13.3 brings back a custom.ini without `session.upload_progress.enabled = Off`, so add it
+	 * again unless the restored file sets the directive itself. The site reload at the end of the restore applies it.
+	 */
+	private function keep_session_upload_progress_off() {
+		$site_url = $this->site_data['site_url'];
+		$file     = EE_ROOT_DIR . '/sites/' . $site_url . '/config/php/php/conf.d/custom.ini';
+		$manual   = "Add 'session.upload_progress.enabled = Off' to $file and run: ee site reload $site_url";
+
+		// Not created when missing: PHP can't create a file safely in a directory the site's container can swap.
+		if ( is_link( $file ) || ! is_file( $file ) ) {
+			EE::warning( "Could not check session.upload_progress in the restored custom.ini: it is missing or not a regular file. $manual" );
+
+			return;
+		}
+
+		// The directory is in the site's config volume, which its php container can change: every read and write goes through a checked handle.
+		try {
+			$dir    = \EE\Site\Utils\site_php_conf_dir( EE_ROOT_DIR . '/sites/' . $site_url );
+			$handle = \EE\Site\Utils\open_container_file( $file, 'r', $dir );
+			try {
+				$content = \EE\Site\Utils\read_container_file( $handle );
+			} finally {
+				fclose( $handle );
+			}
+
+			$new_content = \EE\Site\Utils\add_session_upload_progress_off( $content );
+			if ( null === $new_content ) {
+				return;
+			}
+
+			$handle = \EE\Site\Utils\open_container_file( $file, 'r+', $dir );
+			try {
+				if ( \EE\Site\Utils\read_container_file( $handle ) !== $content ) {
+					throw new \Exception( 'it changed while it was checked' );
+				}
+				try {
+					\EE\Site\Utils\rewrite_container_file( $handle, $new_content );
+				} catch ( \Exception $e ) {
+					// A short write leaves part of the file; put the restored one back.
+					\EE\Site\Utils\rewrite_container_file( $handle, $content );
+					throw $e;
+				}
+			} finally {
+				fclose( $handle );
+			}
+		} catch ( \Exception $e ) {
+			EE::warning( "Could not turn off session.upload_progress in the restored custom.ini ({$e->getMessage()}). $manual" );
+
+			return;
+		}
+
+		EE::log( 'The restored custom.ini did not set session.upload_progress.enabled, so it was set to Off again. Set it to On there only if your app needs it.' );
 	}
 
 	/**
