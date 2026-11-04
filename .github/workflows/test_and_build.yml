@@ -19,6 +19,8 @@ jobs:
   test: #----------------------------------------------------------------------
     runs-on: ubuntu-latest
     name: Behat Tests - PHP ${{ matrix.php }}
+    env:
+      RCLONE_CONFIG: /etc/rclone/rclone.conf
     strategy:
       fail-fast: false
       matrix:
@@ -64,6 +66,14 @@ jobs:
         sudo curl -L "https://github.com/docker/compose/releases/download/$VERSION/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
         sudo chmod +x /usr/local/bin/docker-compose
 
+    - name: Set up rclone for backup and restore
+      run: |
+        sudo apt-get update -q
+        sudo apt-get install -y -q rclone
+        sudo mkdir -p "$(dirname "$RCLONE_CONFIG")" /var/tmp/ee-backups
+        # EasyEngine's default rclone-path is easyengine:easyengine.
+        printf '[easyengine]\ntype = alias\nremote = /var/tmp/ee-backups\n' | sudo tee "$RCLONE_CONFIG" >/dev/null
+
     - name: Install dependencies
       run: |
         cd "$GITHUB_WORKSPACE/.."
@@ -76,6 +86,8 @@ jobs:
             composer install --prefer-dist --no-progress --no-interaction
         else
             sed -i 's/\(easyengine\/.*\):\ \".*\"/\1:\ \"dev-develop\"/' composer.json
+            # Test this checkout of site-command, not its develop branch.
+            composer config repositories.site-command '{"type": "path", "url": "'"$GITHUB_WORKSPACE"'", "options": {"symlink": false, "versions": {"easyengine/site-command": "dev-develop"}}}'
             composer config --json --merge policy.advisories.ignore "$ADVISORY_IGNORE"
             composer update --prefer-dist --no-progress --no-interaction
         fi

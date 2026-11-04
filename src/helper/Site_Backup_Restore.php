@@ -53,6 +53,9 @@ class Site_Backup_Restore {
 	// Global backup lock handle for serializing backups
 	private $global_backup_lock_handle = null;
 
+	// ID of the site's php container while its config is restored; '' when it isn't running.
+	private $php_container_id;
+
 	public function __construct() {
 		$this->fs = new Filesystem();
 	}
@@ -1684,15 +1687,315 @@ class Site_Backup_Restore {
 		}
 
 		if ( $this->fs->exists( sprintf( '%s/php', $backup_dir ) ) ) {
-			$restore_command = sprintf( 'rsync -a %s/php/php-fpm.d/ %s/config/php/php-fpm.d/', $backup_dir, EE_ROOT_DIR . '/sites/' . $this->site_data['site_url'] );
-			EE::exec( $restore_command );
-
-			$restore_command = sprintf( 'rsync -a %s/php/php/php.ini %s/config/php/php/php.ini', $backup_dir, EE_ROOT_DIR . '/sites/' . $this->site_data['site_url'] );
-			EE::exec( $restore_command );
-
-			$restore_command = sprintf( 'rsync -a %s/php/php/conf.d/custom.ini %s/config/php/php/conf.d/custom.ini', $backup_dir, EE_ROOT_DIR . '/sites/' . $this->site_data['site_url'] );
-			EE::exec( $restore_command );
+			$this->restore_php_conf_files( $backup_dir . '/php' );
 		}
+
+		$this->keep_session_upload_progress_off();
+	}
+
+	/**
+	 * Copy the backed-up php-fpm.d tree, php.ini and custom.ini over the site's ones.
+	 *
+	 * The container can swap anything in its config volume, so existing files are written in place through checked handles and missing entries are created inside the container; the backup came from that volume too, so it may hold only directories and regular files.
+	 * Permission bits come from the backup; owners don't (the backup has none), so a created entry belongs to its parent's owner and an existing one keeps its own.
+	 *
+	 * @param string $source Extracted `php` directory of the backup.
+	 */
+	private function restore_php_conf_files( $source ) {
+
+		$site_url = $this->site_data['site_url'];
+		$site_dir = EE_ROOT_DIR . '/sites/' . $site_url;
+		clearstatcache( true );
+		// Some 7-Zip versions store config/php itself as a link, which points back at the live volume.
+		if ( is_link( $source ) ) {
+			EE::warning( 'Could not restore the php config: the backup holds a symlink instead of it.' );
+
+			return;
+		}
+
+		$entries = [];
+		$refused = [];
+		foreach ( [ 'php', 'php/php.ini', 'php/conf.d', 'php/conf.d/custom.ini' ] as $path ) {
+			$this->list_php_conf_backup( $source, $path, false, $entries, $refused );
+		}
+		$this->list_php_conf_backup( $source, 'php-fpm.d', true, $entries, $refused );
+		foreach ( $refused as $path => $reason ) {
+			EE::warning( "Could not restore config/php/$path: $reason." );
+		}
+
+		$this->php_container_id = null;
+		$kept                   = EE_BACKUP_DIR . '/' . $site_url . '-php-conf-not-restored-' . date( 'Ymd-His' );
+		$not_restored           = [];
+		$skipped                = [];
+		$mode_not_set           = [];
+		$dir_modes              = [];
+		$set_mode               = function ( $path, $mode ) use ( &$mode_not_set ) {
+			try {
+				if ( ! $this->php_container_op( 'mode', $path, $mode ) ) {
+					throw new \Exception( 'could not change it in its php container' );
+				}
+
+				return true;
+			} catch ( \Exception $e ) {
+				$mode_not_set[] = "config/php/$path ({$e->getMessage()})";
+
+				return false;
+			}
+		};
+		foreach ( $entries as $path => $stat ) {
+			$is_dir  = 0040000 === ( $stat['mode'] & 0170000 );
+			$mode    = sprintf( '%04o', $stat['mode'] & 0777 );
+			// A directory stays writable and searchable by its owner until everything below it is restored.
+			$mode_now = $is_dir ? sprintf( '%04o', $stat['mode'] & 0777 | 0700 ) : $mode;
+			$parent  = dirname( $path );
+			$content = null;
+			if ( isset( $skipped[ $parent ] ) ) {
+				$skipped[ $path ] = true;
+				continue;
+			}
+			try {
+				if ( ! $is_dir ) {
+					$content = \EE\Site\Utils\get_container_file_contents( "$source/$path", realpath( $source ) . ( '.' === $parent ? '' : "/$parent" ) );
+				}
+				if ( isset( $not_restored[ $parent ] ) ) {
+					$not_restored[ $path ] = $not_restored[ $parent ];
+					if ( $is_dir ) {
+						continue;
+					}
+					throw new \Exception( "config/php/{$not_restored[ $parent ]} was not restored" );
+				}
+				$dir  = rtrim( \EE\Site\Utils\site_php_conf_dir( $site_dir, '.' === $parent ? '' : $parent ), '/' );
+				$dest = "$dir/" . basename( $path );
+				clearstatcache( true );
+				$current = @lstat( $dest );
+				if ( realpath( $dir ) !== $dir ) {
+					throw new \Exception( "config/php/$parent is not a directory, or a directory above it is a symlink" );
+				}
+				if ( ! $current ) {
+					// On macOS config/php isn't mounted (only custom.ini is), so an entry missing there has no effect, as before.
+					if ( 'Darwin' === PHP_OS_FAMILY ) {
+						EE::debug( "Not restoring config/php/$path: missing in the site." );
+						$skipped[ $path ] = true;
+						continue;
+					}
+					if ( ! $this->php_container_op( $is_dir ? 'dir' : 'file', $path, $mode_now, $content ) ) {
+						$mode_not_set[] = "config/php/$path (could not change it in its php container)";
+					} elseif ( $mode_now !== $mode ) {
+						$dir_modes[ $path ] = $mode;
+					}
+				} elseif ( $is_dir ) {
+					if ( 0040000 !== ( $current['mode'] & 0170000 ) || realpath( $dest ) !== $dest ) {
+						throw new \Exception( 'it is not a directory in the site' );
+					}
+				} else {
+					\EE\Site\Utils\put_container_file_contents( $dest, $dir, $content );
+				}
+				// Not on macOS, where the container doesn't see config/php.
+				if ( $current && 'Darwin' !== PHP_OS_FAMILY ) {
+					if ( ( sprintf( '%04o', $current['mode'] & 0777 ) === $mode_now || $set_mode( $path, $mode_now ) ) && $mode_now !== $mode ) {
+						$dir_modes[ $path ] = $mode;
+					}
+				}
+			} catch ( \Exception $e ) {
+				$not_restored[ $path ] = $not_restored[ $path ] ?? $path;
+				$message               = "Could not restore config/php/$path ({$e->getMessage()}).";
+				if ( null !== $content ) {
+					try {
+						$this->fs->dumpFile( "$kept/$path", $content );
+						$fix      = isset( $not_restored[ $parent ] ) ? "once config/php/{$not_restored[ $parent ]} is a plain directory again" : 'once the cause is fixed';
+						$message .= " The backed-up file is kept as $kept/$path; put it back $fix, then run: ee site reload $site_url";
+					} catch ( \Exception $dump_error ) {
+						$message .= ' Could not keep the backed-up file either: ' . $dump_error->getMessage();
+					}
+				}
+				EE::warning( $message );
+			}
+		}
+		// Deepest first, so a directory is tightened only after everything below it.
+		foreach ( array_reverse( $dir_modes, true ) as $path => $mode ) {
+			$set_mode( $path, $mode );
+		}
+		if ( $mode_not_set ) {
+			EE::warning( 'Restored, but could not set the backed-up mode of: ' . implode( ', ', $mode_not_set ) . '.' );
+		}
+	}
+
+	/**
+	 * Collect a backed-up entry below the extracted `php` directory, and with $recurse everything below it, parents first.
+	 *
+	 * @param string $source  Extracted `php` directory of the backup.
+	 * @param string $path    Path below it.
+	 * @param bool   $recurse Whether to collect a directory's entries.
+	 * @param array  $entries Path => lstat() of each directory and regular file.
+	 * @param array  $refused Path => reason for each entry that is skipped.
+	 * @param int    $depth   Directory depth.
+	 *
+	 * @return bool False once the entry limit is reached.
+	 */
+	private function list_php_conf_backup( $source, $path, $recurse, array &$entries, array &$refused, $depth = 0 ) {
+
+		$parent = dirname( $path );
+		if ( '.' !== $parent && ! isset( $entries[ $parent ] ) ) {
+			return true;
+		}
+		$shown = addcslashes( $path, "\0..\37\177" );
+		// Refused entries count too, so a crafted tree can't produce unbounded warnings.
+		if ( count( $entries ) + count( $refused ) >= 1000 ) {
+			$refused[ $shown ] = 'the backup holds more than 1000 entries, so this and the rest were not restored';
+
+			return false;
+		}
+		if ( $shown !== $path ) {
+			$refused[ $shown ] = 'its name holds control characters';
+
+			return true;
+		}
+		$stat = @lstat( "$source/$path" );
+		if ( ! $stat ) {
+			return true;
+		}
+		$type = $stat['mode'] & 0170000;
+		if ( 0040000 !== $type && 0100000 !== $type ) {
+			$refused[ $path ] = 'the backup holds a symlink or special file there';
+
+			return true;
+		}
+		if ( $depth > 16 ) {
+			$refused[ $path ] = 'it is nested too deep';
+
+			return true;
+		}
+		$entries[ $path ] = $stat;
+		if ( ! $recurse || 0040000 !== $type ) {
+			return true;
+		}
+		$handle = @opendir( "$source/$path" );
+		if ( false === $handle ) {
+			return true;
+		}
+		$more = true;
+		while ( $more && false !== ( $name = readdir( $handle ) ) ) {
+			if ( '.' === $name || '..' === $name ) {
+				continue;
+			}
+			$more = $this->list_php_conf_backup( $source, "$path/$name", true, $entries, $refused, $depth + 1 );
+		}
+		closedir( $handle );
+
+		return $more;
+	}
+
+	/**
+	 * Create a directory or file the site's php config lacks, or set the mode of one, from inside its running php container, where a symlink the container made can't point at the host.
+	 *
+	 * The step runs as the owner of the parent directory, which must be a real directory (no symlink in its path), so it can't change what that owner couldn't, and a created entry belongs to that owner.
+	 *
+	 * @param string      $op      'dir', 'file' or 'mode'.
+	 * @param string      $path    Path below config/php (/usr/local/etc in the container).
+	 * @param string      $mode    Octal permission bits.
+	 * @param string|null $content Content of a created file.
+	 *
+	 * @return bool Whether the mode was set; false when only that failed.
+	 * @throws \Exception
+	 */
+	private function php_container_op( $op, $path, $mode, $content = null ) {
+
+		if ( ! preg_match( '#^(php-fpm\.d|php)(/[^/]+)*$#', $path ) || preg_match( '#(^|/)\.\.?(/|$)|[\x00-\x1f\x7f]#', $path ) || ! preg_match( '/^0[0-7]{3}$/', $mode ) ) {
+			throw new \Exception( 'unexpected path or mode' );
+		}
+
+		if ( null === $this->php_container_id ) {
+			$cwd = getcwd();
+			chdir( EE_ROOT_DIR . '/sites/' . $this->site_data['site_url'] );
+			$id = trim( EE::launch( \EE_DOCKER::docker_compose_with_custom() . ' ps -q php' )->stdout );
+			if ( false !== $cwd ) {
+				chdir( $cwd );
+			}
+			$this->php_container_id = ( '' !== $id && 'running' === \EE_DOCKER::container_status( $id ) ) ? $id : '';
+		}
+		if ( '' === $this->php_container_id ) {
+			throw new \Exception( 'its php container is not running' );
+		}
+
+		// Changes into the parent and acts relative to it, so a directory swapped above it afterwards can't redirect the step.
+		// dd's conv=excl creates with O_EXCL, so anything put there after the check (a FIFO too) is refused without being opened.
+		$script = 'set -e; op=$2; m=$3; p=$1/$4; d=${p%/*}; n=./${p##*/}
+cd -P -- "$d" 2>/dev/null && [ "$(pwd -P)" = "$d" ] || exit 3
+if [ "$op" = owner ]; then stat -c %u:%g .; exit 0; fi
+if [ "$op" = mode ]; then [ ! -L "$n" ] || exit 4; chmod -- "$m" "$n" || exit 5; exit 0; fi
+[ ! -e "$n" ] && [ ! -L "$n" ] || exit 4
+if [ "$op" = dir ]; then mkdir -m "$m" -- "$n"; exit 0; fi
+(umask 077; dd of="$n" conv=excl status=none 2>/dev/null) || { if [ -e "$n" ] || [ -L "$n" ]; then exit 4; fi; exit 1; }
+chmod -- "$m" "$n" || exit 5';
+		$run    = function ( $user, $op, $stdin = null ) use ( $path, $mode, $script ) {
+			return EE::launch( sprintf( 'docker exec %s-u %s %s sh -c %s sh /usr/local/etc %s %s %s%s', $stdin ? '-i ' : '', escapeshellarg( $user ), escapeshellarg( $this->php_container_id ), escapeshellarg( $script ), escapeshellarg( $op ), escapeshellarg( $mode ), escapeshellarg( $path ), $stdin ? ' < ' . escapeshellarg( $stdin ) : '' ) );
+		};
+
+		$owner = $run( 'root', 'owner' );
+		$user  = trim( $owner->stdout );
+		if ( 3 === $owner->return_code || ! preg_match( '/^\d+:\d+$/', $user ) ) {
+			throw new \Exception( 'a directory above it is not a real directory in its php container' );
+		}
+
+		$tmp = null;
+		if ( 'file' === $op ) {
+			$tmp = tempnam( \EE\Utils\get_temp_dir(), 'ee-php-conf-' );
+			if ( false === $tmp || strlen( $content ) !== file_put_contents( $tmp, $content ) ) {
+				throw new \Exception( 'could not write a temporary file' );
+			}
+		}
+		$result = $run( $user, $op, $tmp );
+		if ( $tmp ) {
+			unlink( $tmp );
+		}
+		switch ( $result->return_code ) {
+			case 0:
+				return true;
+			case 5:
+				return false;
+			case 3:
+				throw new \Exception( 'a directory above it is not a real directory in its php container' );
+			case 4:
+				throw new \Exception( 'mode' === $op ? 'it is a symlink in its php container' : 'it appeared in its php container while it was restored' );
+			default:
+				throw new \Exception( 'mode' === $op ? 'could not change it in its php container' : 'it is missing in the site and could not be created in its php container' );
+		}
+	}
+
+	/**
+	 * A backup taken before v4.13.3 brings back a custom.ini without `session.upload_progress.enabled = Off`, so add it
+	 * again unless the restored file sets the directive itself. The site reload at the end of the restore applies it.
+	 */
+	private function keep_session_upload_progress_off() {
+		$site_url = $this->site_data['site_url'];
+		$file     = EE_ROOT_DIR . '/sites/' . $site_url . '/config/php/php/conf.d/custom.ini';
+		$manual   = "Add 'session.upload_progress.enabled = Off' to $file and run: ee site reload $site_url";
+
+		// Not created when missing: PHP can't create a file safely in a directory the site's container can swap.
+		if ( is_link( $file ) || ! is_file( $file ) ) {
+			EE::warning( "Could not check session.upload_progress in the restored custom.ini: it is missing or not a regular file. $manual" );
+
+			return;
+		}
+
+		// The directory is in the site's config volume, which its php container can change: every read and write goes through a checked handle.
+		try {
+			$dir     = \EE\Site\Utils\site_php_conf_dir( EE_ROOT_DIR . '/sites/' . $site_url );
+			$content = \EE\Site\Utils\get_container_file_contents( $file, $dir, 65536 );
+
+			$new_content = \EE\Site\Utils\add_session_upload_progress_off( $content );
+			if ( null === $new_content ) {
+				return;
+			}
+
+			\EE\Site\Utils\put_container_file_contents( $file, $dir, $new_content, $content, 65536 );
+		} catch ( \Exception $e ) {
+			EE::warning( "Could not turn off session.upload_progress in the restored custom.ini ({$e->getMessage()}). $manual" );
+
+			return;
+		}
+
+		EE::log( 'The restored custom.ini did not set session.upload_progress.enabled, so it was set to Off again. Set it to On there only if your app needs it.' );
 	}
 
 	/**
