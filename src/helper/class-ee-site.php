@@ -60,6 +60,11 @@ abstract class EE_Site_Command {
 	private $le_mail;
 
 	/**
+	 * @var bool $ssl_failure_handled_by_caller Set while update_ssl() runs www_ssl_wrapper(): it rolls back and reports a failed certificate itself.
+	 */
+	private $ssl_failure_handled_by_caller = false;
+
+	/**
 	 * @var resource $ssl_lock_handle Handle of the process-wide SSL lock.
 	 *
 	 * Static because `ssl-renew --all` renews every site in one process, and flock refuses a second handle there.
@@ -616,10 +621,11 @@ abstract class EE_Site_Command {
 
 			$this->site_data['alias_domains'] = implode( ',', $final_alias_domains );
 			$is_ssl                           = $this->site_data['site_ssl'] ? true : false;
+			$pending_le                       = \EE\Site\Utils\is_le_ssl_pending( $this->site_data['site_url'], $this->site_data['site_ssl'] );
 			$preferred_ssl_challenge          = get_preferred_ssl_challenge( get_domains_of_site( $this->site_data['site_url'] ) );
 			// Sites without SSL stay HTTP-only, else nginx-proxy serves HTTPS with any leftover cert whose name matches.
 			// LE sites drop HTTPS here for the HTTP-01 challenge; the renewal below turns it back on, other SSL types keep theirs.
-			$nohttps                          = ! $is_ssl || ( 'le' === $this->site_data['site_ssl'] && 'dns' !== $preferred_ssl_challenge );
+			$nohttps                          = ! $is_ssl || $pending_le || ( 'le' === $this->site_data['site_ssl'] && 'dns' !== $preferred_ssl_challenge );
 			$this->dump_docker_compose_yml( [ 'nohttps' => $nohttps ] );
 			\EE_DOCKER::docker_compose_up( $this->site_data['site_fs_path'], [ 'nginx' ] );
 		} catch ( \Exception $e ) {
@@ -929,7 +935,7 @@ abstract class EE_Site_Command {
 		try {
 			$old_php_version              = $this->site_data->php_version;
 			$this->site_data->php_version = $php_version;
-			$no_https                     = $this->site_data->site_ssl ? false : true;
+			$no_https                     = ! $this->site_data->site_ssl || \EE\Site\Utils\is_le_ssl_pending( $this->site_data->site_url, $this->site_data->site_ssl );
 			$site                         = $this->site_data;
 			$array_data                   = ( array ) $this->site_data;
 			$this->site_data              = reset( $array_data );
@@ -1033,6 +1039,9 @@ abstract class EE_Site_Command {
 		}
 
 		if ( $this->site_data->site_ssl && $ssl ) {
+			if ( \EE\Site\Utils\is_le_ssl_pending( $this->site_data->site_url, $this->site_data->site_ssl ) ) {
+				EE::error( sprintf( 'Let\'s Encrypt SSL on %1$s waits for its DNS challenge. Run `ee site ssl-verify %1$s` once the DNS records have propagated.', $this->site_data->site_url ) );
+			}
 			EE::error( 'SSL is already enabled on ' . $this->site_data->site_url );
 		}
 
@@ -1086,7 +1095,12 @@ abstract class EE_Site_Command {
 					if ( 'custom' === $ssl ) {
 						$this->custom_site_ssl();
 					}
-					$this->www_ssl_wrapper( [ 'nginx' ] );
+					$this->ssl_failure_handled_by_caller = true;
+					try {
+						$this->www_ssl_wrapper( [ 'nginx' ] );
+					} finally {
+						$this->ssl_failure_handled_by_caller = false;
+					}
 					// init_le() only warns and clears site_ssl when the certificate could not be issued.
 					if ( empty( $this->site_data['site_ssl'] ) ) {
 						throw new \Exception( 'See the warnings above.' );
@@ -1111,10 +1125,12 @@ abstract class EE_Site_Command {
 
 		$site->save();
 
-		if ( $ssl ) {
-			EE::success( 'Enabled SSL for ' . $this->site_data['site_url'] );
-		} else {
+		if ( ! $ssl ) {
 			EE::success( 'Disabled SSL for ' . $this->site_data['site_url'] );
+		} elseif ( \EE\Site\Utils\is_le_ssl_pending( $this->site_data['site_url'], $ssl ) ) {
+			EE::success( sprintf( 'Let\'s Encrypt SSL set up for %s, pending DNS verification.', $this->site_data['site_url'] ) );
+		} else {
+			EE::success( 'Enabled SSL for ' . $this->site_data['site_url'] );
 		}
 
 		delem_log( 'site ssl update end' );
@@ -1223,7 +1239,7 @@ abstract class EE_Site_Command {
 		}
 
 		if ( $refresh ) {
-			$no_https        = $this->site_data->site_ssl ? false : true;
+			$no_https        = ! $this->site_data->site_ssl || \EE\Site\Utils\is_le_ssl_pending( $this->site_data->site_url, $this->site_data->site_ssl );
 			$site            = $this->site_data;
 			$array_data      = ( array ) $this->site_data;
 			$this->site_data = reset( $array_data );
@@ -1653,7 +1669,30 @@ abstract class EE_Site_Command {
 					 * we don't need to create or get new certs. We can use the existing ones.
 					 */
 					if ( $force || EE\Site\Utils\ssl_needs_creation( $this->site_data['site_url'] ) ) {
-						$this->init_ssl( $this->site_data['site_url'], $this->site_data['site_fs_path'], $this->site_data['site_ssl'], $wildcard, $is_www_or_non_www_pointed, $force, $alias_domains );
+						$ssl_type = $this->site_data['site_ssl'];
+						$this->init_ssl( $this->site_data['site_url'], $this->site_data['site_fs_path'], $ssl_type, $wildcard, $is_www_or_non_www_pointed, $force, $alias_domains );
+
+						// init_le() only warns and clears site_ssl. A renewal keeps serving the old certificate, which its caller restores.
+						if ( empty( $this->site_data['site_ssl'] ) && ( ! $renew || \EE\Site\Utils\is_le_ssl_pending( $this->site_data['site_url'], 'le' ) ) ) {
+							if ( $renew ) {
+								// A pending site has no certificate to keep serving.
+								$this->serve_without_https( $containers_to_start );
+							} elseif ( ! $this->ssl_failure_handled_by_caller ) {
+								$this->serve_without_https( $containers_to_start );
+								$wildcard_flag = empty( $this->site_data['site_ssl_wildcard'] ) ? '' : ' --wildcard';
+								EE::warning( sprintf( 'SSL could not be enabled on %1$s, so it is served over HTTP only. Once the issue is fixed, enable SSL with `ee site update %1$s --ssl=%2$s%3$s`.', $this->site_data['site_url'], $ssl_type, $wildcard_flag ) );
+							}
+
+							return;
+						}
+
+						// A manual DNS-01 challenge keeps site_ssl without a certificate until `ee site ssl-verify` completes it.
+						if ( \EE\Site\Utils\is_le_ssl_pending( $this->site_data['site_url'], $this->site_data['site_ssl'] ) ) {
+							$this->serve_without_https( $containers_to_start );
+							EE::log( sprintf( '%1$s is served over HTTP until `ee site ssl-verify %1$s` succeeds.', $this->site_data['site_url'] ) );
+
+							return;
+						}
 					}
 				}
 
@@ -1668,6 +1707,60 @@ abstract class EE_Site_Command {
 
 			\EE\Site\Utils\reload_global_nginx_proxy();
 		}
+	}
+
+	/**
+	 * Keeps a site without a certificate on plain HTTP.
+	 *
+	 * With HTTPS enabled in its compose file, nginx-proxy would serve the site over HTTPS with the closest matching
+	 * certificate of another site.
+	 *
+	 * @param array $containers_to_start Containers to start for the site. Empty starts all.
+	 */
+	private function serve_without_https( $containers_to_start ) {
+
+		$this->dump_docker_compose_yml( [ 'nohttps' => true ] );
+		\EE\Site\Utils\start_site_containers( $this->site_data['site_fs_path'], $containers_to_start );
+		\EE\Site\Utils\reload_global_nginx_proxy();
+	}
+
+	/**
+	 * Turns HTTPS on for a site whose pending Let's Encrypt certificate `ee site ssl-verify` just issued.
+	 */
+	private function enable_verified_https() {
+
+		$site_url = $this->site_data['site_url'];
+
+		$error = '';
+		try {
+			$this->dump_docker_compose_yml( [ 'nohttps' => false ] );
+			\EE\Site\Utils\start_site_containers( $this->site_data['site_fs_path'], [ 'nginx' ] );
+		} catch ( \Exception $e ) {
+			$error = $e->getMessage();
+		}
+
+		// www_ssl_wrapper() kept the HTTP-only www redirect only when www pointed here (always for wildcard sites).
+		if ( $this->site_data['site_ssl_wildcard'] || $this->fs->exists( EE_ROOT_DIR . '/services/nginx-proxy/conf.d/' . $site_url . '-redirect.conf' ) ) {
+			\EE\Site\Utils\add_site_redirects( $site_url, true, false );
+		}
+
+		// Also on error: ssl-verify won't see the site as pending again, and the refresh suggested below doesn't call the hook.
+		$this->site_scheme_changed( 'https' );
+
+		if ( $error ) {
+			EE::error( sprintf( 'The certificate for %1$s was issued, but HTTPS could not be enabled: %2$s Fix the issue and run `ee site refresh %1$s`.', $site_url, $error ) );
+		}
+
+		EE::log( sprintf( 'HTTPS is enabled for %s.', $site_url ) );
+	}
+
+	/**
+	 * Called when a site starts being served over another scheme outside `ee site update --ssl`, e.g. once `ee site ssl-verify`
+	 * issued its pending certificate. Site types that store the site's URL override it.
+	 *
+	 * @param string $scheme The scheme the site is served over now: http or https.
+	 */
+	protected function site_scheme_changed( $scheme ) {
 	}
 
 	/**
@@ -1692,6 +1785,10 @@ abstract class EE_Site_Command {
 
 		if ( ! $parent_site->site_ssl_wildcard ) {
 			throw new \Exception( "Cannot inherit from $parent_site_name as site does not have wildcard SSL cert" );
+		}
+
+		if ( \EE\Site\Utils\is_le_ssl_pending( $parent_site_name, $parent_site->site_ssl ) ) {
+			throw new \Exception( "Cannot inherit from $parent_site_name as its Let's Encrypt certificate waits for `ee site ssl-verify $parent_site_name`" );
 		}
 	}
 
@@ -1827,21 +1924,22 @@ abstract class EE_Site_Command {
 
 		if ( ! $client->authorize( $domains, $wildcard, $preferred_challenge ) ) {
 			$this->site_data['site_ssl'] = null;
-			\EE::warning( 'SSL authorization failed. Site will be created without SSL. You can fix the issue and re-run: ee site ssl-verify ' . $site_url );
+			// The caller says how to retry: ssl-verify can't, the site has no SSL now.
+			\EE::warning( 'SSL authorization failed.' );
 
 			return;
 		}
 		$api_key_absent = empty( get_config_value( 'cloudflare-api-key' ) );
 		if ( $is_solver_dns && $api_key_absent ) {
-			echo \cli\Colors::colorize( '%YIMPORTANT:%n Run `ee site ssl-verify ' . $site_url . '` once the DNS changes have propagated to complete the certification generation and installation.', null );
+			echo \cli\Colors::colorize( '%YIMPORTANT:%n Run `ee site ssl-verify ' . $site_url . '` once the DNS changes have propagated to complete the certification generation and installation.', null ) . PHP_EOL;
 		} else {
 			if ( ! $api_key_absent && $is_solver_dns ) {
 				EE::log( 'Waiting for DNS entry propagation.' );
-				sleep( 10 );
+				\EE\Site\Utils\wait_for_dns_txt_records( $client->getPublishedDnsRecords() );
 			}
+			// ssl_verify() reports why; the caller says how to retry.
 			if ( ! $this->ssl_verify( [], [ 'force' => $force ], $www_or_non_www ) ) {
 				$this->site_data['site_ssl'] = null;
-				\EE::warning( 'SSL verification failed. You can fix the issue and re-run: ee site ssl-verify ' . $site_url );
 
 				return;
 			}
@@ -1949,6 +2047,10 @@ abstract class EE_Site_Command {
 		curl_setopt( $curl, CURLOPT_URL, $site_url );
 		curl_setopt( $curl, CURLOPT_RETURNTRANSFER, true );
 		curl_setopt( $curl, CURLOPT_FOLLOWLOCATION, true );
+		// Like Let's Encrypt's HTTP-01 validator, follow a redirect to HTTPS without validating its certificate: it may not exist yet
+		// (or nginx-proxy serves another site's), and the random content alone proves the request reached this site.
+		curl_setopt( $curl, CURLOPT_SSL_VERIFYPEER, false );
+		curl_setopt( $curl, CURLOPT_SSL_VERIFYHOST, 0 );
 		curl_setopt( $curl, CURLOPT_HEADER, false );
 		$data      = curl_exec( $curl );
 		$http_code = curl_getinfo( $curl, CURLINFO_HTTP_CODE );
@@ -1999,7 +2101,7 @@ abstract class EE_Site_Command {
 			$this->site_data = get_site_info( $args );
 		}
 
-		// A failed LE setup (init_le) clears site_ssl and suggests ssl-verify; point to the command that enables SSL properly.
+		// A failed LE setup (init_le) clears site_ssl; point to the command that enables SSL properly.
 		if ( empty( $this->site_data['site_ssl'] ) ) {
 			$wildcard_flag = empty( $this->site_data['site_ssl_wildcard'] ) ? '' : ' --wildcard';
 			EE::error( sprintf( 'SSL is not enabled on %1$s. Enable Let\'s Encrypt SSL with `ee site update %1$s --ssl=le%2$s`.', $this->site_data['site_url'], $wildcard_flag ) );
@@ -2009,6 +2111,9 @@ abstract class EE_Site_Command {
 		if ( 'le' !== $this->site_data['site_ssl'] ) {
 			EE::error( 'SSL verification is only applicable to Let\'s Encrypt certificates.' );
 		}
+
+		// A manual DNS-01 create or update left the site on HTTP until this command issues its certificate.
+		$enable_https = ! $called_by_ee && \EE\Site\Utils\is_le_ssl_pending( $this->site_data['site_url'], $this->site_data['site_ssl'] );
 
 		if ( ! isset( $this->le_mail ) ) {
 			try {
@@ -2030,12 +2135,15 @@ abstract class EE_Site_Command {
 			$is_solver_dns   = ( $this->site_data['site_ssl_wildcard'] || 'dns' === $preferred_challenge ) ? true : false;
 			$api_key_present = ! empty( get_config_value( 'cloudflare-api-key' ) );
 
-			$warning = ( $is_solver_dns && $api_key_present )
-				? "The dns entries have not yet propogated. Manually check: \nhost -t TXT _acme-challenge." . $this->site_data['site_url'] . "\nBefore retrying `ee site ssl " . $this->site_data['site_url'] . "`"
-				: 'Failed to verify SSL.';
-
-			EE::warning( $warning );
-			EE::warning( sprintf( 'Check logs and retry `ee site ssl-verify %s` once the issue is resolved.', $this->site_data['site_url'] ) );
+			if ( $is_solver_dns && $api_key_present ) {
+				EE::warning( 'The DNS records have not propagated yet. Check them with `host -t TXT _acme-challenge.' . $this->site_data['site_url'] . '`.' );
+			} elseif ( ! $called_by_ee ) {
+				EE::warning( 'Failed to verify SSL.' );
+			}
+			// During a create, update or renewal, the caller says how to retry.
+			if ( ! $called_by_ee ) {
+				EE::warning( sprintf( 'Check logs and retry `ee site ssl-verify %s` once the issue is resolved.', $this->site_data['site_url'] ) );
+			}
 
 			return false;
 		}
@@ -2047,6 +2155,10 @@ abstract class EE_Site_Command {
 
 		if ( ! $this->site_data['site_ssl_wildcard'] ) {
 			$client->cleanup();
+		}
+
+		if ( $enable_https ) {
+			$this->enable_verified_https();
 		}
 
 		reload_global_nginx_proxy();
@@ -2389,6 +2501,7 @@ abstract class EE_Site_Command {
 	private function reissue_le_certificate( $force ) {
 
 		$backup              = \EE\Site\Utils\backup_files( \EE\Site\Utils\get_site_ssl_file_paths( $this->site_data['site_url'] ) );
+		$was_pending         = \EE\Site\Utils\is_le_ssl_pending( $this->site_data['site_url'], $this->site_data['site_ssl'] );
 		$postfix_exists      = \EE_DOCKER::service_exists( 'postfix', $this->site_data['site_fs_path'] );
 		$containers_to_start = $postfix_exists ? [ 'nginx', 'postfix' ] : [ 'nginx' ];
 
@@ -2399,13 +2512,27 @@ abstract class EE_Site_Command {
 				throw new \Exception( sprintf( 'Let\'s Encrypt certificate could not be issued for %s. See the warnings above.', $this->site_data['site_url'] ) );
 			}
 		} catch ( \Exception $e ) {
+			$issued                      = $was_pending && ! \EE\Site\Utils\is_le_ssl_pending( $this->site_data['site_url'], 'le' );
 			$this->site_data['site_ssl'] = 'le';
 			\EE\Site\Utils\restore_files( $backup );
+			// The restore removed the first certificate of a pending site, but the compose file already serves HTTPS.
+			if ( $issued ) {
+				try {
+					$this->serve_without_https( $containers_to_start );
+				} catch ( \Exception $rollback ) {
+					EE::warning( sprintf( 'Could not put %s back on HTTP: %s', $this->site_data['site_url'], $rollback->getMessage() ) );
+				}
+			}
 			reload_global_nginx_proxy();
 			throw $e;
 		}
 
 		reload_global_nginx_proxy();
+
+		// A renewal or alias update can issue the first certificate of a pending site, e.g. once a Cloudflare key is set.
+		if ( $was_pending && ! \EE\Site\Utils\is_le_ssl_pending( $this->site_data['site_url'], $this->site_data['site_ssl'] ) ) {
+			$this->site_scheme_changed( 'https' );
+		}
 	}
 
 	/**

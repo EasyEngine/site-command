@@ -210,6 +210,11 @@ class Site_Letsencrypt {
 	private $repository;
 	private $conf_dir;
 
+	/**
+	 * @var array TXT values the last authorize() published through the DNS API, by record name.
+	 */
+	private $published_dns_records = [];
+
 	function __construct() {
 		$this->conf_dir = EE_ROOT_DIR . '/services/nginx-proxy/acme-conf';
 		$this->setRepository();
@@ -324,7 +329,8 @@ class Site_Letsencrypt {
 		} else {
 			$solver = new SimpleHttpSolver();
 		}
-		$solverName = $is_solver_dns ? 'dns-01' : 'http-01';
+		$solverName                  = $is_solver_dns ? 'dns-01' : 'http-01';
+		$this->published_dns_records = [];
 		try {
 			$order = $this->client->requestOrder( $domains );
 		} catch ( \Exception $e ) {
@@ -334,7 +340,6 @@ class Site_Letsencrypt {
 			} else {
 				\EE::warning( 'Let\'s Encrypt order request failed (' . $e->getMessage() . '). It seems you\'re in local environment or using non-public domain, please check logs. Skipping letsencrypt.' );
 			}
-			\EE::log( 'You can fix the issue and re-run: ee site ssl-verify ' . $domains[0] );
 
 			return false;
 		}
@@ -356,7 +361,6 @@ class Site_Letsencrypt {
 			}
 			if ( null === $authorizationChallenge ) {
 				\EE::warning( 'Challenge not supported for domain ' . $domainKey );
-				\EE::log( 'You can fix the issue and re-run: ee site ssl-verify ' . $domainKey );
 
 				return false;
 			}
@@ -389,9 +393,22 @@ class Site_Letsencrypt {
 			}
 		}
 
+		if ( $solver instanceof SimpleDnsCloudflareSolver ) {
+			$this->published_dns_records = $solver->get_created_records();
+		}
+
 		$this->repository->storeCertificateOrder( $domains, $order );
 
 		return true;
+	}
+
+	/**
+	 * TXT records the last authorize() published through the DNS API, to wait for before validation.
+	 *
+	 * @return array Expected values by record name.
+	 */
+	public function getPublishedDnsRecords() {
+		return $this->published_dns_records;
 	}
 
 	public function revokeAuthorizationChallenges( array $domains ) {
@@ -522,6 +539,9 @@ class Site_Letsencrypt {
 
 				return false;
 			}
+			if ( $is_solver_dns ) {
+				\EE\Site\Utils\wait_for_dns_txt_records( $this->published_dns_records );
+			}
 
 			$order = $this->repository->loadCertificateOrder( $domains );
 		}
@@ -561,7 +581,6 @@ class Site_Letsencrypt {
 					\EE::debug( sprintf( 'Testing the challenge for domain %s', $domain ) );
 					if ( ! $validator->isValid( $authorizationChallenge ) ) {
 						\EE::warning( 'Can not validate challenge for domain ' . $domain );
-						\EE::log( 'You can fix the issue and re-run: ee site ssl-verify ' . $domain );
 
 						return false;
 					}
@@ -572,11 +591,6 @@ class Site_Letsencrypt {
 				} catch ( \Exception $e ) {
 					\EE::debug( $e->getMessage() );
 					\EE::warning( 'Challenge Authorization failed (' . $e->getMessage() . '). Check logs and check if your domain is pointed correctly to this server.' );
-
-					$site_name = $domains[0];
-					$site_name = str_replace( '*.', '', $site_name );
-
-					\EE::log( "Re-run `ee site ssl-verify $site_name` after fixing the issue." );
 
 					return false;
 				}
