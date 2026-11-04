@@ -180,9 +180,10 @@ class Site_Backup_Restore {
 					self::ERROR_TYPE_NETWORK,
 					4004
 				);
-				// Don't hold the lock through the shutdown failure callback's retries.
-				$this->release_global_backup_lock();
+				// Hold the lock through the purge so no other backup prunes against the orphan,
+				// but not through the shutdown failure callback's retries.
 				$this->rollback_failed_backup();
+				$this->release_global_backup_lock();
 				EE::error( 'EasyEngine Dashboard success callback failed; the uploaded backup was rolled back. No backup was created.' );
 			}
 		} else {
@@ -1669,6 +1670,7 @@ class Site_Backup_Restore {
 			);
 			$this->dash_error_message = '';
 			$this->capture_error( $message, self::ERROR_TYPE_FILESYSTEM, 4003 );
+			$this->release_global_backup_lock();
 			EE::error( $message );
 		} else {
 			// Demoted from EE::success: this always precedes a terminal EE::error, so a
