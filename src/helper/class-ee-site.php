@@ -84,10 +84,15 @@ abstract class EE_Site_Command {
 	public function __construct() {
 
 		$this->fs = new Filesystem();
-		pcntl_signal( SIGTERM, [ $this, 'rollback' ] );
-		pcntl_signal( SIGHUP, [ $this, 'rollback' ] );
-		pcntl_signal( SIGUSR1, [ $this, 'rollback' ] );
-		pcntl_signal( SIGINT, [ $this, 'rollback' ] );
+		// A PHP without pcntl, or with it in disable_functions (fatal on PHP 8), only loses the rollback on signals.
+		if ( function_exists( 'pcntl_signal' ) ) {
+			pcntl_signal( SIGTERM, [ $this, 'rollback' ] );
+			pcntl_signal( SIGHUP, [ $this, 'rollback' ] );
+			pcntl_signal( SIGUSR1, [ $this, 'rollback' ] );
+			pcntl_signal( SIGINT, [ $this, 'rollback' ] );
+		} else {
+			EE::debug( 'PHP function pcntl_signal() is unavailable, so site commands interrupted by a signal (e.g. Ctrl+C) are not rolled back.' );
+		}
 		$shutdown_handler = new Shutdown_Handler();
 		register_shutdown_function( [ $shutdown_handler, 'cleanup' ], [ &$this ] );
 	}
@@ -1768,7 +1773,9 @@ abstract class EE_Site_Command {
 				}
 				sleep( 1 );
 				// This file has no declare(ticks), so run pending SIGINT/SIGTERM handlers here or Ctrl-C can't end the wait.
-				pcntl_signal_dispatch();
+				if ( function_exists( 'pcntl_signal_dispatch' ) ) {
+					pcntl_signal_dispatch();
+				}
 			}
 		}
 
@@ -2449,6 +2456,11 @@ abstract class EE_Site_Command {
 
 		$this->fs = new Filesystem();
 		$ngrok    = EE_SERVICE_DIR . '/ngrok/ngrok';
+
+		// Everything but a plain --disable starts ngrok with shell_exec().
+		if ( ( ! $disable || $refresh ) && ! function_exists( 'shell_exec' ) ) {
+			EE::error( 'Sharing a site needs the PHP function shell_exec(), which this PHP disables. Remove it from disable_functions for the PHP CLI.' );
+		}
 
 		if ( $disable || $refresh ) {
 			if ( $this->site_data->site_url === $active_publish ) {
