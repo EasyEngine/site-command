@@ -1,0 +1,226 @@
+# Behat suite of an EasyEngine package, run inside a fresh core checkout on a throwaway runner.
+# The main lane's job is named "Behat Tests - PHP <version>" to match the required checks; update those with the matrix.
+name: Behat
+
+on:
+  pull_request:
+  push:
+    branches:
+      - develop
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: behat-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CORE_REF: develop
+  COMPOSE_VERSION: v5.5.1
+  # Not RCLONE_*: rclone reads those variables as its own flags.
+  RCLONE_RELEASE: v1.75.1
+  # No public DNS (Let's Encrypt) or real backup storage on hosted runners.
+  EXCLUDE_TAGS: '~@le&&~@remote-real'
+  # le* lanes run @le against a local Pebble instead (.github/behat/pebble-setup.sh); @le-real needs the real service.
+  LE_TAGS: '@le&&~@le-real&&~@remote-real'
+  # Local rclone alias written to EE's rclone-path, for suites with @remote scenarios ('eetest:ee-backups'); empty = no rclone.
+  EE_RCLONE_PATH: 'eetest:ee-backups'
+  COMPOSE_INTERACTIVE_NO_CLI: 1
+  RCLONE_CONFIG: /etc/rclone/rclone.conf
+  EE_BEHAT_DESTRUCTIVE: 1
+  # CI only, for `composer update` of the cloned core (develop and PRs): Composer blocks these versions for security advisories. Remove after the symfony/yaml and guzzlehttp/psr7 upgrade.
+  ADVISORY_IGNORE: >-
+    {"symfony/yaml": {"constraint": "4.4.*", "reason": "pinned by core and behat/behat 3.8.1", "on-audit": false},
+    "guzzlehttp/psr7": {"constraint": "1.9.*", "reason": "required by acmephp/core 1.3.0", "on-audit": false},
+    "guzzlehttp/guzzle": {"constraint": "7.8.*", "reason": "last guzzle 7 line that accepts guzzlehttp/psr7 1.x", "on-audit": false}}
+
+jobs:
+  behat:
+    name: ${{ matrix.lane == 'main' && format('Behat Tests - PHP {0}', matrix.php) || format('Behat {0} (PHP {1})', matrix.lane, matrix.php) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['7.4', '8.0', '8.1', '8.2', '8.3', '8.4', '8.5']
+        lane: [main, wp, le]
+        include:
+          - lane: main
+            tags: '~@known-bug&&~@wp'
+          - lane: wp
+            tags: '@wp&&~@known-bug'
+          # @le against Pebble (.github/behat/pebble-setup.sh).
+          - lane: le
+            tags: '~@known-bug'
+    steps:
+      - name: Check out the package
+        uses: actions/checkout@v7
+        with:
+          path: pkg
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+          tools: composer
+          extensions: pcntl, curl, sqlite3, zip, dom, mbstring, json
+
+      - name: Get Composer cache directory
+        id: composer-cache
+        run: echo "dir=$(composer config -g cache-files-dir)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Composer caching
+        uses: actions/cache@v6
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: ${{ runner.os }}-composer-php${{ matrix.php }}-${{ github.sha }}
+          restore-keys: ${{ runner.os }}-composer-php${{ matrix.php }}-
+
+      - name: Prepare the host
+        run: |
+          # The runner image ships web and database servers; EE needs 80/443.
+          sudo systemctl stop nginx apache2 mysql 2>/dev/null || true
+          sudo ss -ltnp | grep -E ':(80|443|3306) ' || true
+          sudo curl -fsSL "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-linux-$(uname -m)" -o /usr/local/bin/docker-compose
+          sudo chmod +x /usr/local/bin/docker-compose
+          docker version --format 'docker {{.Server.Version}}'
+          docker-compose version
+          openssl version
+          echo "umask $(umask), under sudo $(sudo sh -c umask)"
+          # Suites that request the host's public IP use the first of these; EE picks a frontend subnet outside eth0's.
+          echo "hostname -I: $(hostname -I)"
+          ip -4 route
+          if [ -n "$EE_RCLONE_PATH" ]; then
+            curl -fsSL "https://github.com/rclone/rclone/releases/download/${RCLONE_RELEASE}/rclone-${RCLONE_RELEASE}-linux-amd64.zip" -o "$RUNNER_TEMP/rclone.zip"
+            unzip -q -j -o "$RUNNER_TEMP/rclone.zip" '*/rclone' -d "$RUNNER_TEMP"
+            sudo install -m 0755 "$RUNNER_TEMP/rclone" /usr/local/bin/rclone
+            sudo mkdir -p "$(dirname "$RCLONE_CONFIG")" /var/tmp/ee-rclone
+            printf '[%s]\ntype = alias\nremote = /var/tmp/ee-rclone\n' "${EE_RCLONE_PATH%%:*}" | sudo tee "$RCLONE_CONFIG" >/dev/null
+            sudo -E rclone listremotes
+          fi
+
+      # Every lane without Pebble points EE's hardcoded Let's Encrypt host at a blackhole, so no scenario can reach the real service.
+      - name: Block the real Let's Encrypt
+        if: ${{ !startsWith(matrix.lane, 'le') }}
+        run: sudo -E pkg/.github/behat/pebble-setup.sh block
+
+      - name: Set up EasyEngine core
+        run: |
+          git clone -q --depth 1 -b "$CORE_REF" https://github.com/EasyEngine/easyengine.git easyengine
+          cd easyengine
+          # All easyengine/* packages on dev-develop (as core CI does), except the one under test: that's this checkout.
+          php -r '
+            $pkg = json_decode(file_get_contents("../pkg/composer.json"), true)["name"];
+            $j = json_decode(file_get_contents("composer.json"), true);
+            foreach ($j["require"] as $k => $v) if (strpos($k, "easyengine/") === 0) $j["require"][$k] = "dev-develop";
+            $repos = isset($j["repositories"]) ? $j["repositories"] : [];
+            array_unshift($repos, ["type" => "path", "url" => "../pkg", "options" => ["symlink" => false, "versions" => [$pkg => "dev-develop"]]]);
+            $j["repositories"] = $repos;
+            file_put_contents("composer.json", json_encode($j, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n");
+            file_put_contents(getenv("GITHUB_ENV"), "PKG=$pkg\n", FILE_APPEND);'
+          composer config --json --merge policy.advisories.ignore "$ADVISORY_IGNORE"
+          composer update --prefer-dist --no-progress --no-interaction
+          composer show "$(jq -r .name ../pkg/composer.json)" | grep -E '^(versions|source|dist) ' || true
+          rm -rf features
+          cp -R ../pkg/features features
+          # Some commands (clone, sync) shell out to `ee` from PATH.
+          sudo ln -sf "$PWD/bin/ee" /usr/local/bin/ee
+
+      - name: Initialise EasyEngine
+        working-directory: easyengine
+        run: |
+          sudo -E bin/ee cli info
+          # The first non-cli command runs the initial setup (DB, config, image pulls).
+          sudo -E bin/ee site list || true
+          # Non-LE commands such as ssl-renew still prompt for le-mail when it's missing.
+          sudo -E bin/ee config set le-mail behat-ci@example.org
+          if [ -n "$EE_RCLONE_PATH" ]; then
+            sudo -E bin/ee config set rclone-path "$EE_RCLONE_PATH"
+            sudo -E bin/ee config set no-of-backups 3
+          fi
+          # EasyEngine's first run replaces the installed docker-compose with 2.27.0, so that's what the suite runs on, as on a fresh install.
+          # That download doesn't use curl --fail, so a GitHub error page can replace the binary; fetch 2.27.0 again then.
+          if ! docker-compose version; then
+            sudo curl -fsSL --retry 5 "https://github.com/docker/compose/releases/download/v2.27.0/docker-compose-linux-$(uname -m)" -o /usr/local/bin/docker-compose
+            sudo chmod +x /usr/local/bin/docker-compose
+            docker-compose version
+          fi
+
+      # The suites run bin/ee; this keeps the release build (no dev autoloading) covered.
+      - name: Build the phar
+        if: matrix.lane == 'main'
+        working-directory: easyengine
+        run: |
+          composer dump-autoload --no-dev -q
+          php -dphar.readonly=0 utils/make-phar.php easyengine.phar --quiet
+          composer dump-autoload -q
+          sudo php easyengine.phar cli version
+
+      - name: Start Pebble and redirect Let's Encrypt to it
+        if: startsWith(matrix.lane, 'le')
+        run: |
+          sudo -E pkg/.github/behat/pebble-setup.sh setup
+          # Diagnostic only: nginx-proxy may not be up before the first site exists.
+          sudo docker ps --format '{{.Names}} {{.Ports}}'
+          sudo pkg/.github/behat/pebble-setup.sh reach || true
+
+      - name: Run Behat
+        working-directory: easyengine
+        shell: 'script -q -e -c "bash {0}"'
+        # A hung step (e.g. a command stopped on the TTY) should still leave logs.
+        timeout-minutes: 75
+        run: |
+          set -e
+          mkdir -p "$RUNNER_TEMP/behat/junit"
+          base="$EXCLUDE_TAGS"
+          case "${{ matrix.lane }}" in le*) base="$LE_TAGS" ;; esac
+          behat=(sudo -E vendor/bin/behat --strict --tags="${base}&&${{ matrix.tags }}"
+            --format=progress --out=std
+            --format=junit --out="$RUNNER_TEMP/behat/junit"
+            --format=pretty --out="$RUNNER_TEMP/behat/pretty.log")
+          "${behat[@]}"
+
+      - name: Collect logs
+        if: always()
+        run: |
+          out="$RUNNER_TEMP/behat"
+          mkdir -p "$out"
+          sudo cp /opt/easyengine/logs/ee.log "$out/" 2>/dev/null || echo 'No ee.log.'
+          sudo stat -c '%a %U:%G %n' /opt/easyengine /opt/easyengine/logs > "$out/dirs.txt" 2>/dev/null || true
+          sudo docker ps -a --format '{{.Names}}\t{{.Image}}\t{{.Status}}' > "$out/containers.txt" || true
+          if [[ "${{ matrix.lane }}" == le* ]]; then
+            sudo pkg/.github/behat/pebble-setup.sh logs > "$out/pebble.log" 2>&1 || true
+            tail -n 60 "$out/pebble.log" || true
+          fi
+          sudo chown -R "$USER" "$out"
+          # One block per failed scenario, from the junit files.
+          python3 - "$out" <<'PY'
+          import glob, re, sys, xml.etree.ElementTree as ET
+          out = sys.argv[1]
+          lines = []
+          for f in sorted(glob.glob(out + '/junit/*.xml')):
+              # Behat copies raw output (docker logs with ANSI escapes) into the junit file; XML 1.0 forbids those bytes.
+              data = re.sub(rb'[\x00-\x08\x0b\x0c\x0e-\x1f]', b'', open(f, 'rb').read())
+              for case in ET.fromstring(data).iter('testcase'):
+                  for bad in list(case.findall('failure')) + list(case.findall('error')):
+                      lines.append('### %s :: %s\n%s\n%s\n' % (case.get('classname'), case.get('name'), bad.get('message') or '', bad.text or ''))
+          open(out + '/failures.txt', 'w').write('\n'.join(lines) or 'No failures.\n')
+          print('%d failed scenarios' % len(lines))
+          PY
+          head -c 20000 "$out/failures.txt"
+
+      - name: Tear down Pebble and the Let's Encrypt block
+        if: always()
+        run: sudo pkg/.github/behat/pebble-setup.sh teardown
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: behat-${{ matrix.lane }}-php${{ matrix.php }}
+          path: ${{ runner.temp }}/behat
+          retention-days: 14
