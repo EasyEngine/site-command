@@ -42,7 +42,8 @@ env:
 jobs:
   behat:
     name: ${{ matrix.lane == 'main' && format('Behat Tests - PHP {0}', matrix.php) || format('Behat {0} (PHP {1})', matrix.lane, matrix.php) }}
-    runs-on: ubuntu-latest
+    # ubuntu-latest is now 26.04, whose sudo-rs ignores `sudo -E`, so the job's env (Behat guards, rclone and Pebble settings) never reaches commands run under sudo.
+    runs-on: ubuntu-24.04
     timeout-minutes: 150
     strategy:
       fail-fast: false
