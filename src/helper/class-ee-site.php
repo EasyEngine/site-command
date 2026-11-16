@@ -2418,7 +2418,7 @@ abstract class EE_Site_Command {
 				try {
 					$this->renew_ssl_cert( [ $site->site_url ], $force );
 				} catch ( \Exception $e ) {
-					EE::warning( $e->getMessage() . ' The current certificate is kept.' );
+					EE::warning( $e->getMessage() . $this->ssl_renew_kept_note( $site->site_url ) );
 				}
 			}
 		} else {
@@ -2426,16 +2426,28 @@ abstract class EE_Site_Command {
 			try {
 				$this->renew_ssl_cert( $args, $force );
 			} catch ( \Exception $e ) {
+				$kept = $this->ssl_renew_kept_note( isset( $this->site_data['site_url'] ) ? $this->site_data['site_url'] : '' );
 				// `ssl-renew --all` runs this once per site, and one failed site must not stop the others.
 				if ( ! empty( EE::get_runner()->assoc_args['all'] ) ) {
-					EE::warning( $e->getMessage() . ' The current certificate is kept.' );
+					EE::warning( $e->getMessage() . $kept );
 
 					return;
 				}
-				EE::error( $e->getMessage() . ' The current certificate is kept.' );
+				EE::error( $e->getMessage() . $kept );
 			}
 		}
 		EE::success( 'SSL renewal completed.' );
+	}
+
+	/**
+	 * Note for a failed renewal: a site still waiting for its first certificate has none to keep.
+	 *
+	 * @param string $site_url Name of the site.
+	 *
+	 * @return string
+	 */
+	private function ssl_renew_kept_note( $site_url ) {
+		return $site_url && \EE\Site\Utils\is_le_ssl_pending( $site_url, 'le' ) ? '' : ' The current certificate is kept.';
 	}
 
 	/**
@@ -2459,6 +2471,11 @@ abstract class EE_Site_Command {
 
 		if ( 'le' !== $this->site_data['site_ssl'] ) {
 			EE::error( 'Only Letsencrypt certificate renewal is supported.' );
+		}
+
+		// No certificate to renew yet: ssl-verify completes the published DNS challenge, --force starts a new one.
+		if ( ! $force && \EE\Site\Utils\is_le_ssl_pending( $this->site_data['site_url'], $this->site_data['site_ssl'] ) ) {
+			throw new \Exception( sprintf( 'Let\'s Encrypt SSL on %1$s waits for its DNS challenge. Run `ee site ssl-verify %1$s` once the DNS records have propagated, or `ee site ssl-renew %1$s --force` to start a new challenge.', $this->site_data['site_url'] ) );
 		}
 
 		// Resolve le-mail only after confirming the site is LE, so non-LE sites hit the site-type error first.
