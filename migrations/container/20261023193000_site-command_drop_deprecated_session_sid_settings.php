@@ -4,6 +4,9 @@ namespace EE\Migration;
 
 use EE;
 use EE\Model\Site;
+use function EE\Site\Utils\get_container_file_contents;
+use function EE\Site\Utils\put_container_file_contents;
+use function EE\Site\Utils\site_php_conf_dir;
 
 /**
  * Removes session.sid_length and session.sid_bits_per_character, deprecated as of PHP 8.4, from the php.ini of PHP 8.4 and 8.5 sites.
@@ -11,6 +14,9 @@ use EE\Model\Site;
  * A site's php.ini comes from its image at creation and from the version's archive on a PHP switch, so existing sites keep them otherwise.
  */
 class DropDeprecatedSessionSidSettings extends Base {
+
+	/** Largest php.ini read; the shipped one is about 70 KB. */
+	const MAX_SIZE = 1048576;
 
 	/** `latest` sites run the php8.4 image. */
 	const PHP_VERSIONS = [ '8.4', '8.5', 'latest' ];
@@ -106,15 +112,7 @@ class DropDeprecatedSessionSidSettings extends Base {
 				if ( false === $old ) {
 					throw new \Exception( 'Could not read ' . $change['backup'] );
 				}
-				$handle = self::open_ini( $change['ini'] );
-				if ( ! $handle ) {
-					throw new \Exception( $change['ini'] . ' is gone.' );
-				}
-				try {
-					self::rewrite( $handle, $old, $change['ini'] );
-				} finally {
-					fclose( $handle );
-				}
+				put_container_file_contents( $change['ini'], $change['dir'], $old, null, self::MAX_SIZE );
 				$this->fs->remove( $change['backup'] );
 				self::reload_fpm( $change['site'] );
 			} catch ( \Throwable $e ) {
@@ -134,42 +132,41 @@ class DropDeprecatedSessionSidSettings extends Base {
 		$ini = $site->site_fs_path . '/config/php/php/php.ini';
 
 		// Missing on macOS, where php.ini stays in the container.
-		$handle = self::open_ini( $ini );
-		if ( ! $handle ) {
+		if ( ! file_exists( $ini ) && ! is_link( $ini ) ) {
 			EE::debug( "Skipping $site->site_url: no php.ini at $ini." );
 
 			return;
 		}
 
+		// The site's php container can swap anything in its config volume, so php.ini is read and rewritten in place through a checked handle.
+		$dir     = site_php_conf_dir( $site->site_fs_path, 'php' );
+		$content = get_container_file_contents( $ini, $dir, self::MAX_SIZE );
+
+		list( $new_content, $removed ) = self::strip_settings( $content );
+		if ( $new_content === $content ) {
+			EE::debug( "$ini has no deprecated session ID settings." );
+
+			return;
+		}
+
+		$backup = EE_BACKUP_DIR . '/' . $site->site_url . '/php.ini.with-session-sid-settings';
+		$this->fs->dumpFile( $backup, $content );
+
 		try {
-			$content = stream_get_contents( $handle );
-			if ( false === $content ) {
-				throw new \Exception( "Could not read $ini." );
+			put_container_file_contents( $ini, $dir, $new_content, $content, self::MAX_SIZE );
+		} catch ( \Exception $e ) {
+			// A failed write may have left php.ini partly written; any other failure left it as it was.
+			if ( 0 === strpos( $e->getMessage(), 'could not write' ) ) {
+				throw new \Exception( $e->getMessage() . "; the previous file is $backup" );
 			}
-
-			list( $new_content, $removed ) = self::strip_settings( $content );
-			if ( $new_content === $content ) {
-				EE::debug( "$ini has no deprecated session ID settings." );
-
-				return;
-			}
-
-			$backup = EE_BACKUP_DIR . '/' . $site->site_url . '/php.ini.with-session-sid-settings';
-			$this->fs->dumpFile( $backup, $content );
-
-			try {
-				self::rewrite( $handle, $new_content, $ini );
-			} catch ( \Exception $e ) {
-				self::rewrite( $handle, $content, $ini );
-				throw $e;
-			}
-		} finally {
-			fclose( $handle );
+			$this->fs->remove( $backup );
+			throw $e;
 		}
 
 		$this->changed[] = [
 			'site'   => $site,
 			'ini'    => $ini,
+			'dir'    => $dir,
 			'backup' => $backup,
 		];
 		EE::debug( "Removed the deprecated session ID settings from $ini; the previous file is $backup." );
@@ -195,7 +192,8 @@ class DropDeprecatedSessionSidSettings extends Base {
 	 */
 	public static function strip_settings( $content ) {
 
-		$lines = preg_split( '/(?<=\n)/', $content, -1, PREG_SPLIT_NO_EMPTY );
+		// After every LF, and after a CR not followed by LF, so a CR-only file isn't read as one line.
+		$lines = preg_split( '/(?<=\n)|(?<=\r)(?!\n)/', $content, -1, PREG_SPLIT_NO_EMPTY );
 		$norm  = array_map(
 			function ( $line ) {
 				return rtrim( $line, " \t\r\n" );
@@ -262,54 +260,6 @@ class DropDeprecatedSessionSidSettings extends Base {
 		}
 
 		return [ $new_content, $removed ];
-	}
-
-	/**
-	 * Opens php.ini for rewriting in place, so no other path is created, followed or re-resolved.
-	 * The directory is mounted into the site's php container, so nothing in it is trusted.
-	 *
-	 * @param string $file php.ini path.
-	 *
-	 * @return resource|null Null when there is no regular file.
-	 * @throws \Exception
-	 */
-	private static function open_ini( $file ) {
-
-		if ( is_link( $file ) || ! is_file( $file ) ) {
-			return null;
-		}
-
-		$handle = fopen( $file, 'r+' );
-		if ( false === $handle ) {
-			throw new \Exception( "Could not open $file." );
-		}
-
-		// Swapped for a symlink after the check, or a hard link to another file.
-		$opened = fstat( $handle );
-		clearstatcache( true, $file );
-		$linked = lstat( $file );
-		if ( ! $opened || ! $linked || $opened['dev'] !== $linked['dev'] || $opened['ino'] !== $linked['ino'] || 0100000 !== ( $linked['mode'] & 0170000 ) || 1 !== $opened['nlink'] ) {
-			fclose( $handle );
-			throw new \Exception( "$file is not a regular file." );
-		}
-
-		return $handle;
-	}
-
-	/**
-	 * The removal only shortens the file, so writing over it needs no new space; mode and owner stay.
-	 *
-	 * @param resource $handle  Handle from open_ini().
-	 * @param string   $content New content.
-	 * @param string   $file    php.ini path, for the error.
-	 *
-	 * @throws \Exception
-	 */
-	private static function rewrite( $handle, $content, $file ) {
-
-		if ( ! rewind( $handle ) || strlen( $content ) !== fwrite( $handle, $content ) || ! fflush( $handle ) || ! ftruncate( $handle, strlen( $content ) ) ) {
-			throw new \Exception( "Could not write $file." );
-		}
 	}
 
 	/**

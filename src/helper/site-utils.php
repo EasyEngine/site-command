@@ -1729,27 +1729,30 @@ function ini_global_part( string $content ) {
 }
 
 /**
- * Real path of a site's conf.d. config/php is EasyEngine's own link to the site's config volume; everything below it belongs to the site's php container.
+ * Real path of a directory in a site's php config. config/php is EasyEngine's own link to the site's config volume; everything below it belongs to the site's php container.
  *
  * @param string $site_fs_path Site root.
+ * @param string $sub          Directory below config/php.
  *
  * @return string
  * @throws \Exception
  */
-function site_php_conf_dir( string $site_fs_path ) {
+function site_php_conf_dir( string $site_fs_path, string $sub = 'php/conf.d' ) {
 
 	$base = realpath( $site_fs_path . '/config/php' );
 	if ( false === $base ) {
 		throw new \Exception( 'could not resolve config/php' );
 	}
 
-	return $base . '/php/conf.d';
+	return $base . '/' . $sub;
 }
 
 /**
  * Open a file in a directory the site's php container can change, as a handle for every later read and write, so nothing swapped in at that path is followed afterwards.
  *
  * Host root must not write through a symlink, a hard link or a swapped directory, so the handle has to be the regular file in $dir. On Linux the kernel's own path of the open file decides; elsewhere the path is checked before and after opening.
+ *
+ * Left open: a symlink, FIFO or device renamed into place between the lstat() check and the open is opened (non-blocking) and closed unread and unwritten, and opening some devices has side effects. Only an open with O_NOFOLLOW/openat, which PHP lacks, or one inside the container closes that.
  *
  * @param string $file Path.
  * @param string $mode 'r' or 'r+'. Nothing is created: PHP expands every path it creates or links to an absolute one, so it can't be confined to a directory the container can swap.
@@ -1770,7 +1773,16 @@ function open_container_file( string $file, string $mode, string $dir ) {
 		throw new \Exception( "a directory above $name is a symlink" );
 	}
 
-	// Non-blocking ('n', O_NONBLOCK), so a FIFO swapped in can't stall the open before it is rejected below.
+	// PHP can't open without following a symlink (no O_NOFOLLOW, O_PATH or openat), so refuse anything but a regular file before opening it.
+	$before = @lstat( $file );
+	if ( ! $before ) {
+		throw new \Exception( "$name is missing" );
+	}
+	if ( 0100000 !== ( $before['mode'] & 0170000 ) ) {
+		throw new \Exception( "$name is not a regular file" );
+	}
+
+	// Non-blocking ('n', O_NONBLOCK): a FIFO or device swapped in after the check above is still opened, but can't stall, and is closed below before any read or write.
 	$handle = @fopen( $file, $mode . 'n' );
 	if ( false === $handle ) {
 		throw new \Exception( "could not open $name" );
@@ -1781,7 +1793,7 @@ function open_container_file( string $file, string $mode, string $dir ) {
 	$linked = @lstat( $file );
 	$real   = opened_file_path( $handle );
 	$error  = null;
-	if ( ! $opened || ! $linked || $opened['dev'] !== $linked['dev'] || $opened['ino'] !== $linked['ino'] || 0100000 !== ( $linked['mode'] & 0170000 ) ) {
+	if ( ! $opened || ! $linked || $opened['dev'] !== $before['dev'] || $opened['ino'] !== $before['ino'] || $opened['dev'] !== $linked['dev'] || $opened['ino'] !== $linked['ino'] || 0100000 !== ( $opened['mode'] & 0170000 ) || 0100000 !== ( $linked['mode'] & 0170000 ) ) {
 		$error = "$name is not a regular file";
 	} elseif ( realpath( dirname( $file ) ) !== $dir || ( null !== $real && "$dir/$name" !== $real ) ) {
 		$error = "a directory above $name is a symlink";
@@ -1865,4 +1877,138 @@ function read_container_file( $handle, int $max = 65536 ) {
 	}
 
 	return $content;
+}
+
+/**
+ * Read a file in a directory the site's php container can change.
+ *
+ * @param string $file Path.
+ * @param string $dir  Real path of the directory the file must be in.
+ * @param int    $max  Largest size accepted.
+ *
+ * @return string
+ * @throws \Exception When it is missing, not a regular file in $dir, unreadable or larger than $max.
+ */
+function get_container_file_contents( string $file, string $dir, int $max = 1048576 ) {
+
+	$handle = open_container_file( $file, 'r', $dir );
+	try {
+		return read_container_file( $handle, $max );
+	} finally {
+		fclose( $handle );
+	}
+}
+
+/**
+ * Overwrite an existing file in a directory the site's php container can change, in place, so owner, mode and inode stay.
+ *
+ * @param string      $file     Path.
+ * @param string      $dir      Real path of the directory the file must be in.
+ * @param string      $content  New content.
+ * @param string|null $expected Content the file must still hold, e.g. the one the change was made from; null for any.
+ * @param int         $max      Largest current size accepted.
+ *
+ * @return bool Whether it was written; false when it already held $content.
+ * @throws \Exception When it isn't a regular file in $dir, holds something else than $expected, or can't be written (the old content is put back).
+ */
+function put_container_file_contents( string $file, string $dir, string $content, ?string $expected = null, int $max = 1048576 ) {
+
+	// Compared read-only first, so a file that needs no change isn't opened for writing (a hard link or an immutable file would refuse that).
+	$current = get_container_file_contents( $file, $dir, $max );
+	if ( null !== $expected && $current !== $expected ) {
+		throw new \Exception( basename( $file ) . ' changed while it was checked' );
+	}
+	if ( $current === $content ) {
+		return false;
+	}
+
+	$handle = open_container_file( $file, 'r+', $dir );
+	try {
+		if ( read_container_file( $handle, $max ) !== $current ) {
+			throw new \Exception( basename( $file ) . ' changed while it was checked' );
+		}
+		try {
+			rewrite_container_file( $handle, $content );
+		} catch ( \Exception $e ) {
+			// A short write leaves part of the file; put the old one back.
+			rewrite_container_file( $handle, $current );
+			throw $e;
+		}
+	} finally {
+		fclose( $handle );
+	}
+
+	return true;
+}
+
+/**
+ * Refuse a directory tree that holds anything but directories and regular files.
+ *
+ * Only conclusive while nothing can change the tree, e.g. with the site's php container stopped.
+ *
+ * @param string $dir Real path of the directory.
+ *
+ * @throws \Exception Naming the first other entry.
+ */
+function check_plain_tree( string $dir ) {
+
+	clearstatcache( true );
+	$names = @scandir( $dir );
+	if ( false === $names ) {
+		throw new \Exception( "could not read $dir" );
+	}
+
+	foreach ( array_diff( $names, [ '.', '..' ] ) as $name ) {
+		$path = "$dir/$name";
+		$stat = @lstat( $path );
+		$type = $stat ? $stat['mode'] & 0170000 : 0;
+		if ( 0040000 === $type ) {
+			check_plain_tree( $path );
+		} elseif ( 0100000 !== $type ) {
+			throw new \Exception( "$path is not a regular file or directory" );
+		}
+	}
+}
+
+/**
+ * Give a user a directory in a site's config volume and every directory and regular file below it, without following symlinks.
+ *
+ * Symlinks, FIFOs and devices are left alone, and a directory must still be at its real path before its entries are changed.
+ *
+ * @param string     $dir  Real path of the directory.
+ * @param string|int $user User name or ID.
+ *
+ * @throws \Exception
+ */
+function chown_container_tree( string $dir, $user ) {
+
+	clearstatcache( true );
+	$stat = @lstat( $dir );
+	if ( ! $stat || 0040000 !== ( $stat['mode'] & 0170000 ) || realpath( $dir ) !== $dir ) {
+		throw new \Exception( "$dir is not a directory, or a directory above it is a symlink" );
+	}
+	if ( ! @lchown( $dir, $user ) ) {
+		throw new \Exception( "could not change the owner of $dir" );
+	}
+
+	$names = @scandir( $dir );
+	if ( false === $names ) {
+		throw new \Exception( "could not read $dir" );
+	}
+	foreach ( array_diff( $names, [ '.', '..' ] ) as $name ) {
+		$path = "$dir/$name";
+		clearstatcache( true );
+		$entry = @lstat( $path );
+		$type  = $entry ? $entry['mode'] & 0170000 : 0;
+		if ( 0040000 === $type ) {
+			chown_container_tree( $path, $user );
+		} elseif ( 0100000 === $type ) {
+			if ( realpath( $dir ) !== $dir ) {
+				throw new \Exception( "a directory above $path is a symlink" );
+			}
+			if ( ! @lchown( $path, $user ) ) {
+				throw new \Exception( "could not change the owner of $path" );
+			}
+		}
+	}
 }
