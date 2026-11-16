@@ -135,6 +135,9 @@ DEALLOCATE PREPARE ee_stmt;
 	// The restore replaced the top-level entries of app/ (htdocs included).
 	private $restore_replaced_app = false;
 
+	// The restore put the backup's custom compose files in place; the site is re-enabled after the commit.
+	private $restore_custom_compose = false;
+
 	// The per-site lock file this process created (released on any exit).
 	private $site_lock_file = null;
 
@@ -427,8 +430,11 @@ DEALLOCATE PREPARE ee_stmt;
 			$this->restore_site( $backup_dir );
 		}
 
-		// Only now, with files, DB and config committed; restore_site()/restore_wp() no longer call it (BKP-13).
-		$this->maybe_restore_custom_docker_compose( $backup_dir );
+		// Once per restore (BKP-13), after the commit like the restart below: it recreates the containers.
+		if ( $this->restore_custom_compose ) {
+			EE::log( 'Custom docker-compose file(s) updated.' );
+			EE::run_command( [ 'site', 'enable', $this->site_data['site_url'] ], [ 'force' => true ] );
+		}
 
 		$this->clear_download_dir();
 		$this->restore_in_progress = false;
@@ -957,30 +963,112 @@ DEALLOCATE PREPARE ee_stmt;
 		$this->fs->remove( $backup_dir . '/sql' );
 	}
 
-	private function maybe_restore_custom_docker_compose( $backup_dir ) {
-		$custom_compose_update             = false;
-		$custom_docker_compose             = $backup_dir . '/docker-compose-custom.yml';
-		$custom_docker_compose_dir_archive = $backup_dir . '/user-docker-compose.zip';
+	/**
+	 * Put the backup's custom compose files in place as the last step before the commit (every docker-compose call of
+	 * the site, `ee shell` too, reads them); a rollback puts back the saved ones.
+	 *
+	 * @param string $backup_dir Local directory holding the downloaded backup.
+	 */
+	private function restore_custom_docker_compose( $backup_dir ) {
+		$site_dir = EE_ROOT_DIR . '/sites/' . $this->site_data['site_url'];
+		$file     = $backup_dir . '/docker-compose-custom.yml';
+		$archive  = $backup_dir . '/user-docker-compose.zip';
 
-		if ( $this->fs->exists( $custom_docker_compose ) ) {
-			$custom_compose_update = true;
-			$this->fs->copy( $custom_docker_compose, EE_ROOT_DIR . '/sites/' . $this->site_data['site_url'] . '/docker-compose-custom.yml', true );
+		if ( ! $this->fs->exists( $file ) && ! $this->fs->exists( $archive ) ) {
+			return;
 		}
 
-		if ( $this->fs->exists( $custom_docker_compose_dir_archive ) ) {
-			$custom_compose_update     = true;
-			$custom_docker_compose_dir = EE_ROOT_DIR . '/sites/' . $this->site_data['site_url'] . '/user-docker-compose';
-			if ( ! $this->fs->exists( $custom_docker_compose_dir ) ) {
-				$this->fs->mkdir( $custom_docker_compose_dir );
+		$this->snapshot_custom_compose( $site_dir );
+
+		if ( $this->fs->exists( $file ) ) {
+			$this->fs->copy( $file, $site_dir . '/docker-compose-custom.yml', true );
+		}
+		if ( $this->fs->exists( $archive ) ) {
+			$this->fs->mkdir( $site_dir . '/user-docker-compose' );
+			$this->exec_or_fail( sprintf( 'unzip -o %s -d %s < /dev/null', escapeshellarg( $archive ), escapeshellarg( $site_dir . '/user-docker-compose' ) ), 'Failed to restore the custom docker-compose files.' );
+		}
+
+		// The `site enable` after the commit would fail on files docker-compose rejects, with nothing left to roll back.
+		$cwd = getcwd();
+		chdir( $site_dir );
+		$command = \EE_DOCKER::docker_compose_with_custom() . ' config -q';
+		if ( false !== $cwd ) {
+			chdir( $cwd );
+		}
+		$test = EE::launch( $command, false, true, [], null, $site_dir );
+		if ( $test->return_code ) {
+			EE::error( 'The custom docker-compose files in the backup fail `docker-compose config`: ' . trim( $test->stderr ) );
+		}
+
+		$this->restore_custom_compose = true;
+	}
+
+	/**
+	 * Copy the site's custom compose files so a rollback can put them back; what is missing stays missing in the copy.
+	 *
+	 * @param string $site_dir Site dir.
+	 */
+	private function snapshot_custom_compose( $site_dir ) {
+		$saved = $this->get_compose_snapshot_dir();
+		$this->fs->remove( $saved );
+		$this->fs->mkdir( $saved, 0700 );
+
+		if ( $this->fs->exists( $site_dir . '/docker-compose-custom.yml' ) ) {
+			$this->fs->copy( $site_dir . '/docker-compose-custom.yml', $saved . '/docker-compose-custom.yml', true );
+		}
+		if ( is_dir( $site_dir . '/user-docker-compose' ) ) {
+			$this->exec_or_fail( sprintf( 'rsync -a %s/ %s/', escapeshellarg( $site_dir . '/user-docker-compose' ), escapeshellarg( $saved . '/user-docker-compose' ) ), 'Could not save the current custom docker-compose files.' );
+		}
+
+		$this->restore_txn['compose'] = true;
+		$this->write_restore_journal();
+	}
+
+	/**
+	 * Not in the stage: its fallback inside app/ is reachable by the site, and a compose file it planted there would run
+	 * with host mounts.
+	 *
+	 * @return string
+	 */
+	private function get_compose_snapshot_dir() {
+		return EE_BACKUP_DIR . '/' . $this->site_data['site_url'] . '.compose-before';
+	}
+
+	/**
+	 * @return bool
+	 */
+	private function rollback_custom_compose() {
+		$site_dir = EE_ROOT_DIR . '/sites/' . $this->site_data['site_url'];
+		$saved    = $this->get_compose_snapshot_dir();
+
+		// Without the copy, a missing file in it would read as "did not exist" and the live one would be removed.
+		if ( ! is_dir( $saved ) ) {
+			EE::warning( 'Could not put back the custom docker-compose files: their saved copy is missing.' );
+
+			return false;
+		}
+
+		try {
+			if ( is_file( $saved . '/docker-compose-custom.yml' ) ) {
+				$this->fs->copy( $saved . '/docker-compose-custom.yml', $site_dir . '/docker-compose-custom.yml', true );
+			} else {
+				$this->fs->remove( $site_dir . '/docker-compose-custom.yml' );
 			}
-			$unzip_command = sprintf( 'unzip -o %s -d %s', $custom_docker_compose_dir_archive, $custom_docker_compose_dir );
-			EE::exec( $unzip_command );
+			if ( is_dir( $saved . '/user-docker-compose' ) ) {
+				// --ignore-times: a restored file with the size and mtime of the saved one would otherwise be skipped.
+				if ( ! EE::exec( sprintf( 'rsync -a --ignore-times --delete %s/ %s/', escapeshellarg( $saved . '/user-docker-compose' ), escapeshellarg( $site_dir . '/user-docker-compose' ) ) ) ) {
+					throw new \RuntimeException( 'rsync failed' );
+				}
+			} else {
+				$this->fs->remove( $site_dir . '/user-docker-compose' );
+			}
+		} catch ( \Exception $e ) {
+			EE::warning( sprintf( 'Could not put back the custom docker-compose files from %s: %s', $saved, $e->getMessage() ) );
+
+			return false;
 		}
 
-		if ( $custom_compose_update ) {
-			EE::log( 'Custom docker-compose file(s) updated.' );
-			EE::run_command( [ 'site', 'enable', $this->site_data['site_url'] ], [ 'force' => true ] );
-		}
+		return true;
 	}
 
 	private function set_wp_config_db_constants() {
@@ -1438,7 +1526,7 @@ DEALLOCATE PREPARE ee_stmt;
 			EE::warning( 'app/ is on a filesystem of its own, so the restore stages the files inside it, where the site\'s own code can reach them.' );
 		}
 		$this->remove_scratch_dir();
-		$this->fs->remove( $stage );
+		$this->fs->remove( [ $stage, $this->get_compose_snapshot_dir() ] );
 		$this->fs->mkdir( [ $stage . '/new', $stage . '/old' ], 0700 );
 
 		$this->restore_txn = [
@@ -1448,6 +1536,7 @@ DEALLOCATE PREPARE ee_stmt;
 			'db'       => 'none',
 			'conf'     => false,
 			'php_conf' => false,
+			'compose'  => false,
 		];
 		$this->write_restore_journal();
 	}
@@ -1849,6 +1938,7 @@ DEALLOCATE PREPARE ee_stmt;
 			$this->restore_php_conf( $backup_dir );
 		}
 		$this->check_restored_nginx_conf();
+		$this->restore_custom_docker_compose( $backup_dir );
 
 		$this->commit_restore_transaction();
 
@@ -1968,14 +2058,14 @@ DEALLOCATE PREPARE ee_stmt;
 			// The previous files go first: a kill in the middle must not leave them without the (committed) journal.
 			$this->fs->remove( [ $stage . '/old', $stage . '/new' ] );
 			$this->remove_scratch_dir();
-			$this->fs->remove( [ $this->get_restore_journal_file(), $stage ] );
+			$this->fs->remove( [ $this->get_restore_journal_file(), $stage, $this->get_compose_snapshot_dir() ] );
 		} catch ( \Throwable $e ) {
 			EE::warning( sprintf( 'Could not remove the previous site files in %s: %s', $stage, $e->getMessage() ) );
 		}
 	}
 
 	/**
-	 * Undo a restore in reverse order: config, files, then DB. Best effort; keeps the stage when anything fails.
+	 * Undo a restore in reverse order: custom compose files, config, files, then DB. Best effort; keeps the stage when anything fails.
 	 *
 	 * @return bool
 	 */
@@ -1984,6 +2074,10 @@ DEALLOCATE PREPARE ee_stmt;
 		$ok         = true;
 		$config_dir = EE_ROOT_DIR . '/sites/' . $this->site_data['site_url'] . '/config';
 
+		// First: the php config and DB steps below reach the containers through these files.
+		if ( ! empty( $txn['compose'] ) ) {
+			$ok = $this->rollback_custom_compose() && $ok;
+		}
 		if ( ! empty( $txn['conf'] ) ) {
 			$saved = $txn['stage'] . '/config-before/nginx';
 			if ( is_dir( $saved ) && ! EE::exec( sprintf( 'rsync -a --delete %s/ %s/', escapeshellarg( $saved ), escapeshellarg( $config_dir . '/nginx' ) ) ) ) {
@@ -2048,7 +2142,7 @@ DEALLOCATE PREPARE ee_stmt;
 		if ( $ok ) {
 			$this->restore_txn = null;
 			$this->remove_scratch_dir();
-			$this->fs->remove( [ $this->get_restore_journal_file(), $txn['stage'] ] );
+			$this->fs->remove( [ $this->get_restore_journal_file(), $txn['stage'], $this->get_compose_snapshot_dir() ] );
 		}
 
 		return $ok;
@@ -2120,7 +2214,7 @@ DEALLOCATE PREPARE ee_stmt;
 		}
 
 		$this->remove_scratch_dir();
-		$this->fs->remove( [ $journal_file, $stage ] );
+		$this->fs->remove( [ $journal_file, $stage, $this->get_compose_snapshot_dir() ] );
 	}
 
 	/**
@@ -2135,7 +2229,7 @@ DEALLOCATE PREPARE ee_stmt;
 	}
 
 	private function restore_has_changes( $txn ) {
-		if ( ! empty( $txn['conf'] ) || ! empty( $txn['php_conf'] ) || 'importing' === $txn['db'] ) {
+		if ( ! empty( $txn['conf'] ) || ! empty( $txn['php_conf'] ) || ! empty( $txn['compose'] ) || 'importing' === $txn['db'] ) {
 			return true;
 		}
 		foreach ( $txn['pairs'] as $pair ) {
