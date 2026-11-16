@@ -1729,8 +1729,13 @@ DEALLOCATE PREPARE ee_stmt;
 		}
 
 		$dump = $sql_dir . '/' . $this->site_data['site_url'] . '.sql';
-		if ( ! $this->fs->exists( $dump ) ) {
+		clearstatcache();
+		if ( ! $this->path_exists( $dump ) ) {
 			EE::error( sprintf( 'The backup has no database dump (sql/%s). The site was not changed.', basename( $dump ) ) );
+		}
+		// An empty dump imports as a no-op, which would restore the files over the current DB (older releases backed up a failed mysqldump).
+		if ( is_link( $dump ) || ! is_file( $dump ) || 0 === filesize( $dump ) ) {
+			EE::error( sprintf( 'The database dump in the backup (sql/%s) is empty or not a regular file. The site was not changed.', basename( $dump ) ) );
 		}
 
 		$this->rename_or_fail( $dump, $this->restore_txn['stage'] . '/db.sql' );
