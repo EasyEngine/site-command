@@ -1623,3 +1623,246 @@ function get_wp_core_download_command( string $path, array $args = [] ) {
 	// docker_compose_exec() wraps the command in bash -c "...".
 	return addcslashes( $script, '"$`\\' );
 }
+
+/**
+ * Add `session.upload_progress.enabled = Off` to a site's custom.ini content, unless the content already sets it globally.
+ *
+ * Same rule as the v4.13.3 upload-progress migrations: an effective global line, On or Off, is the user's choice and is kept.
+ *
+ * @param string $content custom.ini content.
+ *
+ * @return string|null The new content, or null when it already sets the directive.
+ */
+function add_session_upload_progress_off( string $content ) {
+
+	$bom = '';
+	if ( 0 === strpos( $content, "\xEF\xBB\xBF" ) ) {
+		$bom     = "\xEF\xBB\xBF";
+		$content = substr( $content, 3 );
+	}
+
+	if ( ini_sets_globally( $content, 'session.upload_progress.enabled' ) ) {
+		return null;
+	}
+
+	$eol = false !== strpos( $content, "\r\n" ) ? "\r\n" : ( false === strpos( $content, "\n" ) && false !== strpos( $content, "\r" ) ? "\r" : "\n" );
+	$lines = '; Session upload progress is off for security; set it to On only if your app needs it.' . $eol . 'session.upload_progress.enabled = Off' . $eol;
+
+	if ( '' === trim( $content ) ) {
+		return $bom . $lines;
+	}
+
+	// At the very top, so neither a [PATH=]/[HOST=] section nor a multi-line quoted value can capture it.
+	return $bom . $lines . $eol . $content;
+}
+
+/**
+ * Whether ini content sets a directive outside any [PATH=]/[HOST=] section, read the way PHP reads php.ini.
+ *
+ * @param string $content ini content without BOM.
+ * @param string $key     Directive name (case-sensitive, like PHP).
+ *
+ * @return bool
+ */
+function ini_sets_globally( string $content, string $key ) {
+
+	return null !== ini_global_value( $content, $key );
+}
+
+/**
+ * The value a directive gets outside any [PATH=]/[HOST=] section, read the way PHP reads php.ini.
+ *
+ * @param string $content ini content without BOM.
+ * @param string $key     Directive name (case-sensitive, like PHP).
+ *
+ * @return string|null The value as PHP's ini scanner gives it (On is "1", Off is ""), or null when it isn't set there.
+ */
+function ini_global_value( string $content, string $key ) {
+
+	$global = ini_global_part( $content );
+	// Without sections, entries of ordinary sections are global and `foo[key] = x` stays an array, so it can't match.
+	$ini = @parse_ini_string( $global, false, INI_SCANNER_NORMAL );
+	// PHP applies the lines above a syntax error, so only that part counts.
+	for ( $lines = preg_split( '/(?<=\n)|(?<=\r)(?!\n)/', $global ), $n = count( $lines ) - 1; false === $ini && $n > 0; $n-- ) {
+		$ini = @parse_ini_string( implode( '', array_slice( $lines, 0, $n ) ), false, INI_SCANNER_NORMAL );
+	}
+
+	return false !== $ini && array_key_exists( $key, $ini ) && ! is_array( $ini[ $key ] ) ? (string) $ini[ $key ] : null;
+}
+
+/**
+ * The part of ini content before the first section named PATH or HOST plus at least one more character.
+ *
+ * PHP scopes every entry after such a header to it, even under later ordinary headers. The parser decides where each
+ * header ends and what it is called, so any line ending, quoted names and several headers on one line are handled.
+ *
+ * @param string $content ini content without BOM.
+ *
+ * @return string
+ */
+function ini_global_part( string $content ) {
+
+	$probe = '__ee_ini_probe_' . md5( $content );
+	for ( $open = strpos( $content, '[' ); false !== $open; $open = strpos( $content, '[', $open + 1 ) ) {
+		// Only where the parser expects a new entry can '[' start a header: not in a quoted value, a comment or a value.
+		$probed = @parse_ini_string( substr( $content, 0, $open ) . $probe . ' = 1', true, INI_SCANNER_NORMAL );
+		if ( false === $probed || ! array_key_exists( $probe, $probed ) && ! array_filter( $probed, function ( $entry ) use ( $probe ) {
+			return is_array( $entry ) && array_key_exists( $probe, $entry );
+		} ) ) {
+			continue;
+		}
+		// A quoted name may contain ']', so try each one until the text up to it parses.
+		for ( $close = strpos( $content, ']', $open ); false !== $close; $close = strpos( $content, ']', $close + 1 ) ) {
+			if ( false === @parse_ini_string( substr( $content, 0, $close + 1 ), true, INI_SCANNER_NORMAL ) ) {
+				continue;
+			}
+			$header = @parse_ini_string( substr( $content, $open, $close - $open + 1 ), true, INI_SCANNER_NORMAL );
+			// PHP scopes only a name with something after PATH or HOST; entries under a bare [PATH] stay global.
+			if ( is_array( $header ) && 1 === count( $header ) && preg_match( '/^(PATH|HOST)./is', (string) key( $header ) ) ) {
+				return substr( $content, 0, $open );
+			}
+			break;
+		}
+	}
+
+	return $content;
+}
+
+/**
+ * Real path of a site's conf.d. config/php is EasyEngine's own link to the site's config volume; everything below it belongs to the site's php container.
+ *
+ * @param string $site_fs_path Site root.
+ *
+ * @return string
+ * @throws \Exception
+ */
+function site_php_conf_dir( string $site_fs_path ) {
+
+	$base = realpath( $site_fs_path . '/config/php' );
+	if ( false === $base ) {
+		throw new \Exception( 'could not resolve config/php' );
+	}
+
+	return $base . '/php/conf.d';
+}
+
+/**
+ * Open a file in a directory the site's php container can change, as a handle for every later read and write, so nothing swapped in at that path is followed afterwards.
+ *
+ * Host root must not write through a symlink, a hard link or a swapped directory, so the handle has to be the regular file in $dir. On Linux the kernel's own path of the open file decides; elsewhere the path is checked before and after opening.
+ *
+ * @param string $file Path.
+ * @param string $mode 'r' or 'r+'. Nothing is created: PHP expands every path it creates or links to an absolute one, so it can't be confined to a directory the container can swap.
+ * @param string $dir  Real path of the directory the file must be in.
+ *
+ * @return resource
+ * @throws \Exception
+ */
+function open_container_file( string $file, string $mode, string $dir ) {
+
+	if ( 'r' !== $mode && 'r+' !== $mode ) {
+		throw new \InvalidArgumentException( "Unsupported mode $mode." );
+	}
+
+	$name = basename( $file );
+	clearstatcache( true );
+	if ( realpath( dirname( $file ) ) !== $dir ) {
+		throw new \Exception( "a directory above $name is a symlink" );
+	}
+
+	// Non-blocking ('n', O_NONBLOCK), so a FIFO swapped in can't stall the open before it is rejected below.
+	$handle = @fopen( $file, $mode . 'n' );
+	if ( false === $handle ) {
+		throw new \Exception( "could not open $name" );
+	}
+
+	$opened = fstat( $handle );
+	clearstatcache( true );
+	$linked = @lstat( $file );
+	$real   = opened_file_path( $handle );
+	$error  = null;
+	if ( ! $opened || ! $linked || $opened['dev'] !== $linked['dev'] || $opened['ino'] !== $linked['ino'] || 0100000 !== ( $linked['mode'] & 0170000 ) ) {
+		$error = "$name is not a regular file";
+	} elseif ( realpath( dirname( $file ) ) !== $dir || ( null !== $real && "$dir/$name" !== $real ) ) {
+		$error = "a directory above $name is a symlink";
+	} elseif ( 'r' !== $mode && 1 !== $opened['nlink'] ) {
+		$error = "$name has other hard links";
+	}
+	if ( null !== $error ) {
+		fclose( $handle );
+		throw new \Exception( $error );
+	}
+	stream_set_blocking( $handle, true );
+
+	return $handle;
+}
+
+/**
+ * The kernel's path of an open file, from /proc/self/fd, which no later swap of a directory changes.
+ *
+ * @param resource $handle Open file.
+ *
+ * @return string|null Null without /proc (macOS); '' when the file isn't found there.
+ */
+function opened_file_path( $handle ) {
+
+	$want = fstat( $handle );
+	$fds  = $want ? @scandir( '/proc/self/fd' ) : false;
+	if ( ! $fds ) {
+		return null;
+	}
+
+	clearstatcache( true );
+	foreach ( $fds as $fd ) {
+		if ( ! preg_match( '/^\d+$/', $fd ) ) {
+			continue;
+		}
+		$stat = @stat( "/proc/self/fd/$fd" );
+		if ( $stat && $stat['dev'] === $want['dev'] && $stat['ino'] === $want['ino'] ) {
+			$path = @readlink( "/proc/self/fd/$fd" );
+
+			return false === $path ? '' : $path;
+		}
+	}
+
+	return '';
+}
+
+/**
+ * Overwrite an open file through its handle: owner, mode and inode stay (macOS bind-mounts single config files).
+ *
+ * @param resource $handle  Handle from open_container_file().
+ * @param string   $content New content.
+ *
+ * @throws \Exception When the file doesn't hold exactly $content afterwards.
+ */
+function rewrite_container_file( $handle, string $content ) {
+
+	// The read-back stops one byte past the content, so data the container appends can't make it unbounded.
+	if ( ! rewind( $handle ) || strlen( $content ) !== fwrite( $handle, $content ) || ! fflush( $handle ) || ! ftruncate( $handle, strlen( $content ) ) || ! rewind( $handle ) || stream_get_contents( $handle, strlen( $content ) + 1 ) !== $content ) {
+		throw new \Exception( 'could not write ' . basename( stream_get_meta_data( $handle )['uri'] ) );
+	}
+}
+
+/**
+ * Read an open file, at most $max bytes, so a file the container keeps growing can't exhaust memory.
+ *
+ * @param resource $handle Handle from open_container_file().
+ * @param int      $max    Largest size accepted.
+ *
+ * @return string
+ * @throws \Exception When it can't be read or is larger.
+ */
+function read_container_file( $handle, int $max = 65536 ) {
+
+	$name    = basename( stream_get_meta_data( $handle )['uri'] );
+	$content = stream_get_contents( $handle, $max + 1 );
+	if ( false === $content ) {
+		throw new \Exception( "could not read $name" );
+	}
+	if ( strlen( $content ) > $max ) {
+		throw new \Exception( "$name is larger than $max bytes" );
+	}
+
+	return $content;
+}
