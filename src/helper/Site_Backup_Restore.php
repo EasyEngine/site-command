@@ -78,6 +78,7 @@ class Site_Backup_Restore {
 	private $dash_api_url;
 	private $dash_backup_metadata;
 	private $dash_backup_completed = false;
+	private $dash_callback_sent = false; // Guard: at most one terminal callback (success XOR failure) may be emitted
 	private $dash_new_backup_path; // Remote path of this run's upload, reported if the success callback fails
 
 	// Error tracking for EasyDash failure callbacks
@@ -249,11 +250,13 @@ class Site_Backup_Restore {
 			);
 
 			if ( $api_success ) {
+				// Backup is now registered with the EasyEngine Dashboard; only then is it safe to
+				// mark complete (suppressing the shutdown failure callback) and prune.
 				$this->dash_backup_completed = true;
 				$this->cleanup_old_backups();
 			} else {
 				// Never delete an uploaded backup because only the callback failed. dash_backup_completed stays
-				// false, so the shutdown handler sends the failure callback with this message.
+				// false, so the shutdown handler sends the single failure callback with this message.
 				$message = sprintf(
 					'Backup uploaded to %s but the EasyEngine Dashboard success callback failed; the backup was kept.',
 					$this->dash_new_backup_path
@@ -262,6 +265,7 @@ class Site_Backup_Restore {
 				EE::error( $message );
 			}
 		} else {
+			// Non-dash path: backup is done once the upload succeeds.
 			$this->dash_backup_completed = true;
 		}
 
@@ -276,8 +280,9 @@ class Site_Backup_Restore {
 	 * explicitly captured during backup execution.
 	 */
 	public function dash_shutdown_handler() {
-		// Only send failure callback if dash auth was enabled and backup didn't complete
-		if ( $this->dash_auth_enabled && ! $this->dash_backup_completed ) {
+		// Only send a failure callback if dash auth was enabled, the backup didn't
+		// complete, and no terminal callback (success or failure) has been sent yet.
+		if ( $this->dash_auth_enabled && ! $this->dash_backup_completed && ! $this->dash_callback_sent ) {
 
 			// If no error was captured yet, try to capture shutdown error
 			if ( empty( $this->dash_error_message ) ) {
@@ -3351,7 +3356,15 @@ class Site_Backup_Restore {
 
 		EE::debug( 'Payload being sent: ' . json_encode( array_merge( $payload, [ 'verify' => '******' ] ) ) );
 
-		return $this->send_dash_request( $endpoint, $payload );
+		$success = $this->send_dash_request( $endpoint, $payload );
+
+		// A success that actually reached the EasyEngine Dashboard is the terminal callback; a failed
+		// attempt is not, so the failure path can still emit the failure callback.
+		if ( $success ) {
+			$this->dash_callback_sent = true;
+		}
+
+		return $success;
 	}
 
 	/**
@@ -3380,6 +3393,9 @@ class Site_Backup_Restore {
 				'error_code'    => $payload['error_code'],
 			] ) );
 
+		// Failure is terminal: mark before sending so a concurrent shutdown pass
+		// can never emit a second (duplicate) terminal callback.
+		$this->dash_callback_sent = true;
 		$this->send_dash_request( $endpoint, $payload );
 	}
 
