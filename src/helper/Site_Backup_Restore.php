@@ -86,7 +86,7 @@ DEALLOCATE PREPARE ee_stmt;
 	public $site_data;
 	private $rclone_config_path;
 
-	// Properties for EasyDash callback handling
+	// Properties for EasyEngine Dashboard callback handling
 	private $dash_auth_enabled = false;
 	private $dash_backup_id;
 	private $dash_verify_token;
@@ -96,7 +96,7 @@ DEALLOCATE PREPARE ee_stmt;
 	private $dash_callback_sent = false; // Guard: at most one terminal callback (success XOR failure) may be emitted
 	private $dash_new_backup_path; // Remote path of this run's upload, reported if the success callback fails
 
-	// Error tracking for EasyDash failure callbacks
+	// Error tracking for EasyEngine Dashboard failure callbacks
 	private $dash_error_message = '';
 	private $dash_error_type = 'unknown';
 	private $dash_error_code = 0;
@@ -167,7 +167,7 @@ DEALLOCATE PREPARE ee_stmt;
 			return; // Exit after listing backups
 		}
 
-		// Handle --dash-auth flag for EasyDash integration
+		// Handle --dash-auth flag for EasyEngine Dashboard integration
 		if ( $dash_auth ) {
 			// Parse backup-id:backup-verification-token format
 			$auth_parts = explode( ':', $dash_auth, 2 );
@@ -291,7 +291,7 @@ DEALLOCATE PREPARE ee_stmt;
 	}
 
 	/**
-	 * Shutdown handler to send failure callback to EasyDash if backup didn't complete.
+	 * Shutdown handler to send failure callback to EasyEngine Dashboard if backup didn't complete.
 	 * This is called when script terminates (including via EE::error which calls exit).
 	 *
 	 * Automatically captures fatal errors and interrupted processes if no error was
@@ -350,7 +350,7 @@ DEALLOCATE PREPARE ee_stmt;
 	}
 
 	/**
-	 * Capture error details for EasyDash failure callback.
+	 * Capture error details for EasyEngine Dashboard failure callback.
 	 * Stores error information to be sent when backup fails.
 	 *
 	 * @param string $message Error message describing what went wrong.
@@ -365,7 +365,7 @@ DEALLOCATE PREPARE ee_stmt;
 			$this->dash_error_code    = $code;
 
 			EE::debug( sprintf(
-				'Captured error for EasyDash: [%s] %s (code: %d)',
+				'Captured error for EasyEngine Dashboard: [%s] %s (code: %d)',
 				$type,
 				$message,
 				$code
@@ -3822,9 +3822,9 @@ chmod -- "$m" "$n" || exit 5';
 	}
 
 	/**
-	 * Send success callback to EasyDash API after successful backup.
+	 * Send success callback to EasyEngine Dashboard API after successful backup.
 	 *
-	 * @param string $ed_api_url     The EasyDash API URL.
+	 * @param string $ed_api_url     The EasyEngine Dashboard API URL.
 	 * @param string $backup_id      The backup ID.
 	 * @param string $verify_token   The verification token.
 	 * @param array $backup_metadata The backup metadata.
@@ -3872,10 +3872,10 @@ chmod -- "$m" "$n" || exit 5';
 	}
 
 	/**
-	 * Send failure callback to EasyDash API after failed backup.
+	 * Send failure callback to EasyEngine Dashboard API after failed backup.
 	 * Includes error details (message, type, code) for debugging and user feedback.
 	 *
-	 * @param string $ed_api_url   The EasyDash API URL.
+	 * @param string $ed_api_url   The EasyEngine Dashboard API URL.
 	 * @param string $backup_id    The backup ID.
 	 * @param string $verify_token The verification token.
 	 */
