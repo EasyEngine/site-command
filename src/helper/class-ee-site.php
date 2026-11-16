@@ -1049,7 +1049,13 @@ abstract class EE_Site_Command {
 
 		$this->site_data                = $rollback['site'];
 		$this->site_data['php_version'] = $old_version;
-		$this->dump_docker_compose_yml( [ 'nohttps' => $no_https ] );
+		try {
+			$this->dump_docker_compose_yml( [ 'nohttps' => $no_https ] );
+		} catch ( \Exception $e ) {
+			// Keep going so php restarts and the caller reports its error; compose still names the new image, so --refresh, not --force.
+			$manual = 'Run: ee site enable ' . $rollback['site']['site_url'] . ' --refresh';
+			EE::warning( "Could not restore docker-compose.yml to PHP $old_version ({$e->getMessage()}). $manual" );
+		}
 
 		if ( $rollback['stopped'] && ! \EE_DOCKER::docker_compose_up( $site_fs_path, [ 'php' ] ) ) {
 			EE::warning( "Could not start the php container again. $manual" );
