@@ -2927,13 +2927,15 @@ abstract class EE_Site_Command {
 	/**
 	 * Function to take backup of site.
 	 *
+	 * Backups are stored in <rclone-path>/<site>/<host-id>/<backup-id>, so hosts sharing a remote keep their backups apart. The host id is generated on the first backup or restore and kept in the EE database, so a reinstall starts a new one and a copied database shares it. Set `backup-host-id` in config.yml only to take over the backups of a server this one replaces; two running hosts with the same id share (and prune) each other's backups.
+	 *
 	 * ## OPTIONS
 	 *
 	 * [<site-name>]
 	 * : Name of website to be backed up.
 	 *
 	 * [--list]
-	 * : List all available backups on remote.
+	 * : List all available backups on remote: this host's first, then backups from before per-host directories, then other hosts' as <host-id>/<backup-id>.
 	 *
 	 * [--dash-auth]
 	 * : Pass dash auth token and backup id. For EasyEngine dash use only.
@@ -2961,7 +2963,7 @@ abstract class EE_Site_Command {
 	 * : Name of the site to be restored.
 	 *
 	 * [--id=<backup_id>]
-	 * : ID of the backup to restore. If not specified, the latest backup will be restored. To get the backup id, run `ee site backup <site_name> --list`
+	 * : ID of the backup to restore. If not specified, the latest backup made on this host will be restored. To get the backup id, run `ee site backup <site_name> --list`. A backup made on another host is restored with --id=<host-id>/<backup-id>.
 	 *
 	 * ## EXAMPLES
 	 *
