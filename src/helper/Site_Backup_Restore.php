@@ -743,6 +743,8 @@ class Site_Backup_Restore {
 				self::ERROR_TYPE_DATABASE,
 				4002
 			);
+			// A failed dump can still leave rows behind in the web root.
+			EE::exec( 'rm -f ' . escapeshellarg( $sql_dump_path ) );
 			EE::error( 'Database backup failed. Please check database credentials and connectivity.' );
 		}
 
@@ -754,6 +756,7 @@ class Site_Backup_Restore {
 				self::ERROR_TYPE_DATABASE,
 				4005
 			);
+			EE::exec( 'rm -f ' . escapeshellarg( $sql_dump_path ) );
 			EE::error( 'Database backup failed while staging the dump file.' );
 		}
 
