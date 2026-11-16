@@ -1366,6 +1366,22 @@ function remove_etc_hosts_entry( $site_url ) {
 }
 
 /**
+ * Whether a Let's Encrypt site still waits for its first certificate, e.g. for `ee site ssl-verify` after a manual DNS-01 challenge.
+ *
+ * Such a site is served over HTTP only: with HTTPS on, nginx-proxy would serve it with the closest matching certificate of another site.
+ *
+ * @param string      $site_url Name of the site.
+ * @param string|null $site_ssl The site's SSL type.
+ *
+ * @return bool
+ */
+function is_le_ssl_pending( $site_url, $site_ssl ) {
+	$cert = EE_SERVICE_DIR . '/nginx-proxy/certs/' . $site_url;
+
+	return 'le' === $site_ssl && ! ( file_exists( "$cert.crt" ) && file_exists( "$cert.key" ) );
+}
+
+/**
  * Checks if the site certificate needs renewal.
  *
  * The way it differs from Site_Letsencrypt::isRenewalNecessary is that the latter
@@ -1398,6 +1414,279 @@ function ssl_needs_creation( $site_url ) {
 	}
 
 	return true;
+}
+
+/**
+ * Waits until every authoritative nameserver of each record's zone serves the expected TXT values.
+ *
+ * The nameservers are queried directly: a recursive resolver can keep serving what it cached before the record existed,
+ * such as the records a wildcard matched.
+ *
+ * @param array $records     Expected TXT values by record name.
+ * @param int   $timeout     Seconds to wait in total.
+ * @param array $nameservers Nameservers to query by record name, as [ ip => name ], instead of looking them up.
+ * @param int   $min_wait    Seconds to wait at least once the values are served.
+ *
+ * @return bool True once every nameserver serves every value, false when they don't within $timeout.
+ */
+function wait_for_dns_txt_records( array $records, $timeout = 120, array $nameservers = [], $min_wait = 10 ) {
+
+	if ( empty( $records ) ) {
+		return true;
+	}
+	$start    = microtime( true );
+	$deadline = $start + $timeout;
+	$pending  = [];
+	foreach ( $records as $name => $values ) {
+		$servers = isset( $nameservers[ $name ] ) ? $nameservers[ $name ] : get_authoritative_nameservers( $name );
+		if ( empty( $servers ) ) {
+			EE::warning( "Could not find the authoritative nameservers of $name, so its propagation can't be checked." );
+			continue;
+		}
+		foreach ( $servers as $ip => $server ) {
+			$pending[] = [ $name, $ip, $server ];
+		}
+	}
+
+	$delay = 2;
+	while ( ! empty( $pending ) ) {
+		foreach ( $pending as $key => list( $name, $ip ) ) {
+			$served = query_txt_records( $ip, $name );
+			if ( null !== $served && ! array_diff( $records[ $name ], $served ) ) {
+				EE::debug( "$name serves the DNS challenge value on {$pending[ $key ][2]} ($ip)." );
+				unset( $pending[ $key ] );
+			}
+			if ( function_exists( 'pcntl_signal_dispatch' ) ) {
+				pcntl_signal_dispatch();
+			}
+			if ( microtime( true ) >= $deadline ) {
+				break;
+			}
+		}
+		$left = $deadline - microtime( true );
+		if ( empty( $pending ) || $left <= 0 ) {
+			break;
+		}
+		usleep( (int) ( min( $delay, $left ) * 1000000 ) );
+		$delay = min( $delay * 2, 16 );
+	}
+
+	if ( empty( $pending ) ) {
+		// Anycast nameservers answer from the site nearest to this server; give the others the time the fixed wait used to.
+		$left = $start + $min_wait - microtime( true );
+		if ( $left > 0 ) {
+			usleep( (int) ( $left * 1000000 ) );
+		}
+
+		return true;
+	}
+
+	$missing = array_map(
+		function ( $entry ) {
+			return sprintf( '%s on %s (%s)', $entry[0], $entry[2], $entry[1] );
+		},
+		$pending
+	);
+	EE::warning( sprintf( 'The DNS challenge value is not yet served after %ds for: %s. Trying the validation anyway.', $timeout, implode( ', ', $missing ) ) );
+
+	return false;
+}
+
+/**
+ * Finds the authoritative nameservers of the zone that holds a name.
+ *
+ * @param string $name A domain name.
+ *
+ * @return array Nameserver names by IPv4 address, empty when none are found.
+ */
+function get_authoritative_nameservers( $name ) {
+
+	$labels = explode( '.', rtrim( $name, '.' ) );
+	// The closest enclosing zone cut; a name a wildcard matches is answered with its target's records, so require the queried owner.
+	while ( count( $labels ) > 1 ) {
+		$zone    = implode( '.', $labels );
+		$servers = [];
+		foreach ( (array) @dns_get_record( $zone, DNS_NS ) as $record ) {
+			if ( isset( $record['type'], $record['host'], $record['target'] ) && 'NS' === $record['type'] && 0 === strcasecmp( rtrim( $record['host'], '.' ), $zone ) ) {
+				foreach ( (array) gethostbynamel( $record['target'] ) as $ip ) {
+					if ( $ip ) {
+						$servers[ $ip ] = $record['target'];
+					}
+				}
+			}
+		}
+		if ( ! empty( $servers ) ) {
+			return $servers;
+		}
+		array_shift( $labels );
+	}
+
+	return [];
+}
+
+/**
+ * Asks one nameserver, without recursion, for the TXT records of a name.
+ *
+ * @param string $server  Nameserver IPv4 address.
+ * @param string $name    Record name.
+ * @param int    $timeout Seconds to wait for the answer.
+ *
+ * @return array|null The TXT values in the answer (empty for NXDOMAIN), null when there is no usable answer.
+ */
+function query_txt_records( $server, $name, $timeout = 3 ) {
+
+	$qname = '';
+	foreach ( explode( '.', rtrim( $name, '.' ) ) as $label ) {
+		if ( '' === $label || strlen( $label ) > 63 ) {
+			return null;
+		}
+		$qname .= chr( strlen( $label ) ) . $label;
+	}
+	$id = random_int( 0, 0xffff );
+	// One question (TXT, IN) and an EDNS0 OPT record so a large answer fits in one UDP packet. Authoritative servers ignore RD,
+	// but a network that redirects port 53 to its own resolver needs it.
+	$query = pack( 'n6', $id, 0x0100, 1, 0, 0, 1 ) . $qname . "\0" . pack( 'n2', 16, 1 ) . "\0" . pack( 'n2Nn', 41, 1232, 0, 0 );
+
+	$answer = parse_dns_txt_answer( dns_exchange( $server, $query, false, $timeout ), $id );
+	if ( 'truncated' === $answer ) {
+		$answer = parse_dns_txt_answer( dns_exchange( $server, $query, true, $timeout ), $id );
+	}
+
+	return is_array( $answer ) ? $answer : null;
+}
+
+/**
+ * Sends a DNS query to port 53 and returns the response matching its ID.
+ *
+ * @param string $server  Nameserver IPv4 address.
+ * @param string $query   Wire-format query.
+ * @param bool   $tcp     Use TCP instead of UDP.
+ * @param int    $timeout Seconds to wait.
+ *
+ * @return string The response, or an empty string.
+ */
+function dns_exchange( $server, $query, $tcp, $timeout ) {
+
+	$deadline = microtime( true ) + $timeout;
+	$socket   = @stream_socket_client( ( $tcp ? 'tcp' : 'udp' ) . "://$server:53", $errno, $errstr, $timeout );
+	if ( ! $socket ) {
+		return '';
+	}
+	fwrite( $socket, $tcp ? pack( 'n', strlen( $query ) ) . $query : $query );
+
+	$response = '';
+	$expected = null;
+	while ( ( $left = $deadline - microtime( true ) ) > 0 ) {
+		$read   = [ $socket ];
+		$write  = null;
+		$except = null;
+		if ( ! @stream_select( $read, $write, $except, (int) $left, (int) ( fmod( $left, 1 ) * 1000000 ) ) ) {
+			break;
+		}
+		$chunk = fread( $socket, 65535 );
+		if ( false === $chunk || ( '' === $chunk && feof( $socket ) ) ) {
+			break;
+		}
+		if ( ! $tcp ) {
+			// Skip a stray datagram, such as a late answer to an earlier query.
+			if ( strlen( $chunk ) >= 2 && substr( $chunk, 0, 2 ) === substr( $query, 0, 2 ) ) {
+				$response = $chunk;
+				break;
+			}
+			continue;
+		}
+		$response .= $chunk;
+		if ( null === $expected && strlen( $response ) >= 2 ) {
+			$expected = unpack( 'n', $response )[1];
+		}
+		if ( null !== $expected && strlen( $response ) >= $expected + 2 ) {
+			$response = substr( $response, 2, $expected );
+			break;
+		}
+	}
+	fclose( $socket );
+
+	return ( $tcp && null !== $expected && strlen( $response ) !== $expected ) ? '' : $response;
+}
+
+/**
+ * Reads the TXT values from the answer section of a DNS response.
+ *
+ * @param string $response Wire-format response.
+ * @param int    $id       ID of the query.
+ *
+ * @return array|string|null TXT values, 'truncated' when the answer needs TCP, or null for an unusable response.
+ */
+function parse_dns_txt_answer( $response, $id ) {
+
+	$length = strlen( $response );
+	if ( $length < 12 ) {
+		return null;
+	}
+	$header = unpack( 'nid/nflags/nqd/nan', $response );
+	if ( $header['id'] !== $id || ! ( $header['flags'] & 0x8000 ) ) {
+		return null;
+	}
+	if ( $header['flags'] & 0x0200 ) {
+		return 'truncated';
+	}
+	$rcode = $header['flags'] & 0x000f;
+	if ( 3 === $rcode ) {
+		return [];
+	}
+	if ( 0 !== $rcode ) {
+		return null;
+	}
+
+	$skip_name = function ( $offset ) use ( $response, $length ) {
+		while ( $offset < $length ) {
+			$label = ord( $response[ $offset ] );
+			if ( 0 === $label ) {
+				return $offset + 1;
+			}
+			if ( 0xc0 === ( $label & 0xc0 ) ) {
+				return $offset + 2;
+			}
+			$offset += $label + 1;
+		}
+
+		return null;
+	};
+
+	$offset = 12;
+	for ( $i = 0; $i < $header['qd']; $i++ ) {
+		$offset = $skip_name( $offset );
+		if ( null === $offset ) {
+			return null;
+		}
+		$offset += 4;
+	}
+
+	$values = [];
+	for ( $i = 0; $i < $header['an']; $i++ ) {
+		$offset = $skip_name( $offset );
+		if ( null === $offset || $offset + 10 > $length ) {
+			return null;
+		}
+		$record  = unpack( 'ntype/nclass/Nttl/nlength', substr( $response, $offset, 10 ) );
+		$offset += 10;
+		if ( $offset + $record['length'] > $length ) {
+			return null;
+		}
+		// A wildcard match can also put a CNAME and its target's records in the answer; only TXT data counts.
+		if ( 16 === $record['type'] ) {
+			$rdata = substr( $response, $offset, $record['length'] );
+			$value = '';
+			for ( $pos = 0; $pos < $record['length']; $pos += $size + 1 ) {
+				$size   = ord( $rdata[ $pos ] );
+				$value .= substr( $rdata, $pos + 1, $size );
+			}
+			$values[] = $value;
+		}
+		$offset += $record['length'];
+	}
+
+	return $values;
 }
 
 /**
@@ -1622,4 +1911,393 @@ function get_wp_core_download_command( string $path, array $args = [] ) {
 
 	// docker_compose_exec() wraps the command in bash -c "...".
 	return addcslashes( $script, '"$`\\' );
+}
+
+/**
+ * Add `session.upload_progress.enabled = Off` to a site's custom.ini content, unless the content already sets it globally.
+ *
+ * Same rule as the v4.13.3 upload-progress migrations: an effective global line, On or Off, is the user's choice and is kept.
+ *
+ * @param string $content custom.ini content.
+ *
+ * @return string|null The new content, or null when it already sets the directive.
+ */
+function add_session_upload_progress_off( string $content ) {
+
+	$bom = '';
+	if ( 0 === strpos( $content, "\xEF\xBB\xBF" ) ) {
+		$bom     = "\xEF\xBB\xBF";
+		$content = substr( $content, 3 );
+	}
+
+	if ( ini_sets_globally( $content, 'session.upload_progress.enabled' ) ) {
+		return null;
+	}
+
+	$eol = false !== strpos( $content, "\r\n" ) ? "\r\n" : ( false === strpos( $content, "\n" ) && false !== strpos( $content, "\r" ) ? "\r" : "\n" );
+	$lines = '; Session upload progress is off for security; set it to On only if your app needs it.' . $eol . 'session.upload_progress.enabled = Off' . $eol;
+
+	if ( '' === trim( $content ) ) {
+		return $bom . $lines;
+	}
+
+	// At the very top, so neither a [PATH=]/[HOST=] section nor a multi-line quoted value can capture it.
+	return $bom . $lines . $eol . $content;
+}
+
+/**
+ * Whether ini content sets a directive outside any [PATH=]/[HOST=] section, read the way PHP reads php.ini.
+ *
+ * @param string $content ini content without BOM.
+ * @param string $key     Directive name (case-sensitive, like PHP).
+ *
+ * @return bool
+ */
+function ini_sets_globally( string $content, string $key ) {
+
+	return null !== ini_global_value( $content, $key );
+}
+
+/**
+ * The value a directive gets outside any [PATH=]/[HOST=] section, read the way PHP reads php.ini.
+ *
+ * @param string $content ini content without BOM.
+ * @param string $key     Directive name (case-sensitive, like PHP).
+ *
+ * @return string|null The value as PHP's ini scanner gives it (On is "1", Off is ""), or null when it isn't set there.
+ */
+function ini_global_value( string $content, string $key ) {
+
+	$global = ini_global_part( $content );
+	// Without sections, entries of ordinary sections are global and `foo[key] = x` stays an array, so it can't match.
+	$ini = @parse_ini_string( $global, false, INI_SCANNER_NORMAL );
+	// PHP applies the lines above a syntax error, so only that part counts.
+	for ( $lines = preg_split( '/(?<=\n)|(?<=\r)(?!\n)/', $global ), $n = count( $lines ) - 1; false === $ini && $n > 0; $n-- ) {
+		$ini = @parse_ini_string( implode( '', array_slice( $lines, 0, $n ) ), false, INI_SCANNER_NORMAL );
+	}
+
+	return false !== $ini && array_key_exists( $key, $ini ) && ! is_array( $ini[ $key ] ) ? (string) $ini[ $key ] : null;
+}
+
+/**
+ * The part of ini content before the first section named PATH or HOST plus at least one more character.
+ *
+ * PHP scopes every entry after such a header to it, even under later ordinary headers. The parser decides where each
+ * header ends and what it is called, so any line ending, quoted names and several headers on one line are handled.
+ *
+ * @param string $content ini content without BOM.
+ *
+ * @return string
+ */
+function ini_global_part( string $content ) {
+
+	$probe = '__ee_ini_probe_' . md5( $content );
+	for ( $open = strpos( $content, '[' ); false !== $open; $open = strpos( $content, '[', $open + 1 ) ) {
+		// Only where the parser expects a new entry can '[' start a header: not in a quoted value, a comment or a value.
+		$probed = @parse_ini_string( substr( $content, 0, $open ) . $probe . ' = 1', true, INI_SCANNER_NORMAL );
+		if ( false === $probed || ! array_key_exists( $probe, $probed ) && ! array_filter( $probed, function ( $entry ) use ( $probe ) {
+			return is_array( $entry ) && array_key_exists( $probe, $entry );
+		} ) ) {
+			continue;
+		}
+		// A quoted name may contain ']', so try each one until the text up to it parses.
+		for ( $close = strpos( $content, ']', $open ); false !== $close; $close = strpos( $content, ']', $close + 1 ) ) {
+			if ( false === @parse_ini_string( substr( $content, 0, $close + 1 ), true, INI_SCANNER_NORMAL ) ) {
+				continue;
+			}
+			$header = @parse_ini_string( substr( $content, $open, $close - $open + 1 ), true, INI_SCANNER_NORMAL );
+			// PHP scopes only a name with something after PATH or HOST; entries under a bare [PATH] stay global.
+			if ( is_array( $header ) && 1 === count( $header ) && preg_match( '/^(PATH|HOST)./is', (string) key( $header ) ) ) {
+				return substr( $content, 0, $open );
+			}
+			break;
+		}
+	}
+
+	return $content;
+}
+
+/**
+ * Real path of a directory in a site's php config. config/php is EasyEngine's own link to the site's config volume; everything below it belongs to the site's php container.
+ *
+ * @param string $site_fs_path Site root.
+ * @param string $sub          Directory below config/php.
+ *
+ * @return string
+ * @throws \Exception
+ */
+function site_php_conf_dir( string $site_fs_path, string $sub = 'php/conf.d' ) {
+
+	$base = realpath( $site_fs_path . '/config/php' );
+	if ( false === $base ) {
+		throw new \Exception( 'could not resolve config/php' );
+	}
+
+	return $base . '/' . $sub;
+}
+
+/**
+ * Open a file in a directory the site's php container can change, as a handle for every later read and write, so nothing swapped in at that path is followed afterwards.
+ *
+ * Host root must not write through a symlink, a hard link or a swapped directory, so the handle has to be the regular file in $dir. On Linux the kernel's own path of the open file decides; elsewhere the path is checked before and after opening.
+ *
+ * Left open: a symlink, FIFO or device renamed into place between the lstat() check and the open is opened (non-blocking) and closed unread and unwritten, and opening some devices has side effects. Only an open with O_NOFOLLOW/openat, which PHP lacks, or one inside the container closes that.
+ *
+ * @param string $file Path.
+ * @param string $mode 'r' or 'r+'. Nothing is created: PHP expands every path it creates or links to an absolute one, so it can't be confined to a directory the container can swap.
+ * @param string $dir  Real path of the directory the file must be in.
+ *
+ * @return resource
+ * @throws \Exception
+ */
+function open_container_file( string $file, string $mode, string $dir ) {
+
+	if ( 'r' !== $mode && 'r+' !== $mode ) {
+		throw new \InvalidArgumentException( "Unsupported mode $mode." );
+	}
+
+	$name = basename( $file );
+	clearstatcache( true );
+	if ( realpath( dirname( $file ) ) !== $dir ) {
+		throw new \Exception( "a directory above $name is a symlink" );
+	}
+
+	// PHP can't open without following a symlink (no O_NOFOLLOW, O_PATH or openat), so refuse anything but a regular file before opening it.
+	$before = @lstat( $file );
+	if ( ! $before ) {
+		throw new \Exception( "$name is missing" );
+	}
+	if ( 0100000 !== ( $before['mode'] & 0170000 ) ) {
+		throw new \Exception( "$name is not a regular file" );
+	}
+
+	// Non-blocking ('n', O_NONBLOCK): a FIFO or device swapped in after the check above is still opened, but can't stall, and is closed below before any read or write.
+	$handle = @fopen( $file, $mode . 'n' );
+	if ( false === $handle ) {
+		throw new \Exception( "could not open $name" );
+	}
+
+	$opened = fstat( $handle );
+	clearstatcache( true );
+	$linked = @lstat( $file );
+	$real   = opened_file_path( $handle );
+	$error  = null;
+	if ( ! $opened || ! $linked || $opened['dev'] !== $before['dev'] || $opened['ino'] !== $before['ino'] || $opened['dev'] !== $linked['dev'] || $opened['ino'] !== $linked['ino'] || 0100000 !== ( $opened['mode'] & 0170000 ) || 0100000 !== ( $linked['mode'] & 0170000 ) ) {
+		$error = "$name is not a regular file";
+	} elseif ( realpath( dirname( $file ) ) !== $dir || ( null !== $real && "$dir/$name" !== $real ) ) {
+		$error = "a directory above $name is a symlink";
+	} elseif ( 'r' !== $mode && 1 !== $opened['nlink'] ) {
+		$error = "$name has other hard links";
+	}
+	if ( null !== $error ) {
+		fclose( $handle );
+		throw new \Exception( $error );
+	}
+	stream_set_blocking( $handle, true );
+
+	return $handle;
+}
+
+/**
+ * The kernel's path of an open file, from /proc/self/fd, which no later swap of a directory changes.
+ *
+ * @param resource $handle Open file.
+ *
+ * @return string|null Null without /proc (macOS); '' when the file isn't found there.
+ */
+function opened_file_path( $handle ) {
+
+	$want = fstat( $handle );
+	$fds  = $want ? @scandir( '/proc/self/fd' ) : false;
+	if ( ! $fds ) {
+		return null;
+	}
+
+	clearstatcache( true );
+	foreach ( $fds as $fd ) {
+		if ( ! preg_match( '/^\d+$/', $fd ) ) {
+			continue;
+		}
+		$stat = @stat( "/proc/self/fd/$fd" );
+		if ( $stat && $stat['dev'] === $want['dev'] && $stat['ino'] === $want['ino'] ) {
+			$path = @readlink( "/proc/self/fd/$fd" );
+
+			return false === $path ? '' : $path;
+		}
+	}
+
+	return '';
+}
+
+/**
+ * Overwrite an open file through its handle: owner, mode and inode stay (macOS bind-mounts single config files).
+ *
+ * @param resource $handle  Handle from open_container_file().
+ * @param string   $content New content.
+ *
+ * @throws \Exception When the file doesn't hold exactly $content afterwards.
+ */
+function rewrite_container_file( $handle, string $content ) {
+
+	// The read-back stops one byte past the content, so data the container appends can't make it unbounded.
+	if ( ! rewind( $handle ) || strlen( $content ) !== fwrite( $handle, $content ) || ! fflush( $handle ) || ! ftruncate( $handle, strlen( $content ) ) || ! rewind( $handle ) || stream_get_contents( $handle, strlen( $content ) + 1 ) !== $content ) {
+		throw new \Exception( 'could not write ' . basename( stream_get_meta_data( $handle )['uri'] ) );
+	}
+}
+
+/**
+ * Read an open file, at most $max bytes, so a file the container keeps growing can't exhaust memory.
+ *
+ * @param resource $handle Handle from open_container_file().
+ * @param int      $max    Largest size accepted.
+ *
+ * @return string
+ * @throws \Exception When it can't be read or is larger.
+ */
+function read_container_file( $handle, int $max = 65536 ) {
+
+	$name    = basename( stream_get_meta_data( $handle )['uri'] );
+	$content = stream_get_contents( $handle, $max + 1 );
+	if ( false === $content ) {
+		throw new \Exception( "could not read $name" );
+	}
+	if ( strlen( $content ) > $max ) {
+		throw new \Exception( "$name is larger than $max bytes" );
+	}
+
+	return $content;
+}
+
+/**
+ * Read a file in a directory the site's php container can change.
+ *
+ * @param string $file Path.
+ * @param string $dir  Real path of the directory the file must be in.
+ * @param int    $max  Largest size accepted.
+ *
+ * @return string
+ * @throws \Exception When it is missing, not a regular file in $dir, unreadable or larger than $max.
+ */
+function get_container_file_contents( string $file, string $dir, int $max = 1048576 ) {
+
+	$handle = open_container_file( $file, 'r', $dir );
+	try {
+		return read_container_file( $handle, $max );
+	} finally {
+		fclose( $handle );
+	}
+}
+
+/**
+ * Overwrite an existing file in a directory the site's php container can change, in place, so owner, mode and inode stay.
+ *
+ * @param string      $file     Path.
+ * @param string      $dir      Real path of the directory the file must be in.
+ * @param string      $content  New content.
+ * @param string|null $expected Content the file must still hold, e.g. the one the change was made from; null for any.
+ * @param int         $max      Largest current size accepted.
+ *
+ * @return bool Whether it was written; false when it already held $content.
+ * @throws \Exception When it isn't a regular file in $dir, holds something else than $expected, or can't be written (the old content is put back).
+ */
+function put_container_file_contents( string $file, string $dir, string $content, ?string $expected = null, int $max = 1048576 ) {
+
+	// Compared read-only first, so a file that needs no change isn't opened for writing (a hard link or an immutable file would refuse that).
+	$current = get_container_file_contents( $file, $dir, $max );
+	if ( null !== $expected && $current !== $expected ) {
+		throw new \Exception( basename( $file ) . ' changed while it was checked' );
+	}
+	if ( $current === $content ) {
+		return false;
+	}
+
+	$handle = open_container_file( $file, 'r+', $dir );
+	try {
+		if ( read_container_file( $handle, $max ) !== $current ) {
+			throw new \Exception( basename( $file ) . ' changed while it was checked' );
+		}
+		try {
+			rewrite_container_file( $handle, $content );
+		} catch ( \Exception $e ) {
+			// A short write leaves part of the file; put the old one back.
+			rewrite_container_file( $handle, $current );
+			throw $e;
+		}
+	} finally {
+		fclose( $handle );
+	}
+
+	return true;
+}
+
+/**
+ * Refuse a directory tree that holds anything but directories and regular files.
+ *
+ * Only conclusive while nothing can change the tree, e.g. with the site's php container stopped.
+ *
+ * @param string $dir Real path of the directory.
+ *
+ * @throws \Exception Naming the first other entry.
+ */
+function check_plain_tree( string $dir ) {
+
+	clearstatcache( true );
+	$names = @scandir( $dir );
+	if ( false === $names ) {
+		throw new \Exception( "could not read $dir" );
+	}
+
+	foreach ( array_diff( $names, [ '.', '..' ] ) as $name ) {
+		$path = "$dir/$name";
+		$stat = @lstat( $path );
+		$type = $stat ? $stat['mode'] & 0170000 : 0;
+		if ( 0040000 === $type ) {
+			check_plain_tree( $path );
+		} elseif ( 0100000 !== $type ) {
+			throw new \Exception( "$path is not a regular file or directory" );
+		}
+	}
+}
+
+/**
+ * Give a user a directory in a site's config volume and every directory and regular file below it, without following symlinks.
+ *
+ * Symlinks, FIFOs and devices are left alone, and a directory must still be at its real path before its entries are changed.
+ *
+ * @param string     $dir  Real path of the directory.
+ * @param string|int $user User name or ID.
+ *
+ * @throws \Exception
+ */
+function chown_container_tree( string $dir, $user ) {
+
+	clearstatcache( true );
+	$stat = @lstat( $dir );
+	if ( ! $stat || 0040000 !== ( $stat['mode'] & 0170000 ) || realpath( $dir ) !== $dir ) {
+		throw new \Exception( "$dir is not a directory, or a directory above it is a symlink" );
+	}
+	if ( ! @lchown( $dir, $user ) ) {
+		throw new \Exception( "could not change the owner of $dir" );
+	}
+
+	$names = @scandir( $dir );
+	if ( false === $names ) {
+		throw new \Exception( "could not read $dir" );
+	}
+	foreach ( array_diff( $names, [ '.', '..' ] ) as $name ) {
+		$path = "$dir/$name";
+		clearstatcache( true );
+		$entry = @lstat( $path );
+		$type  = $entry ? $entry['mode'] & 0170000 : 0;
+		if ( 0040000 === $type ) {
+			chown_container_tree( $path, $user );
+		} elseif ( 0100000 === $type ) {
+			if ( realpath( $dir ) !== $dir ) {
+				throw new \Exception( "a directory above $path is a symlink" );
+			}
+			if ( ! @lchown( $path, $user ) ) {
+				throw new \Exception( "could not change the owner of $path" );
+			}
+		}
+	}
 }
