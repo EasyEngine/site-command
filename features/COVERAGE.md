@@ -192,7 +192,7 @@ Legend: covered / partial / not covered (reason). Feature files are abbreviated:
 | restore latest, restore `--id`, unknown id | covered | backup: Restore the latest backup; Restore a specific backup by id; Restoring an unknown backup id fails |
 | disabled site | covered | backup: A disabled site cannot be backed up...; en-dis outline |
 | `--dash-auth` format and ed-api-url check | covered | backup: A malformed --dash-auth is rejected; --dash-auth needs ed-api-url in the config |
-| `--dash-auth` success/failure callbacks, rollback of the uploaded backup | not covered | needs an EasyEngine Dashboard API endpoint (`ed-api-url`) |
+| `--dash-auth` success/failure callbacks, uploaded backup kept when the success callback fails | not covered | needs an EasyEngine Dashboard API endpoint (`ed-api-url`) |
 | per-site lock blocks, lock left by a failed restore | covered | backup: A lock file of another backup blocks the backup (held with flock(1), so it holds with or without EasyEngine/site-command#480); not covered yet: a failed restore leaves the lock file and blocks later backups (its scenario comes back with the fix) |
 | stale download reuse | not covered yet | a restore by id reuses files an earlier restore left behind (its scenario comes back with the fix) |
 | retention (`no-of-backups`) | not covered yet | retention keeps one backup more than `no-of-backups` (its scenario comes back with the fix) |

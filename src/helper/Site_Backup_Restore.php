@@ -43,7 +43,8 @@ class Site_Backup_Restore {
 	private $dash_api_url;
 	private $dash_backup_metadata;
 	private $dash_backup_completed = false;
-	private $dash_new_backup_path; // Track new backup path for potential rollback
+	private $dash_callback_sent = false; // Guard: at most one terminal callback (success XOR failure) may be emitted
+	private $dash_new_backup_path; // Remote path of this run's upload, reported if the success callback fails
 
 	// Error tracking for EasyEngine Dashboard failure callbacks
 	private $dash_error_message = '';
@@ -159,8 +160,6 @@ class Site_Backup_Restore {
 
 		$this->fs->remove( EE_BACKUP_DIR . '/' . $this->site_data['site_url'] . '.lock' );
 
-		// Mark backup as completed and send success callback
-		$this->dash_backup_completed = true;
 		if ( $this->dash_auth_enabled ) {
 			$api_success = $this->send_dash_success_callback(
 				$this->dash_api_url,
@@ -169,13 +168,26 @@ class Site_Backup_Restore {
 				$this->dash_backup_metadata
 			);
 
-			// Only cleanup old backups if API callback succeeded
-			// If API failed, rollback the newly uploaded backup
 			if ( $api_success ) {
+				// Backup is now registered with the EasyEngine Dashboard; only then is it safe to
+				// mark complete (suppressing the shutdown failure callback) and prune.
+				$this->dash_backup_completed = true;
 				$this->cleanup_old_backups();
 			} else {
-				$this->rollback_failed_backup();
+				// Never delete an uploaded backup because only the callback failed. dash_backup_completed stays
+				// false, so the shutdown handler sends the single failure callback with this message.
+				$message = sprintf(
+					'Backup uploaded to %s but the EasyEngine Dashboard success callback failed; the backup was kept.',
+					$this->dash_new_backup_path
+				);
+				$this->capture_error( $message, self::ERROR_TYPE_NETWORK, 4004 );
+				// Don't hold the lock through the failure callback's retries in the shutdown handler.
+				$this->release_global_backup_lock();
+				EE::error( $message );
 			}
+		} else {
+			// Non-dash path: backup is done once the upload succeeds.
+			$this->dash_backup_completed = true;
 		}
 
 		// Release global backup lock (also released by shutdown handler as safety net)
@@ -194,8 +206,9 @@ class Site_Backup_Restore {
 	 * explicitly captured during backup execution.
 	 */
 	public function dash_shutdown_handler() {
-		// Only send failure callback if dash auth was enabled and backup didn't complete
-		if ( $this->dash_auth_enabled && ! $this->dash_backup_completed ) {
+		// Only send a failure callback if dash auth was enabled, the backup didn't
+		// complete, and no terminal callback (success or failure) has been sent yet.
+		if ( $this->dash_auth_enabled && ! $this->dash_backup_completed && ! $this->dash_callback_sent ) {
 
 			// If no error was captured yet, try to capture shutdown error
 			if ( empty( $this->dash_error_message ) ) {
@@ -1502,7 +1515,7 @@ class Site_Backup_Restore {
 			$remote_path = $output->stdout;
 			EE::success( 'Backup uploaded to remote storage. Remote path: ' . $remote_path );
 
-			// Store the new backup path for potential rollback (only when using dash-auth)
+			// Kept for the error reported if the success callback fails (only when using dash-auth)
 			if ( $this->dash_auth_enabled ) {
 				$this->dash_new_backup_path = $this->get_remote_path();
 			}
@@ -1626,32 +1639,6 @@ class Site_Backup_Restore {
 			EE::success( sprintf( 'Cleaned up %d old backup(s).', count( $backups_to_delete ) ) );
 		} else {
 			EE::debug( sprintf( 'No cleanup needed. Current backups: %d, Maximum allowed: %d', count( $backups ), $no_of_backups ) );
-		}
-	}
-
-	/**
-	 * Rollback (delete) the newly uploaded backup when EasyEngine Dashboard API callback fails.
-	 * This prevents orphaned backups in remote storage that aren't tracked by the EasyEngine Dashboard.
-	 */
-	private function rollback_failed_backup() {
-		if ( empty( $this->dash_new_backup_path ) ) {
-			EE::warning( 'Cannot rollback backup: backup path not found.' );
-
-			return;
-		}
-
-		EE::warning( 'EasyEngine Dashboard API callback failed. Rolling back newly uploaded backup...' );
-		EE::log( 'Deleting unregistered backup: ' . $this->dash_new_backup_path );
-
-		$result = EE::launch( sprintf( 'rclone purge %s', escapeshellarg( $this->dash_new_backup_path ) ) );
-
-		if ( $result->return_code ) {
-			EE::warning( sprintf(
-				'Failed to delete backup from remote storage. Please manually delete: %s',
-				$this->dash_new_backup_path
-			) );
-		} else {
-			EE::success( 'Successfully removed unregistered backup from remote storage.' );
 		}
 	}
 
@@ -2037,7 +2024,15 @@ chmod -- "$m" "$n" || exit 5';
 
 		EE::debug( 'Payload being sent: ' . json_encode( array_merge( $payload, [ 'verify' => '******' ] ) ) );
 
-		return $this->send_dash_request( $endpoint, $payload );
+		$success = $this->send_dash_request( $endpoint, $payload );
+
+		// A success that actually reached the EasyEngine Dashboard is the terminal callback; a failed
+		// attempt is not, so the failure path can still emit the failure callback.
+		if ( $success ) {
+			$this->dash_callback_sent = true;
+		}
+
+		return $success;
 	}
 
 	/**
@@ -2066,6 +2061,9 @@ chmod -- "$m" "$n" || exit 5';
 				'error_code'    => $payload['error_code'],
 			] ) );
 
+		// Failure is terminal: mark before sending so a concurrent shutdown pass
+		// can never emit a second (duplicate) terminal callback.
+		$this->dash_callback_sent = true;
 		$this->send_dash_request( $endpoint, $payload );
 	}
 
