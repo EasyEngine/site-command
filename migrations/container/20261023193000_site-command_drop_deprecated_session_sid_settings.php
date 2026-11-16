@@ -65,6 +65,9 @@ class DropDeprecatedSessionSidSettings extends Base {
 	/** @var array Files changed by up(), restored by down(). */
 	private $changed = [];
 
+	/** @var string|null Where up() saves the previous php.ini of each site it changes. */
+	private $backup_root;
+
 	public function __construct() {
 
 		parent::__construct();
@@ -83,6 +86,12 @@ class DropDeprecatedSessionSidSettings extends Base {
 			EE::debug( 'Skipping drop-deprecated-session-sid-settings migration as it is not needed.' );
 
 			return;
+		}
+
+		// Not EE_BACKUP_DIR/<site>/: `ee site backup` and `ee site restore` empty that dir. Site names always contain a dot, so this one is never theirs.
+		$this->backup_root = EE_BACKUP_DIR . '/session-sid-settings-' . date( 'Ymd-His' );
+		if ( file_exists( $this->backup_root ) ) {
+			$this->backup_root .= '-' . getmypid();
 		}
 
 		foreach ( $this->sites as $site ) {
@@ -113,7 +122,7 @@ class DropDeprecatedSessionSidSettings extends Base {
 					throw new \Exception( 'Could not read ' . $change['backup'] );
 				}
 				put_container_file_contents( $change['ini'], $change['dir'], $old, null, self::MAX_SIZE );
-				$this->fs->remove( $change['backup'] );
+				$this->remove_backup( $change['backup'] );
 				self::reload_fpm( $change['site'] );
 			} catch ( \Throwable $e ) {
 				EE::warning( sprintf( 'Could not restore the php.ini of %s from %s: %s', $change['site']->site_url, $change['backup'], $e->getMessage() ) );
@@ -149,7 +158,8 @@ class DropDeprecatedSessionSidSettings extends Base {
 			return;
 		}
 
-		$backup = EE_BACKUP_DIR . '/' . $site->site_url . '/php.ini.with-session-sid-settings';
+		$backup = $this->backup_root . '/' . $site->site_url . '/php.ini';
+		$this->fs->mkdir( dirname( $backup ), 0700 );
 		$this->fs->dumpFile( $backup, $content );
 
 		try {
@@ -159,7 +169,7 @@ class DropDeprecatedSessionSidSettings extends Base {
 			if ( 0 === strpos( $e->getMessage(), 'could not write' ) ) {
 				throw new \Exception( $e->getMessage() . "; the previous file is $backup" );
 			}
-			$this->fs->remove( $backup );
+			$this->remove_backup( $backup );
 			throw $e;
 		}
 
@@ -178,6 +188,17 @@ class DropDeprecatedSessionSidSettings extends Base {
 		}
 
 		self::reload_fpm( $site );
+	}
+
+	/**
+	 * @param string $backup Saved php.ini; its site dir and the backup root go too once empty.
+	 */
+	private function remove_backup( $backup ) {
+
+		$this->fs->remove( $backup );
+		// rmdir() refuses a dir that still holds other sites' files.
+		@rmdir( dirname( $backup ) );
+		@rmdir( dirname( $backup, 2 ) );
 	}
 
 	/**
