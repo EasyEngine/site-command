@@ -240,9 +240,9 @@ class DropDeprecatedSessionSidSettings extends Base {
 
 		// A quoted value can span lines, so PHP must read the result as the original minus the two directives.
 		if ( $new_content !== $content ) {
-			// PHP-FPM resolves ${...} from the settings read so far, which parse_ini_string() can't see.
-			if ( preg_match( '/\$\{session\.sid_(length|bits_per_character)\}/', $new_content ) ) {
-				throw new \Exception( 'another setting refers to them as ${...}, which PHP would then read as empty, so the file was left as it is; remove session.sid_length and session.sid_bits_per_character by hand.' );
+			// PHP-FPM resolves ${...} from the settings read so far, which parse_ini_string() can't see; it trims spaces around the name and takes a :- fallback.
+			if ( preg_match( '/\$\{[ \t]*session\.sid_(length|bits_per_character)[ \t]*(\}|:-)/', $new_content ) ) {
+				throw new \Exception( 'another setting refers to them as ${...}, which PHP would then read as empty or as its fallback, so the file was left as it is; remove session.sid_length and session.sid_bits_per_character by hand.' );
 			}
 			// Flat too: a repeated section header hides the earlier section from the sectioned parse, but PHP still reads it.
 			foreach ( [ true, false ] as $sections ) {
