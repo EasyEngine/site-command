@@ -238,17 +238,24 @@ class DropDeprecatedSessionSidSettings extends Base {
 
 		// A quoted value can span lines, so PHP must read the result as the original minus the two directives.
 		if ( $new_content !== $content ) {
-			$expected = @parse_ini_string( $content, true, INI_SCANNER_NORMAL );
-			if ( is_array( $expected ) ) {
-				foreach ( $expected as $key => $value ) {
-					if ( is_array( $value ) ) {
-						$expected[ $key ] = array_diff_key( $value, self::SHIPPED_VALUES );
-					}
-				}
-				$expected = array_diff_key( $expected, self::SHIPPED_VALUES );
+			// PHP-FPM resolves ${...} from the settings read so far, which parse_ini_string() can't see.
+			if ( preg_match( '/\$\{session\.sid_(length|bits_per_character)\}/', $new_content ) ) {
+				throw new \Exception( 'another setting refers to them as ${...}, which PHP would then read as empty, so the file was left as it is; remove session.sid_length and session.sid_bits_per_character by hand.' );
 			}
-			if ( ! is_array( $expected ) || @parse_ini_string( $new_content, true, INI_SCANNER_NORMAL ) !== $expected ) {
-				throw new \Exception( 'the file does not parse, or removing them line by line would change other settings (a quoted value spanning lines), so it was left as it is; remove session.sid_length and session.sid_bits_per_character by hand.' );
+			// Flat too: a repeated section header hides the earlier section from the sectioned parse, but PHP still reads it.
+			foreach ( [ true, false ] as $sections ) {
+				$expected = @parse_ini_string( $content, $sections, INI_SCANNER_NORMAL );
+				if ( is_array( $expected ) ) {
+					foreach ( $expected as $key => $value ) {
+						if ( is_array( $value ) ) {
+							$expected[ $key ] = array_diff_key( $value, self::SHIPPED_VALUES );
+						}
+					}
+					$expected = array_diff_key( $expected, self::SHIPPED_VALUES );
+				}
+				if ( ! is_array( $expected ) || @parse_ini_string( $new_content, $sections, INI_SCANNER_NORMAL ) !== $expected ) {
+					throw new \Exception( 'the file does not parse, or removing them line by line would change other settings (a quoted value spanning lines), so it was left as it is; remove session.sid_length and session.sid_bits_per_character by hand.' );
+				}
 			}
 		}
 
