@@ -43,8 +43,8 @@ class Site_Backup_Restore {
 	private $dash_api_url;
 	private $dash_backup_metadata;
 	private $dash_backup_completed = false;
-	private $dash_callback_sent = false; // Guard: exactly one terminal callback (success XOR failure) may be emitted
-	private $dash_new_backup_path; // Track new backup path for potential rollback
+	private $dash_callback_sent = false; // Guard: at most one terminal callback (success XOR failure) may be emitted
+	private $dash_new_backup_path; // Remote path of this run's upload, reported if the success callback fails
 
 	// Error tracking for EasyDash failure callbacks
 	private $dash_error_message = '';
@@ -171,20 +171,16 @@ class Site_Backup_Restore {
 				$this->dash_backup_completed = true;
 				$this->cleanup_old_backups();
 			} else {
-				// Success callback failed: the upload is orphaned (the EasyEngine Dashboard never
-				// recorded it), so roll it back and report failure. dash_backup_completed
-				// stays false so the shutdown handler emits the single failure callback;
-				// EE::error() makes the exit code/message reflect that no backup remains.
-				$this->capture_error(
-					'Backup uploaded but EasyEngine Dashboard success callback failed; rolled back the orphaned upload.',
-					self::ERROR_TYPE_NETWORK,
-					4004
+				// Never delete an uploaded backup because only the callback failed. dash_backup_completed stays
+				// false, so the shutdown handler sends the single failure callback with this message.
+				$message = sprintf(
+					'Backup uploaded to %s but the EasyEngine Dashboard success callback failed; the backup was kept.',
+					$this->dash_new_backup_path
 				);
-				// Hold the lock through the purge so no other backup prunes against the orphan,
-				// but not through the shutdown failure callback's retries.
-				$this->rollback_failed_backup();
+				$this->capture_error( $message, self::ERROR_TYPE_NETWORK, 4004 );
+				// Don't hold the lock through the failure callback's retries in the shutdown handler.
 				$this->release_global_backup_lock();
-				EE::error( 'EasyEngine Dashboard success callback failed; the uploaded backup was rolled back. No backup was created.' );
+				EE::error( $message );
 			}
 		} else {
 			// Non-dash path: backup is done once the upload succeeds.
@@ -1516,7 +1512,7 @@ class Site_Backup_Restore {
 			$remote_path = $output->stdout;
 			EE::success( 'Backup uploaded to remote storage. Remote path: ' . $remote_path );
 
-			// Store the new backup path for potential rollback (only when using dash-auth)
+			// Kept for the error reported if the success callback fails (only when using dash-auth)
 			if ( $this->dash_auth_enabled ) {
 				$this->dash_new_backup_path = $this->get_remote_path();
 			}
@@ -1640,42 +1636,6 @@ class Site_Backup_Restore {
 			EE::success( sprintf( 'Cleaned up %d old backup(s).', count( $backups_to_delete ) ) );
 		} else {
 			EE::debug( sprintf( 'No cleanup needed. Current backups: %d, Maximum allowed: %d', count( $backups ), $no_of_backups ) );
-		}
-	}
-
-	/**
-	 * Rollback (delete) the newly uploaded backup when EasyDash API callback fails.
-	 * This prevents orphaned backups in remote storage that aren't tracked by EasyDash.
-	 */
-	private function rollback_failed_backup() {
-		if ( empty( $this->dash_new_backup_path ) ) {
-			EE::warning( 'Cannot rollback backup: backup path not found.' );
-
-			return;
-		}
-
-		EE::warning( 'EasyDash API callback failed. Rolling back newly uploaded backup...' );
-		EE::log( 'Deleting unregistered backup: ' . $this->dash_new_backup_path );
-
-		$result = EE::launch( sprintf( 'rclone purge %s', escapeshellarg( $this->dash_new_backup_path ) ) );
-
-		if ( $result->return_code ) {
-			// Rollback purge failed: the untracked backup genuinely survives on the
-			// remote, so the operator must delete it manually. Force-overwrite any
-			// optimistic "rolled back" error captured by the caller (capture_error is
-			// first-wins) so the EasyEngine Dashboard receives this accurate path, not the inverse.
-			$message = sprintf(
-				'Failed to delete orphaned backup from remote storage. Please manually delete: %s',
-				$this->dash_new_backup_path
-			);
-			$this->dash_error_message = '';
-			$this->capture_error( $message, self::ERROR_TYPE_FILESYSTEM, 4003 );
-			$this->release_global_backup_lock();
-			EE::error( $message );
-		} else {
-			// Demoted from EE::success: this always precedes a terminal EE::error, so a
-			// green success line would be misleading on a failing command.
-			EE::log( 'Successfully removed unregistered backup from remote storage.' );
 		}
 	}
 
