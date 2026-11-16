@@ -188,23 +188,23 @@ Legend: covered / partial / not covered (reason). Feature files are abbreviated:
 |---|---|---|
 | backup html: upload, success output, remote files (metadata.json, <site>.zip, conf.zip), local cleanup, lock released | covered | backup: Back up an html site |
 | `--list` | covered | backup: Back up an html site; A disabled site cannot be backed up but its backups can be listed |
-| `--list` with no backups | not covered yet | the "No remote backups found." message is never printed (its scenario comes back with the fix) |
+| `--list` with no backups | covered | backup: Listing the backups of a site without backups says so |
 | restore latest, restore `--id`, unknown id | covered | backup: Restore the latest backup; Restore a specific backup by id; Restoring an unknown backup id fails |
 | disabled site | covered | backup: A disabled site cannot be backed up...; en-dis outline |
 | `--dash-auth` format and ed-api-url check | covered | backup: A malformed --dash-auth is rejected; --dash-auth needs ed-api-url in the config |
 | `--dash-auth` success/failure callbacks, uploaded backup kept when the success callback fails | not covered | needs an EasyEngine Dashboard API endpoint (`ed-api-url`) |
-| per-site lock blocks, lock left by a failed restore | covered | backup: A lock file of another backup blocks the backup (held with flock(1), so it holds with or without EasyEngine/site-command#480); not covered yet: a failed restore leaves the lock file and blocks later backups (its scenario comes back with the fix) |
-| stale download reuse | not covered yet | a restore by id reuses files an earlier restore left behind (its scenario comes back with the fix) |
-| retention (`no-of-backups`) | not covered yet | retention keeps one backup more than `no-of-backups` (its scenario comes back with the fix) |
-| WP backup/restore (DB, wp-content, core download) | covered (@wp; core checksums are a regression check, EasyEngine/site-command#504) | backup: Back up and restore a WordPress site; A restored WordPress core passes checksum verification; not covered yet: the restore prints the database password (its scenario comes back with the fix) |
+| per-site lock blocks, lock left by a failed restore | covered | backup: A lock file of another backup blocks the backup (held with flock(1), so it holds with or without EasyEngine/site-command#480); A failed restore does not block later backups |
+| stale download reuse | covered | backup: Restoring by id ignores files left behind by an earlier restore |
+| retention (`no-of-backups`) | covered | backup: Old backups are pruned down to no-of-backups |
+| WP backup/restore (DB, wp-content, core download) | covered (@wp; core checksums are a regression check, EasyEngine/site-command#504) | backup: Back up and restore a WordPress site; A restored WordPress core passes checksum verification; Restoring a WordPress site does not print its database password |
 | custom docker-compose files in backups | not covered | needs a custom compose setup |
 | disk-space checks, rclone/7z missing, apt-get auto-install, global backup lock wait | not covered | needs a full disk, uninstalled tools or a concurrent backup; the auto-install path needs a pending kernel upgrade |
 | partial SQL dump left in the webroot after a failed dump | not covered | needs a failing mysqldump (fault injection) |
-| invalid `no-of-backups` | not covered yet | an invalid value deletes backups without a warning (its scenario comes back with the fix) |
-| per-host remote layout, hosts sharing `rclone-path` | not covered yet | hosts that share a remote mix their backups (its scenario comes back with the fix) |
-| restore without any backup | not covered yet | the restore doesn't say that there is no backup (its scenario comes back with the fix) |
-| files and dotfiles not in the backup | not covered yet | a restore keeps files that are not in the backup (its scenario comes back with the fix) |
-| WP webroot files beside WordPress, symlinked uploads | not covered yet | files next to WordPress are left out and symlinked uploads loop (their scenarios come back with the fixes) |
+| invalid `no-of-backups` | covered | backup: An invalid no-of-backups keeps the backups and warns |
+| per-host remote layout, hosts sharing `rclone-path` | covered | backup: Hosts that share a remote keep their backups apart |
+| restore without any backup | covered | backup: Restoring a site without backups says so |
+| files and dotfiles not in the backup | covered | backup: A restore removes files that are not in the backup, dotfiles too |
+| WP webroot files beside WordPress, symlinked uploads | covered (@wp) | backup: A WordPress backup holds the files next to WordPress; Symlinked uploads are backed up and restored without a loop |
 | restore rollback, disk-full extraction | not covered | needs fault injection or a small filesystem |
 
 ### clone / sync
@@ -224,10 +224,10 @@ DB and container migrations under `migrations/` (core upgrade flow), the AcmePhp
 
 ## Coverage estimate
 
-Counting the rows above as items: 124 items, 83 covered, 1 partial, 40 not covered (16 of them, marked "not covered yet", are open bugs whose scenarios come back with their fixes), i.e. about 67% of the inventory. Every user-facing subcommand and option of the html type has at least one scenario except `ssl-renew --force`, `clone --ssl/--wildcard` and a live `share`.
+Counting the rows above as items: 124 items, 91 covered, 1 partial, 32 not covered (8 of them, marked "not covered yet", are open bugs whose scenarios come back with their fixes), i.e. about 73% of the inventory. Every user-facing subcommand and option of the html type has at least one scenario except `ssl-renew --force`, `clone --ssl/--wildcard` and a live `share`.
 
 ## Known bugs left out
 
-24 scenarios that expose open bugs are not part of this suite; each comes back with the PR that fixes its bug. They cover: the www redirect of a site whose next label starts with `w`, and the redirect after re-enabling a site when the www check fails; the owner lookup of an alias that contains another alias; `update --ssl=inherit` skipping the parent check; the inherit error message dumping the parent site object; the self-signed certificate leaving out alias domains; `ssl-info --get-dns-records` on self-signed sites; `ssl-verify` on a valid Let's Encrypt site; `site reload` exiting 0 when `nginx -t` fails; `site clean` without flags on html sites; invalid `--proxy-cache` values; the removed EE v3 cache flags message; `update --php` on html sites failing late; and in backup/restore: `--list` and restore without backups, a failed restore blocking later backups, stale downloads reused by a restore, retention, invalid `no-of-backups`, hosts sharing a remote, files left over by a restore, the database password printed by a WordPress restore, and WordPress webroot files and symlinked uploads.
+13 scenarios that expose open bugs are not part of this suite; each comes back with the PR that fixes its bug. They cover: the www redirect of a site whose next label starts with `w`, and the redirect after re-enabling a site when the www check fails; the owner lookup of an alias that contains another alias; `update --ssl=inherit` skipping the parent check; the inherit error message dumping the parent site object; the self-signed certificate leaving out alias domains; `ssl-info --get-dns-records` on self-signed sites; `ssl-verify` on a valid Let's Encrypt site; `site reload` exiting 0 when `nginx -t` fails; `site clean` without flags on html sites; invalid `--proxy-cache` values; the removed EE v3 cache flags message; and `update --php` on html sites failing late.
 
-PRs that change what passing scenarios assert, to revisit when they merge: EasyEngine/site-command#480 keeps `<site>.lock` after a successful backup/restore (drop the two "lock should not exist" lines in backup), EasyEngine/site-command#482 adds a `--list` "No remote backups found." line and new disk-space errors, EasyEngine/site-command#484 and #483 add new restore/backup abort messages.
+PRs that change what passing scenarios assert, to revisit when they merge: EasyEngine/site-command#480 keeps `<site>.lock` after a successful backup/restore (drop the two "lock should not exist" lines in backup).
