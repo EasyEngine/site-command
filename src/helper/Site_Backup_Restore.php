@@ -1792,6 +1792,7 @@ class Site_Backup_Restore {
 		if ( in_array( $this->site_data['site_type'], [ 'php', 'wp' ], true ) ) {
 			$this->restore_php_conf( $backup_dir );
 		}
+		$this->check_restored_nginx_conf();
 
 		$this->commit_restore_transaction();
 
@@ -1800,6 +1801,16 @@ class Site_Backup_Restore {
 			if ( $flush->return_code ) {
 				EE::warning( 'Could not flush the WordPress object cache.' );
 			}
+		}
+	}
+
+	/**
+	 * The restart/reload after the commit would refuse a config nginx rejects, with nothing left to roll back.
+	 */
+	private function check_restored_nginx_conf() {
+		$test = EE::launch( 'docker-compose -f docker-compose.yml exec -T nginx nginx -t', false, true, [], null, $this->site_data['site_fs_path'] );
+		if ( $test->return_code ) {
+			EE::error( 'The nginx configuration in the backup fails `nginx -t`: ' . trim( $test->stderr ) );
 		}
 	}
 
