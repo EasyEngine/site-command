@@ -128,6 +128,10 @@ DEALLOCATE PREPARE ee_stmt;
 	private $mysql_defaults_files   = [];
 	private $mysql_defaults_cleanup = false;
 
+	// Open handles on the scratch dirs pinned by pin_scratch_dir(), kept until exit so a pinned path never means another file.
+	private $scratch_handles = [];
+	private $scratch_pinned  = null;
+
 	// The restore replaced the top-level entries of app/ (htdocs included).
 	private $restore_replaced_app = false;
 
@@ -1032,7 +1036,7 @@ DEALLOCATE PREPARE ee_stmt;
 			register_shutdown_function( [ $this, 'remove_mysql_defaults_files' ] );
 			$this->mysql_defaults_cleanup = true;
 		}
-		$this->mysql_defaults_files[] = $this->get_restore_scratch_dir() . '/' . $name;
+		$this->mysql_defaults_files[] = $this->prepare_scratch_dir() . '/' . $name;
 
 		$this->write_scratch_file(
 			$name,
@@ -1098,7 +1102,7 @@ DEALLOCATE PREPARE ee_stmt;
 	 * The php container's scratch dir, as a real directory it can write to. app/ belongs to the site's own user, who can
 	 * put a symlink there that resolves anywhere on the host, so root checks it right before every use.
 	 *
-	 * @return string Host path.
+	 * @return string Host path, pinned (see pin_scratch_dir()).
 	 */
 	private function prepare_scratch_dir() {
 		$scratch = $this->get_restore_scratch_dir();
@@ -1110,16 +1114,18 @@ DEALLOCATE PREPARE ee_stmt;
 		if ( ! is_dir( $scratch ) && ! mkdir( $scratch, 0755 ) && ! is_dir( $scratch ) ) {
 			$this->fail( sprintf( 'Could not create %s.', $scratch ) );
 		}
-		$this->assert_scratch_dir();
+		$pinned = $this->assert_scratch_dir();
 		if ( ! $this->chown_to_site_user( $scratch ) ) {
 			$this->fail( sprintf( 'Could not hand %s to the site user.', $scratch ) );
 		}
 
-		return $scratch;
+		return $pinned;
 	}
 
 	/**
 	 * Fail unless app/.ee-restore is still the real directory inside app/ (not a symlink the site put in its place).
+	 *
+	 * @return string The checked dir, pinned (see pin_scratch_dir()).
 	 */
 	private function assert_scratch_dir() {
 		$scratch  = $this->get_restore_scratch_dir();
@@ -1129,6 +1135,43 @@ DEALLOCATE PREPARE ee_stmt;
 		if ( is_link( $scratch ) || ! is_dir( $scratch ) || false === $app_real || realpath( $scratch ) !== $app_real . '/' . self::RESTORE_STAGE_DIR ) {
 			$this->fail( sprintf( '%s is not a directory inside the site (it was replaced, e.g. by a symlink); stopping.', $scratch ) );
 		}
+
+		return $this->pin_scratch_dir( $app_real . '/' . self::RESTORE_STAGE_DIR );
+	}
+
+	/**
+	 * The site can swap app/.ee-restore for a symlink between the check and the use, so root works through
+	 * /proc/<pid>/fd/<n> of an open handle on the checked dir: wherever the site moves that dir, it stays in the site.
+	 * The plain path where there is no /proc (macOS).
+	 *
+	 * @param string $real Real path the scratch dir must have.
+	 *
+	 * @return string
+	 */
+	private function pin_scratch_dir( $real ) {
+		$pid = @readlink( '/proc/self' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- no /proc is handled.
+		if ( false === $pid || ! preg_match( '/^\d+$/', $pid ) ) {
+			return $this->get_restore_scratch_dir();
+		}
+		$fd_dir = '/proc/' . $pid . '/fd/';
+		if ( null !== $this->scratch_pinned && @readlink( $this->scratch_pinned ) === $real ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged
+			return $this->scratch_pinned;
+		}
+
+		// opendir() opens with O_DIRECTORY, so a FIFO or device swapped in is never opened.
+		$handle = @opendir( $this->get_restore_scratch_dir() ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- reported below.
+		if ( false !== $handle ) {
+			$this->scratch_handles[] = $handle;
+			// A swap before the opendir() opened the symlink's target, whose path differs.
+			foreach ( (array) scandir( $fd_dir ) as $fd ) {
+				if ( preg_match( '/^\d+$/', $fd ) && @readlink( $fd_dir . $fd ) === $real ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged
+					$this->scratch_pinned = $fd_dir . $fd;
+
+					return $this->scratch_pinned;
+				}
+			}
+		}
+		$this->fail( sprintf( '%s is not a directory inside the site (it was replaced, e.g. by a symlink); stopping.', $this->get_restore_scratch_dir() ) );
 	}
 
 	/**
@@ -1703,8 +1746,6 @@ DEALLOCATE PREPARE ee_stmt;
 	 * @param bool   $legacy     Also swap each core entry of the live site (pre-format-2 backups).
 	 */
 	private function stage_wp_core( $wp_version, $wp_root, $legacy ) {
-		$scratch  = $this->get_restore_scratch_dir();
-		$core_dir = $scratch . '/core';
 		$new_root = $this->restore_txn['new'] . '/' . $wp_root;
 
 		// Check the deepest existing part first: a symlink from the archive must not make root create dirs elsewhere.
@@ -1724,7 +1765,7 @@ DEALLOCATE PREPARE ee_stmt;
 			EE::error( 'The WordPress root of the backup is outside the site. The site was not changed.' );
 		}
 		// Only the download dir goes to the site user; a fallback stage inside the scratch dir stays root's.
-		$this->prepare_scratch_dir();
+		$core_dir = $this->prepare_scratch_dir() . '/core';
 		if ( ! mkdir( $core_dir, 0755 ) || ! $this->chown_to_site_user( $core_dir ) ) {
 			EE::error( 'Failed to prepare the WordPress core download. The site was not changed.' );
 		}
@@ -1789,7 +1830,7 @@ DEALLOCATE PREPARE ee_stmt;
 		if ( ! empty( $this->restore_txn['has_db'] ) ) {
 			$this->snapshot_current_db();
 
-			$this->move_db_dump( $stage . '/db.sql', $this->get_restore_scratch_dir() . '/db.sql' );
+			$this->move_db_dump( $stage . '/db.sql', $this->assert_scratch_dir() . '/db.sql' );
 			$this->restore_txn['db'] = 'importing';
 			$this->write_restore_journal();
 			$this->restore_db( 'db.sql', self::RESTORE_STAGE_DIR );
@@ -1861,9 +1902,9 @@ DEALLOCATE PREPARE ee_stmt;
 
 	private function move_db_dump( $from, $to ) {
 		// Checked right before the rename: moving into or out of a replaced scratch dir would touch whatever it points to.
-		$this->assert_scratch_dir();
+		$scratch = $this->assert_scratch_dir();
 		$this->rename_or_fail( $from, $to );
-		if ( 0 === strpos( $to, $this->get_restore_scratch_dir() . '/' ) ) {
+		if ( 0 === strpos( $to, $scratch . '/' ) ) {
 			$this->chown_to_site_user( $to );
 		}
 	}
@@ -1983,7 +2024,7 @@ DEALLOCATE PREPARE ee_stmt;
 			}
 			// Read-only for the container; a kill during the import still leaves the copy in the stage. The mode is set
 			// on the stage's own file (same inode), never through the path the site user can replace.
-			if ( file_exists( $saved ) && chmod( $saved, 0644 ) && ( @link( $saved, $view ) || copy( $saved, $view ) ) ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- falls back to a copy.
+			if ( file_exists( $saved ) && chmod( $saved, 0644 ) && ( @link( $saved, $view ) || $this->copy_to_new_file( $saved, $view ) ) ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- falls back to a copy.
 				// Checked again here: no EE::error() may run in a shutdown handler.
 				if ( ! preg_match( self::SHELL_SAFE_DB_NAME, (string) $this->site_data['db_name'] ) ) {
 					throw new \RuntimeException( 'The database name is not supported for restore.' );
@@ -2121,6 +2162,26 @@ DEALLOCATE PREPARE ee_stmt;
 		if ( ! EE::exec( $command ) ) {
 			EE::error( $error_message );
 		}
+	}
+
+	/**
+	 * copy() without following a symlink at $to, which the site user can put at that name in the scratch dir.
+	 *
+	 * @param string $from Source.
+	 * @param string $to   New file.
+	 *
+	 * @return bool
+	 */
+	private function copy_to_new_file( $from, $to ) {
+		$in = @fopen( $from, 'r' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- callers report the failure.
+		if ( false === $in ) {
+			return false;
+		}
+		$out = @fopen( $to, 'x' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- 'x' refuses any existing name.
+		$ok  = false !== $out && false !== stream_copy_to_stream( $in, $out );
+		fclose( $in );
+
+		return false !== $out && fclose( $out ) && $ok;
 	}
 
 	private function rename_or_fail( $from, $to ) {
