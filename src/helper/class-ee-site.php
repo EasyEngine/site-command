@@ -1011,6 +1011,8 @@ abstract class EE_Site_Command {
 			EE::log( 'Starting site with new PHP version: ' . $php_version . '. This may take sometime.' );
 			$rollback['stopped'] = true;
 			$this->enable( $args, [ 'force' => true ], false );
+			// Inside the try, so a failed save rolls the site back to the PHP version still on record.
+			$site->save();
 
 		} catch ( \Exception $e ) {
 			if ( ! empty( $rollback ) ) {
@@ -1018,7 +1020,6 @@ abstract class EE_Site_Command {
 			}
 			EE::error( $e->getMessage() );
 		}
-		$site->save();
 		$this->restart( $args, [ 'php' => true ] );
 		EE::success( 'Updated site ' . $this->site_data['site_url'] . ' to PHP version: ' . $php_version );
 		delem_log( 'site php version update end' );
