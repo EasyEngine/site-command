@@ -41,6 +41,21 @@ class Site_Backup_Restore {
 	// app/.ee-restore is the php container's scratch space during a restore; the staged files live next to app/ (get_restore_stage_dir()).
 	const RESTORE_STAGE_DIR = '.ee-restore';
 
+	// Run before db-before.sql on a rollback: the dump drops only its own tables, so tables and views a failed import created would stay.
+	const DB_RESET_SQL = "SET SESSION foreign_key_checks = 0;
+SET SESSION group_concat_max_len = 4294967295;
+SET @ee_drop = (SELECT GROUP_CONCAT(CONCAT('`', REPLACE(TABLE_NAME, '`', '``'), '`')) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'VIEW');
+SET @ee_drop = IF(@ee_drop IS NULL, 'DO 0', CONCAT('DROP VIEW IF EXISTS ', @ee_drop));
+PREPARE ee_stmt FROM @ee_drop;
+EXECUTE ee_stmt;
+DEALLOCATE PREPARE ee_stmt;
+SET @ee_drop = (SELECT GROUP_CONCAT(CONCAT('`', REPLACE(TABLE_NAME, '`', '``'), '`')) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE <> 'VIEW');
+SET @ee_drop = IF(@ee_drop IS NULL, 'DO 0', CONCAT('DROP TABLE IF EXISTS ', @ee_drop));
+PREPARE ee_stmt FROM @ee_drop;
+EXECUTE ee_stmt;
+DEALLOCATE PREPARE ee_stmt;
+";
+
 	// Root entries of a WordPress install that `wp core download` recreates.
 	const WP_CORE_ENTRIES = [
 		'wp-admin',
@@ -1973,11 +1988,14 @@ class Site_Backup_Restore {
 				if ( ! preg_match( self::SHELL_SAFE_DB_NAME, (string) $this->site_data['db_name'] ) ) {
 					throw new \RuntimeException( 'The database name is not supported for restore.' );
 				}
-				$command = sprintf( 'mysql --defaults-extra-file=%s --loose-skip-print-query-on-error --skip-ssl %s < /var/www/%s/db-before.sql 2>&1', $this->write_mysql_defaults_file(), $this->site_data['db_name'], self::RESTORE_STAGE_DIR );
+				$reset   = $this->write_scratch_file( 'db-reset.sql', self::DB_RESET_SQL );
+				$command = sprintf( 'mysql --defaults-extra-file=%1$s --skip-ssl %2$s < /var/www/%3$s/db-reset.sql 2>&1 && mysql --defaults-extra-file=%1$s --loose-skip-print-query-on-error --skip-ssl %2$s < /var/www/%3$s/db-before.sql 2>&1', $this->write_mysql_defaults_file(), $this->site_data['db_name'], self::RESTORE_STAGE_DIR );
 				$result  = EE::launch( $this->get_ee_shell_command( $command ) );
 				$this->remove_mysql_defaults_files();
-				if ( $this->path_exists( $view ) ) {
-					unlink( $view );
+				foreach ( [ $view, $reset ] as $file ) {
+					if ( $this->path_exists( $file ) ) {
+						unlink( $file );
+					}
 				}
 			}
 			if ( null === $result || $result->return_code ) {
