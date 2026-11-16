@@ -2085,7 +2085,7 @@ DEALLOCATE PREPARE ee_stmt;
 		}
 		if ( ! empty( $txn['conf'] ) ) {
 			$saved = $txn['stage'] . '/config-before/nginx';
-			if ( is_dir( $saved ) && ! EE::exec( sprintf( 'rsync -a --delete %s/ %s/', escapeshellarg( $saved ), escapeshellarg( $config_dir . '/nginx' ) ) ) ) {
+			if ( is_dir( $saved ) && ! EE::exec( sprintf( 'rsync -a --ignore-times --delete %s/ %s/', escapeshellarg( $saved ), escapeshellarg( $config_dir . '/nginx' ) ) ) ) {
 				EE::warning( 'Could not put back the nginx configuration.' );
 				$ok = false;
 			}
