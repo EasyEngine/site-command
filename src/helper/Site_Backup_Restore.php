@@ -3076,19 +3076,24 @@ class Site_Backup_Restore {
 		// skip (BKP-20).
 		$command = sprintf( "rclone copy -P %s --transfers %d --checkers %d --buffer-size %s --exclude /metadata.json %s %s", $s3_flag, $transfers, $transfers, $buffer_size, escapeshellarg( $path ), escapeshellarg( $this->get_remote_path() ) );
 		$output  = EE::launch( $command );
-		if ( ! $output->return_code ) {
-			$output = EE::launch( sprintf( 'rclone copyto %s %s', escapeshellarg( $path . '/metadata.json' ), escapeshellarg( $this->get_remote_path() . '/metadata.json' ) ) );
-		}
-
 		if ( $output->return_code ) {
 			$this->capture_error(
 				'Failed to upload backup to remote storage via rclone',
 				self::ERROR_TYPE_NETWORK,
 				4001
 			);
-			// Best effort; whatever stays (e.g. after a kill) is skipped as incomplete and pruned by a later backup.
+			// The data itself is incomplete, so this run's dir is no backup. Best effort; whatever stays (e.g. after a kill) is
+			// skipped as incomplete and pruned by a later backup.
 			$this->purge_remote_backup( $this->get_remote_path() );
 			EE::error( 'Error uploading backup to remote storage. ' . trim( $output->stderr ) );
+		}
+
+		$output = EE::launch( sprintf( 'rclone copyto %s %s', escapeshellarg( $path . '/metadata.json' ), escapeshellarg( $this->get_remote_path() . '/metadata.json' ) ) );
+		if ( $output->return_code ) {
+			// All data arrived and only metadata.json failed: keep the uploaded files, never delete them here.
+			$message = sprintf( 'Backup files were uploaded to %s, but metadata.json could not be uploaded; the uploaded files were kept.', $this->get_remote_path() );
+			$this->capture_error( $message, self::ERROR_TYPE_NETWORK, 4001 );
+			EE::error( $message . ' ' . trim( $output->stderr ) );
 		} else {
 
 			EE::success( 'Backup uploaded to remote storage. Remote path: ' . $this->get_remote_path() );
