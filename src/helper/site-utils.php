@@ -1366,6 +1366,22 @@ function remove_etc_hosts_entry( $site_url ) {
 }
 
 /**
+ * Whether a Let's Encrypt site still waits for its first certificate, e.g. for `ee site ssl-verify` after a manual DNS-01 challenge.
+ *
+ * Such a site is served over HTTP only: with HTTPS on, nginx-proxy would serve it with the closest matching certificate of another site.
+ *
+ * @param string      $site_url Name of the site.
+ * @param string|null $site_ssl The site's SSL type.
+ *
+ * @return bool
+ */
+function is_le_ssl_pending( $site_url, $site_ssl ) {
+	$cert = EE_SERVICE_DIR . '/nginx-proxy/certs/' . $site_url;
+
+	return 'le' === $site_ssl && ! ( file_exists( "$cert.crt" ) && file_exists( "$cert.key" ) );
+}
+
+/**
  * Checks if the site certificate needs renewal.
  *
  * The way it differs from Site_Letsencrypt::isRenewalNecessary is that the latter
@@ -1398,6 +1414,279 @@ function ssl_needs_creation( $site_url ) {
 	}
 
 	return true;
+}
+
+/**
+ * Waits until every authoritative nameserver of each record's zone serves the expected TXT values.
+ *
+ * The nameservers are queried directly: a recursive resolver can keep serving what it cached before the record existed,
+ * such as the records a wildcard matched.
+ *
+ * @param array $records     Expected TXT values by record name.
+ * @param int   $timeout     Seconds to wait in total.
+ * @param array $nameservers Nameservers to query by record name, as [ ip => name ], instead of looking them up.
+ * @param int   $min_wait    Seconds to wait at least once the values are served.
+ *
+ * @return bool True once every nameserver serves every value, false when they don't within $timeout.
+ */
+function wait_for_dns_txt_records( array $records, $timeout = 120, array $nameservers = [], $min_wait = 10 ) {
+
+	if ( empty( $records ) ) {
+		return true;
+	}
+	$start    = microtime( true );
+	$deadline = $start + $timeout;
+	$pending  = [];
+	foreach ( $records as $name => $values ) {
+		$servers = isset( $nameservers[ $name ] ) ? $nameservers[ $name ] : get_authoritative_nameservers( $name );
+		if ( empty( $servers ) ) {
+			EE::warning( "Could not find the authoritative nameservers of $name, so its propagation can't be checked." );
+			continue;
+		}
+		foreach ( $servers as $ip => $server ) {
+			$pending[] = [ $name, $ip, $server ];
+		}
+	}
+
+	$delay = 2;
+	while ( ! empty( $pending ) ) {
+		foreach ( $pending as $key => list( $name, $ip ) ) {
+			$served = query_txt_records( $ip, $name );
+			if ( null !== $served && ! array_diff( $records[ $name ], $served ) ) {
+				EE::debug( "$name serves the DNS challenge value on {$pending[ $key ][2]} ($ip)." );
+				unset( $pending[ $key ] );
+			}
+			if ( function_exists( 'pcntl_signal_dispatch' ) ) {
+				pcntl_signal_dispatch();
+			}
+			if ( microtime( true ) >= $deadline ) {
+				break;
+			}
+		}
+		$left = $deadline - microtime( true );
+		if ( empty( $pending ) || $left <= 0 ) {
+			break;
+		}
+		usleep( (int) ( min( $delay, $left ) * 1000000 ) );
+		$delay = min( $delay * 2, 16 );
+	}
+
+	if ( empty( $pending ) ) {
+		// Anycast nameservers answer from the site nearest to this server; give the others the time the fixed wait used to.
+		$left = $start + $min_wait - microtime( true );
+		if ( $left > 0 ) {
+			usleep( (int) ( $left * 1000000 ) );
+		}
+
+		return true;
+	}
+
+	$missing = array_map(
+		function ( $entry ) {
+			return sprintf( '%s on %s (%s)', $entry[0], $entry[2], $entry[1] );
+		},
+		$pending
+	);
+	EE::warning( sprintf( 'The DNS challenge value is not yet served after %ds for: %s. Trying the validation anyway.', $timeout, implode( ', ', $missing ) ) );
+
+	return false;
+}
+
+/**
+ * Finds the authoritative nameservers of the zone that holds a name.
+ *
+ * @param string $name A domain name.
+ *
+ * @return array Nameserver names by IPv4 address, empty when none are found.
+ */
+function get_authoritative_nameservers( $name ) {
+
+	$labels = explode( '.', rtrim( $name, '.' ) );
+	// The closest enclosing zone cut; a name a wildcard matches is answered with its target's records, so require the queried owner.
+	while ( count( $labels ) > 1 ) {
+		$zone    = implode( '.', $labels );
+		$servers = [];
+		foreach ( (array) @dns_get_record( $zone, DNS_NS ) as $record ) {
+			if ( isset( $record['type'], $record['host'], $record['target'] ) && 'NS' === $record['type'] && 0 === strcasecmp( rtrim( $record['host'], '.' ), $zone ) ) {
+				foreach ( (array) gethostbynamel( $record['target'] ) as $ip ) {
+					if ( $ip ) {
+						$servers[ $ip ] = $record['target'];
+					}
+				}
+			}
+		}
+		if ( ! empty( $servers ) ) {
+			return $servers;
+		}
+		array_shift( $labels );
+	}
+
+	return [];
+}
+
+/**
+ * Asks one nameserver, without recursion, for the TXT records of a name.
+ *
+ * @param string $server  Nameserver IPv4 address.
+ * @param string $name    Record name.
+ * @param int    $timeout Seconds to wait for the answer.
+ *
+ * @return array|null The TXT values in the answer (empty for NXDOMAIN), null when there is no usable answer.
+ */
+function query_txt_records( $server, $name, $timeout = 3 ) {
+
+	$qname = '';
+	foreach ( explode( '.', rtrim( $name, '.' ) ) as $label ) {
+		if ( '' === $label || strlen( $label ) > 63 ) {
+			return null;
+		}
+		$qname .= chr( strlen( $label ) ) . $label;
+	}
+	$id = random_int( 0, 0xffff );
+	// One question (TXT, IN) and an EDNS0 OPT record so a large answer fits in one UDP packet. Authoritative servers ignore RD,
+	// but a network that redirects port 53 to its own resolver needs it.
+	$query = pack( 'n6', $id, 0x0100, 1, 0, 0, 1 ) . $qname . "\0" . pack( 'n2', 16, 1 ) . "\0" . pack( 'n2Nn', 41, 1232, 0, 0 );
+
+	$answer = parse_dns_txt_answer( dns_exchange( $server, $query, false, $timeout ), $id );
+	if ( 'truncated' === $answer ) {
+		$answer = parse_dns_txt_answer( dns_exchange( $server, $query, true, $timeout ), $id );
+	}
+
+	return is_array( $answer ) ? $answer : null;
+}
+
+/**
+ * Sends a DNS query to port 53 and returns the response matching its ID.
+ *
+ * @param string $server  Nameserver IPv4 address.
+ * @param string $query   Wire-format query.
+ * @param bool   $tcp     Use TCP instead of UDP.
+ * @param int    $timeout Seconds to wait.
+ *
+ * @return string The response, or an empty string.
+ */
+function dns_exchange( $server, $query, $tcp, $timeout ) {
+
+	$deadline = microtime( true ) + $timeout;
+	$socket   = @stream_socket_client( ( $tcp ? 'tcp' : 'udp' ) . "://$server:53", $errno, $errstr, $timeout );
+	if ( ! $socket ) {
+		return '';
+	}
+	fwrite( $socket, $tcp ? pack( 'n', strlen( $query ) ) . $query : $query );
+
+	$response = '';
+	$expected = null;
+	while ( ( $left = $deadline - microtime( true ) ) > 0 ) {
+		$read   = [ $socket ];
+		$write  = null;
+		$except = null;
+		if ( ! @stream_select( $read, $write, $except, (int) $left, (int) ( fmod( $left, 1 ) * 1000000 ) ) ) {
+			break;
+		}
+		$chunk = fread( $socket, 65535 );
+		if ( false === $chunk || ( '' === $chunk && feof( $socket ) ) ) {
+			break;
+		}
+		if ( ! $tcp ) {
+			// Skip a stray datagram, such as a late answer to an earlier query.
+			if ( strlen( $chunk ) >= 2 && substr( $chunk, 0, 2 ) === substr( $query, 0, 2 ) ) {
+				$response = $chunk;
+				break;
+			}
+			continue;
+		}
+		$response .= $chunk;
+		if ( null === $expected && strlen( $response ) >= 2 ) {
+			$expected = unpack( 'n', $response )[1];
+		}
+		if ( null !== $expected && strlen( $response ) >= $expected + 2 ) {
+			$response = substr( $response, 2, $expected );
+			break;
+		}
+	}
+	fclose( $socket );
+
+	return ( $tcp && null !== $expected && strlen( $response ) !== $expected ) ? '' : $response;
+}
+
+/**
+ * Reads the TXT values from the answer section of a DNS response.
+ *
+ * @param string $response Wire-format response.
+ * @param int    $id       ID of the query.
+ *
+ * @return array|string|null TXT values, 'truncated' when the answer needs TCP, or null for an unusable response.
+ */
+function parse_dns_txt_answer( $response, $id ) {
+
+	$length = strlen( $response );
+	if ( $length < 12 ) {
+		return null;
+	}
+	$header = unpack( 'nid/nflags/nqd/nan', $response );
+	if ( $header['id'] !== $id || ! ( $header['flags'] & 0x8000 ) ) {
+		return null;
+	}
+	if ( $header['flags'] & 0x0200 ) {
+		return 'truncated';
+	}
+	$rcode = $header['flags'] & 0x000f;
+	if ( 3 === $rcode ) {
+		return [];
+	}
+	if ( 0 !== $rcode ) {
+		return null;
+	}
+
+	$skip_name = function ( $offset ) use ( $response, $length ) {
+		while ( $offset < $length ) {
+			$label = ord( $response[ $offset ] );
+			if ( 0 === $label ) {
+				return $offset + 1;
+			}
+			if ( 0xc0 === ( $label & 0xc0 ) ) {
+				return $offset + 2;
+			}
+			$offset += $label + 1;
+		}
+
+		return null;
+	};
+
+	$offset = 12;
+	for ( $i = 0; $i < $header['qd']; $i++ ) {
+		$offset = $skip_name( $offset );
+		if ( null === $offset ) {
+			return null;
+		}
+		$offset += 4;
+	}
+
+	$values = [];
+	for ( $i = 0; $i < $header['an']; $i++ ) {
+		$offset = $skip_name( $offset );
+		if ( null === $offset || $offset + 10 > $length ) {
+			return null;
+		}
+		$record  = unpack( 'ntype/nclass/Nttl/nlength', substr( $response, $offset, 10 ) );
+		$offset += 10;
+		if ( $offset + $record['length'] > $length ) {
+			return null;
+		}
+		// A wildcard match can also put a CNAME and its target's records in the answer; only TXT data counts.
+		if ( 16 === $record['type'] ) {
+			$rdata = substr( $response, $offset, $record['length'] );
+			$value = '';
+			for ( $pos = 0; $pos < $record['length']; $pos += $size + 1 ) {
+				$size   = ord( $rdata[ $pos ] );
+				$value .= substr( $rdata, $pos + 1, $size );
+			}
+			$values[] = $value;
+		}
+		$offset += $record['length'];
+	}
+
+	return $values;
 }
 
 /**
