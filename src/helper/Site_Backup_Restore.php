@@ -78,7 +78,7 @@ class Site_Backup_Restore {
 	private $dash_api_url;
 	private $dash_backup_metadata;
 	private $dash_backup_completed = false;
-	private $dash_new_backup_path; // Track new backup path for potential rollback
+	private $dash_new_backup_path; // Remote path of this run's upload, reported if the success callback fails
 
 	// Error tracking for EasyDash failure callbacks
 	private $dash_error_message = '';
@@ -237,9 +237,6 @@ class Site_Backup_Restore {
 
 		$this->release_site_lock();
 
-		// Mark backup as completed and send success callback
-		$this->dash_backup_completed = true;
-
 		// The callback retries for up to 15 minutes: other sites' backups must not wait for it (BKP-11).
 		$this->release_global_backup_lock();
 
@@ -251,13 +248,21 @@ class Site_Backup_Restore {
 				$this->dash_backup_metadata
 			);
 
-			// Only cleanup old backups if API callback succeeded
-			// If API failed, rollback the newly uploaded backup
 			if ( $api_success ) {
+				$this->dash_backup_completed = true;
 				$this->cleanup_old_backups();
 			} else {
-				$this->rollback_failed_backup();
+				// Never delete an uploaded backup because only the callback failed. dash_backup_completed stays
+				// false, so the shutdown handler sends the failure callback with this message.
+				$message = sprintf(
+					'Backup uploaded to %s but the EasyEngine Dashboard success callback failed; the backup was kept.',
+					$this->dash_new_backup_path
+				);
+				$this->capture_error( $message, self::ERROR_TYPE_NETWORK, 4004 );
+				EE::error( $message );
 			}
+		} else {
+			$this->dash_backup_completed = true;
 		}
 
 		EE::success( 'Backup created successfully.' );
@@ -3088,7 +3093,7 @@ class Site_Backup_Restore {
 
 			EE::success( 'Backup uploaded to remote storage. Remote path: ' . $this->get_remote_path() );
 
-			// Store the new backup path for potential rollback (only when using dash-auth)
+			// Kept for the error reported if the success callback fails (only when using dash-auth)
 			if ( $this->dash_auth_enabled ) {
 				$this->dash_new_backup_path = $this->get_remote_path();
 			}
@@ -3255,32 +3260,6 @@ class Site_Backup_Restore {
 		EE::debug( 'Successfully deleted backup: ' . basename( $path ) );
 
 		return true;
-	}
-
-	/**
-	 * Rollback (delete) the newly uploaded backup when EasyDash API callback fails.
-	 * This prevents orphaned backups in remote storage that aren't tracked by EasyDash.
-	 */
-	private function rollback_failed_backup() {
-		if ( empty( $this->dash_new_backup_path ) ) {
-			EE::warning( 'Cannot rollback backup: backup path not found.' );
-
-			return;
-		}
-
-		EE::warning( 'EasyDash API callback failed. Rolling back newly uploaded backup...' );
-		EE::log( 'Deleting unregistered backup: ' . $this->dash_new_backup_path );
-
-		$result = EE::launch( sprintf( 'rclone purge %s', escapeshellarg( $this->dash_new_backup_path ) ) );
-
-		if ( $result->return_code ) {
-			EE::warning( sprintf(
-				'Failed to delete backup from remote storage. Please manually delete: %s',
-				$this->dash_new_backup_path
-			) );
-		} else {
-			EE::success( 'Successfully removed unregistered backup from remote storage.' );
-		}
 	}
 
 	private function restore_nginx_conf( $backup_dir ) {
