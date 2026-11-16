@@ -312,7 +312,7 @@ class Site_Backup_Restore {
 			}
 
 			// The later shutdown handlers would only run after the callback's retries (up to 15 minutes): clean up and
-			// release the locks first, so other backups don't wait for EasyDash (BKP-11).
+			// release the locks first, so other backups don't wait for the EasyEngine Dashboard (BKP-11).
 			$this->remove_backup_dump();
 			$this->remove_mysql_defaults_files();
 			$this->release_site_lock();
@@ -2271,7 +2271,7 @@ class Site_Backup_Restore {
 			} else {
 				$status = EE::exec( 'apt-get --version' );
 				if ( $status ) {
-					// Backups run unattended (cron, EasyDash): no debconf, conffile or needrestart prompt may wait for an
+					// Backups run unattended (cron, EasyEngine Dashboard): no debconf, conffile or needrestart prompt may wait for an
 					// answer, and needrestart must not restart services such as Docker in the middle of one (BKP-3).
 					$apt = 'DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l NEEDRESTART_SUSPEND=1 apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold';
 					EE::exec( "$apt update < /dev/null" );
@@ -3211,7 +3211,7 @@ class Site_Backup_Restore {
 				$backups[] = $id;
 			} elseif ( strcmp( $id, $current ) < 0 ) {
 				// Interrupted uploads don't count as backups (BKP-20). Only older ones go: a newer one can be another run's
-				// upload in progress, since the site lock is released before the EasyDash callback.
+				// upload in progress, since the site lock is released before the EasyEngine Dashboard callback.
 				$incomplete[] = $id;
 			}
 		}
