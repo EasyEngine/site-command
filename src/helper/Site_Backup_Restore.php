@@ -2914,15 +2914,26 @@ DEALLOCATE PREPARE ee_stmt;
 	private function get_new_backup_id() {
 		// The site lock keeps other backups of the site on this host from running meanwhile, so the listing stays valid.
 		$existing = $this->list_remote_dirs( $this->get_host_backup_root() );
+		// An unchecked id could be an existing backup, which the upload overwrites and its failure path purges.
+		if ( null === $existing ) {
+			$message = 'Could not list the remote backups to pick a new backup id: ' . $this->rclone_error;
+			$this->capture_error( $message, self::ERROR_TYPE_NETWORK, 4001 );
+			EE::error( $message );
+		}
 
-		for ( $attempt = 1; ; $attempt++ ) {
+		for ( $attempt = 1; $attempt <= 4; $attempt++ ) {
 			$now = time();
 			$id  = $now . '_' . date( 'Y-m-d-H-i-s', $now );
-			if ( empty( $existing ) || ! in_array( $id, $existing, true ) || $attempt > 3 ) {
+			if ( ! in_array( $id, $existing, true ) ) {
 				return $id;
 			}
 			sleep( 1 );
 		}
+
+		// Only a clock set back onto earlier backups gets here.
+		$message = sprintf( 'Backup id %s is already used on the remote; check the system clock.', $id );
+		$this->capture_error( $message, self::ERROR_TYPE_UNKNOWN, 4001 );
+		EE::error( $message );
 	}
 
 	/**
