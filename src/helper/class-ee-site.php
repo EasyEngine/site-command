@@ -898,7 +898,7 @@ abstract class EE_Site_Command {
 			} else {
 				// Removing the zone together with every location that uses it keeps the config valid, so the failure is elsewhere.
 				// A refused reload already printed its own test output.
-				EE::warning( 0 === $test->return_code ? 'The proxy was not reloaded after disabling proxy cache.' : "nginx config test failed after disabling proxy cache:\n" . trim( $test->stderr ) );
+				EE::warning( 0 === $test->return_code ? 'nginx config test failed after disabling proxy cache, see the warning above.' : "nginx config test failed after disabling proxy cache:\n" . trim( $test->stderr ) );
 			}
 		} catch ( \Exception $e ) {
 			EE::error( $e->getMessage() );
