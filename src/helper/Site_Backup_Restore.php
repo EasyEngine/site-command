@@ -1137,10 +1137,18 @@ DEALLOCATE PREPARE ee_stmt;
 		}
 		$this->mysql_defaults_files[] = $this->prepare_scratch_dir() . '/' . $name;
 
-		$this->write_scratch_file(
-			$name,
-			sprintf( "[client]\nuser=%s\npassword=%s\nhost=%s\n", $quote( $this->site_data['db_user'] ), $quote( $this->site_data['db_password'] ), $quote( $this->site_data['db_host'] ) )
-		);
+		// Same endpoint as DB_HOST, whose host:port form the client's host option can't take.
+		$host = (string) $this->site_data['db_host'];
+		$port = empty( $this->site_data['db_port'] ) ? '' : (string) $this->site_data['db_port'];
+		if ( false !== strpos( $host, ':' ) ) {
+			list( $host, $port ) = explode( ':', $host, 2 );
+		}
+		$content = sprintf( "[client]\nuser=%s\npassword=%s\nhost=%s\n", $quote( $this->site_data['db_user'] ), $quote( $this->site_data['db_password'] ), $quote( $host ) );
+		if ( '' !== $port ) {
+			$content .= sprintf( "port=%s\n", $quote( $port ) );
+		}
+
+		$this->write_scratch_file( $name, $content );
 
 		return '/var/www/' . self::RESTORE_STAGE_DIR . '/' . $name;
 	}
