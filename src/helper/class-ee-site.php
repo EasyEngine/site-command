@@ -897,14 +897,15 @@ abstract class EE_Site_Command {
 				$failed = true;
 			} else {
 				// Removing the zone together with every location that uses it keeps the config valid, so the failure is elsewhere.
-				EE::warning( "nginx config test failed after disabling proxy cache:\n" . trim( $test->stderr ) );
+				// A refused reload already printed its own test output.
+				EE::warning( 0 === $test->return_code ? 'The proxy was not reloaded after disabling proxy cache.' : "nginx config test failed after disabling proxy cache:\n" . trim( $test->stderr ) );
 			}
 		} catch ( \Exception $e ) {
 			EE::error( $e->getMessage() );
 		}
 
 		if ( $failed ) {
-			$message = 'Could not enable proxy cache on ' . $this->site_data['site_url'] . ", nginx config test failed. The previous proxy config was restored.\n" . trim( $test->stderr );
+			$message = 'Could not enable proxy cache on ' . $this->site_data['site_url'] . ', nginx config test failed. The previous proxy config was restored.' . ( 0 === $test->return_code ? '' : "\n" . trim( $test->stderr ) );
 			if ( $force || $call_on_create ) {
 				EE::warning( $message );
 				if ( $call_on_create ) {
