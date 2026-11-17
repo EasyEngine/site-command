@@ -2591,7 +2591,7 @@ abstract class EE_Site_Command {
 			if ( $this->le_dns_verify_pending ) {
 				// `ssl-renew --force` on a site still waiting for its first certificate has none to keep.
 				$still_kept = \EE\Site\Utils\is_le_ssl_pending( $this->site_data['site_url'], 'le' ) ? '' : ' The current certificate is kept until then.';
-				EE::warning( sprintf( 'SSL renewal of %1$s is pending: no new certificate was issued yet. Add the TXT records above and run `ee site ssl-verify %1$s` once they have propagated.%2$s', $this->site_data['site_url'], $still_kept ) );
+				EE::warning( sprintf( 'SSL renewal of %1$s is pending: no new certificate was issued yet. Run `ee site ssl-verify %1$s` once the DNS TXT records have propagated.%2$s', $this->site_data['site_url'], $still_kept ) );
 
 				return;
 			}
