@@ -65,6 +65,11 @@ abstract class EE_Site_Command {
 	private $ssl_failure_handled_by_caller = false;
 
 	/**
+	 * @var bool $le_dns_verify_pending Whether init_le() left a manual DNS challenge for `ee site ssl-verify` to finish.
+	 */
+	private $le_dns_verify_pending = false;
+
+	/**
 	 * @var resource $ssl_lock_handle Handle of the process-wide SSL lock.
 	 *
 	 * Static because `ssl-renew --all` renews every site in one process, and flock refuses a second handle there.
@@ -2078,6 +2083,7 @@ abstract class EE_Site_Command {
 		$api_key_absent = empty( get_config_value( 'cloudflare-api-key' ) );
 		if ( $is_solver_dns && $api_key_absent ) {
 			echo \cli\Colors::colorize( '%YIMPORTANT:%n Run `ee site ssl-verify ' . $site_url . '` once the DNS changes have propagated to complete the certification generation and installation.', null ) . PHP_EOL;
+			$this->le_dns_verify_pending = true;
 		} else {
 			if ( ! $api_key_absent && $is_solver_dns ) {
 				EE::log( 'Waiting for DNS entry propagation.' );
@@ -2580,6 +2586,14 @@ abstract class EE_Site_Command {
 					return;
 				}
 				EE::error( $e->getMessage() . $kept );
+			}
+			// Without a Cloudflare API key the DNS challenge is manual, so no certificate was issued yet.
+			if ( $this->le_dns_verify_pending ) {
+				// `ssl-renew --force` on a site still waiting for its first certificate has none to keep.
+				$still_kept = \EE\Site\Utils\is_le_ssl_pending( $this->site_data['site_url'], 'le' ) ? '' : ' The current certificate is kept until then.';
+				EE::warning( sprintf( 'SSL renewal of %1$s is pending: no new certificate was issued yet. Add the TXT records above and run `ee site ssl-verify %1$s` once they have propagated.%2$s', $this->site_data['site_url'], $still_kept ) );
+
+				return;
 			}
 		}
 		EE::success( 'SSL renewal completed.' );
