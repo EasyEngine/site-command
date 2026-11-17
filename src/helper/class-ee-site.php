@@ -404,6 +404,8 @@ abstract class EE_Site_Command {
 			// Also when site_ssl is empty: SSL may have been turned off or lost while the files stayed, and nginx-proxy would keep matching them.
 			\EE\Site\Utils\remove_site_ssl_files( $site_url, $this->get_ssl_domains( $site_url ) );
 
+			$this->remove_backup_dir_leftovers( $site_url );
+
 			if ( Site::find( $site_url )->delete() ) {
 				\EE::log( 'Removed database entry.' );
 			} else {
@@ -411,6 +413,30 @@ abstract class EE_Site_Command {
 			}
 		}
 		\EE::success( "Site $site_url deleted." );
+	}
+
+	/**
+	 * Remove the files of the deleted site that EE kept in EE_BACKUP_DIR: the metadata copy of its last `ee site backup`
+	 * and the DB dump `ee site update --ssl` takes before its search-replace. Other files there stay.
+	 *
+	 * @param string $site_url Site name.
+	 */
+	private function remove_backup_dir_leftovers( $site_url ) {
+		$dir = EE_BACKUP_DIR . '/' . $site_url;
+
+		try {
+			foreach ( [ EE_BACKUP_DIR . '/' . $site_url . '.metadata.json', $dir . '/' . $site_url . '.db' ] as $file ) {
+				if ( is_file( $file ) || is_link( $file ) ) {
+					$this->fs->remove( $file );
+				}
+			}
+			$entries = is_dir( $dir ) && ! is_link( $dir ) ? scandir( $dir ) : false;
+			if ( false !== $entries && 2 === count( $entries ) ) {
+				rmdir( $dir );
+			}
+		} catch ( \Exception $e ) {
+			\EE::debug( $e->getMessage() );
+		}
 	}
 
 	/**

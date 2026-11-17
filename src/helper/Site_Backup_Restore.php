@@ -114,6 +114,9 @@ DEALLOCATE PREPARE ee_stmt;
 
 	private $restore_in_progress = false;
 
+	// Tables of the current DB that the backup's dump doesn't recreate; the import keeps them.
+	private $restore_extra_tables = [];
+
 	// WordPress root the running backup excludes core from ('' = core is archived).
 	private $backup_wp_root = null;
 
@@ -429,6 +432,7 @@ DEALLOCATE PREPARE ee_stmt;
 		} else {
 			$this->restore_site( $backup_dir );
 		}
+		$this->warn_about_extra_tables();
 
 		// Once per restore (BKP-13), after the commit like the restart below: it recreates the containers.
 		if ( $this->restore_custom_compose ) {
@@ -518,11 +522,14 @@ DEALLOCATE PREPARE ee_stmt;
 			$table_prefix  = $this->run_wp_cli_command( 'config get table_prefix', true );
 
 			$query      = 'SELECT COUNT(*) FROM ' . $table_prefix . 'posts WHERE post_type = "attachment"';
-			$query_file = EE_ROOT_DIR . '/sites/' . $this->site_data['site_url'] . '/app/htdocs/query.sql';
-			$this->fs->dumpFile( $query_file, $query );
-			$upload_count = $this->run_wp_cli_command( 'db query < /var/www/htdocs/query.sql --skip-column-names | tr -d \'[:space:]\'', true );
+			// In the root-checked scratch dir, never in the webroot (see get_db_size()).
+			$query_file   = $this->write_scratch_file( 'query.sql', $query );
+			$upload_count = $this->run_wp_cli_command( 'db query < /var/www/' . self::RESTORE_STAGE_DIR . '/query.sql --skip-column-names | tr -d \'[:space:]\'', true );
 			$upload_count = empty( $upload_count ) ? 0 : $upload_count;
-			$this->fs->remove( $query_file );
+			if ( $this->path_exists( $query_file ) ) {
+				unlink( $query_file );
+			}
+			$this->remove_empty_scratch_dir();
 
 			$plugin_count = $this->run_wp_cli_command( 'plugin list --format=count' );
 			// if it is not a number, then make it -
@@ -1076,6 +1083,10 @@ DEALLOCATE PREPARE ee_stmt;
 		$db_user     = $this->site_data['db_user'];
 		$db_password = $this->site_data['db_password'];
 		$db_host     = $this->site_data['db_host'];
+		// Same form as site creation's `wp config create --dbhost` (host:port).
+		if ( ! empty( $this->site_data['db_port'] ) && false === strpos( (string) $db_host, ':' ) ) {
+			$db_host .= ':' . $this->site_data['db_port'];
+		}
 
 		// The restored wp-config.php still has the backed-up site's credentials. Each value is read from a file in the
 		// container (`\$(cat …)` runs there), so none of them passes the host shells of `ee shell --command` (BKP-15).
@@ -1731,11 +1742,11 @@ DEALLOCATE PREPARE ee_stmt;
 		$dump = $sql_dir . '/' . $this->site_data['site_url'] . '.sql';
 		clearstatcache();
 		if ( ! $this->path_exists( $dump ) ) {
-			EE::error( sprintf( 'The backup has no database dump (sql/%s). The site was not changed.', basename( $dump ) ) );
+			EE::error( sprintf( 'The backup has no database dump (sql/%s).', basename( $dump ) ) );
 		}
 		// An empty dump imports as a no-op, which would restore the files over the current DB (older releases backed up a failed mysqldump).
 		if ( is_link( $dump ) || ! is_file( $dump ) || 0 === filesize( $dump ) ) {
-			EE::error( sprintf( 'The database dump in the backup (sql/%s) is empty or not a regular file. The site was not changed.', basename( $dump ) ) );
+			EE::error( sprintf( 'The database dump in the backup (sql/%s) is empty or not a regular file.', basename( $dump ) ) );
 		}
 
 		$this->rename_or_fail( $dump, $this->restore_txn['stage'] . '/db.sql' );
@@ -1783,7 +1794,7 @@ DEALLOCATE PREPARE ee_stmt;
 
 		// Never the wp-content/uploads symlink entry some 7-Zip builds stored: restoring it made an uploads/uploads loop (BKP-10).
 		if ( ! $this->extract_to_stage( $backup_app, $new_root, [ 'wp-content/*' ], [ 'wp-content/uploads' ] ) ) {
-			EE::error( 'The backup archive has no wp-content directory. The site was not changed.' );
+			EE::error( 'The backup archive has no wp-content directory.' );
 		}
 
 		// wp-config.php was taken from one level above the WordPress root.
@@ -1850,18 +1861,18 @@ DEALLOCATE PREPARE ee_stmt;
 		}
 		$real_existing = realpath( $existing );
 		if ( false === $real_existing || ( $real_existing !== $real_new && 0 !== strpos( $real_existing, $real_new . '/' ) ) ) {
-			EE::error( 'The WordPress root of the backup is outside the site. The site was not changed.' );
+			EE::error( 'The WordPress root of the backup is outside the site.' );
 		}
 
 		$this->fs->mkdir( $new_root );
 		$real_root = realpath( $new_root );
 		if ( false === $real_root || ( $real_root !== $real_new && 0 !== strpos( $real_root, $real_new . '/' ) ) ) {
-			EE::error( 'The WordPress root of the backup is outside the site. The site was not changed.' );
+			EE::error( 'The WordPress root of the backup is outside the site.' );
 		}
 		// Only the download dir goes to the site user; a fallback stage inside the scratch dir stays root's.
 		$core_dir = $this->prepare_scratch_dir() . '/core';
 		if ( ! mkdir( $core_dir, 0755 ) || ! $this->chown_to_site_user( $core_dir ) ) {
-			EE::error( 'Failed to prepare the WordPress core download. The site was not changed.' );
+			EE::error( 'Failed to prepare the WordPress core download.' );
 		}
 
 		// Same download, extraction and checksum gate as site creation, but into the private core dir.
@@ -1872,7 +1883,7 @@ DEALLOCATE PREPARE ee_stmt;
 				'force'   => true,
 			]
 		);
-		$result = $this->run_checked_shell_command( $core_download_command, 'Failed to download WordPress core for restore. The site was not changed.' );
+		$result = $this->run_checked_shell_command( $core_download_command, 'Failed to download WordPress core for restore.' );
 		// The output is captured, so pass on the checksum gate's warning (checksums unavailable from WordPress.org).
 		if ( preg_match_all( '/^Warning: Could not verify WordPress core checksums.*$/m', $result->stdout . "\n" . $result->stderr, $warnings ) ) {
 			foreach ( array_unique( $warnings[0] ) as $warning ) {
@@ -1885,12 +1896,12 @@ DEALLOCATE PREPARE ee_stmt;
 		$downloaded = $this->restore_txn['stage'] . '/core';
 		$this->rename_or_fail( $core_dir, $downloaded );
 		if ( is_link( $downloaded ) || ! is_dir( $downloaded ) ) {
-			EE::error( 'The WordPress core download is not a directory. The site was not changed.' );
+			EE::error( 'The WordPress core download is not a directory.' );
 		}
 
 		$core_entries = array_diff( $this->list_dir( $downloaded ), [ 'wp-content' ] );
 		if ( ! in_array( 'wp-includes', $core_entries, true ) ) {
-			EE::error( 'The WordPress core download is incomplete. The site was not changed.' );
+			EE::error( 'The WordPress core download is incomplete.' );
 		}
 
 		foreach ( $core_entries as $entry ) {
@@ -1918,11 +1929,12 @@ DEALLOCATE PREPARE ee_stmt;
 		$stage = $this->restore_txn['stage'];
 
 		if ( ! $this->chown_to_site_user( $this->restore_txn['new'], true ) || ( $this->fs->exists( $stage . '/uploads' ) && ! $this->chown_to_site_user( $stage . '/uploads', true ) ) ) {
-			EE::error( 'Failed to set the owner of the restored files. The site was not changed.' );
+			EE::error( 'Failed to set the owner of the restored files.' );
 		}
 
 		if ( ! empty( $this->restore_txn['has_db'] ) ) {
 			$this->snapshot_current_db();
+			$this->restore_extra_tables = array_values( array_diff( $this->get_dump_tables( $stage . '/db-before.sql' ), $this->get_dump_tables( $stage . '/db.sql' ) ) );
 
 			$this->move_db_dump( $stage . '/db.sql', $this->assert_scratch_dir() . '/db.sql' );
 			$this->restore_txn['db'] = 'importing';
@@ -1979,7 +1991,7 @@ DEALLOCATE PREPARE ee_stmt;
 
 		clearstatcache();
 		if ( $result->return_code || ! is_file( $scratch . '/db-before.sql' ) || 0 === filesize( $scratch . '/db-before.sql' ) ) {
-			EE::error( 'Could not save the current database before the restore. The site was not changed. ' . trim( $result->stderr ) );
+			EE::error( 'Could not save the current database before the restore. ' . trim( $result->stderr ) );
 		}
 
 		// Out of the container's reach; a rollback reads it through a hard link, so it never leaves the stage.
@@ -1987,12 +1999,52 @@ DEALLOCATE PREPARE ee_stmt;
 		$this->move_db_dump( $scratch . '/db-before.sql', $saved );
 		// The site user could have left a symlink of that name; chown() and chmod() would follow it.
 		if ( is_link( $saved ) || ! is_file( $saved ) ) {
-			EE::error( 'The saved copy of the current database is not a regular file. The site was not changed.' );
+			EE::error( 'The saved copy of the current database is not a regular file.' );
 		}
 		chown( $saved, 0 );
 		chmod( $saved, 0600 );
 		$this->restore_txn['db'] = 'saved';
 		$this->write_restore_journal();
+	}
+
+	/**
+	 * Tables and views a mysqldump file creates: it writes `DROP TABLE IF EXISTS` and `CREATE TABLE` lines for each
+	 * (a view gets a stand-in table). Read in chunks, as a dump line can be megabytes long.
+	 *
+	 * @param string $file Dump on the host.
+	 *
+	 * @return string[]
+	 */
+	private function get_dump_tables( $file ) {
+		$tables = [];
+		$handle = is_file( $file ) ? fopen( $file, 'rb' ) : false;
+		if ( false === $handle ) {
+			return $tables;
+		}
+		$line_start = true;
+		while ( false !== ( $chunk = fgets( $handle, 65536 ) ) ) {
+			if ( $line_start && preg_match( '/^(?:DROP TABLE IF EXISTS|CREATE TABLE(?: IF NOT EXISTS)?) `((?:[^`]|``)+)`/', $chunk, $matches ) ) {
+				$tables[] = str_replace( '``', '`', $matches[1] );
+			}
+			$line_start = "\n" === substr( $chunk, -1 );
+		}
+		fclose( $handle );
+
+		return array_values( array_unique( $tables ) );
+	}
+
+	/**
+	 * The import drops and recreates only the dump's own tables. Tables created after the backup stay: the DB can also
+	 * hold tables the site doesn't own (another site sharing it, another table prefix), so they are named, not dropped.
+	 */
+	private function warn_about_extra_tables() {
+		$tables = $this->restore_extra_tables;
+		if ( empty( $tables ) ) {
+			return;
+		}
+		$shown = array_slice( $tables, 0, 20 );
+		$more  = count( $tables ) > count( $shown ) ? sprintf( ' and %d more', count( $tables ) - count( $shown ) ) : '';
+		EE::warning( sprintf( 'The database has tables that are not in the backup; they were kept as they are: %s%s. Drop them if the restored site does not use them.', implode( ', ', $shown ), $more ) );
 	}
 
 	private function move_db_dump( $from, $to ) {
@@ -2182,6 +2234,7 @@ DEALLOCATE PREPARE ee_stmt;
 			$this->remove_scratch_dir();
 			$this->fs->remove( [ $this->get_restore_journal_file(), $this->restore_txn['stage'] ] );
 			$this->restore_txn = null;
+			// The only place this is said once the transaction has begun: errors raised inside it leave it out.
 			EE::log( 'The site was not changed.' );
 
 			return;
@@ -2651,18 +2704,20 @@ DEALLOCATE PREPARE ee_stmt;
 		";
 
 
-		$query_file = EE_ROOT_DIR . '/sites/' . $this->site_data['site_url'] . '/app/htdocs/db_size_query.sql';
-		$this->fs->dumpFile( $query_file, $query );
+		// In the root-checked scratch dir, never in the webroot, which the site can serve or replace with a symlink.
+		$query_file = $this->write_scratch_file( 'db_size_query.sql', $query );
 
 
 		// No credential in the command: it passes two shells on the host (BKP-15).
 		$defaults_file = $this->write_mysql_defaults_file();
-		$command       = sprintf( 'mysql --defaults-extra-file=%s --skip-ssl < /var/www/htdocs/db_size_query.sql', $defaults_file );
+		$command       = sprintf( 'mysql --defaults-extra-file=%s --skip-ssl < /var/www/%s/db_size_query.sql', $defaults_file, self::RESTORE_STAGE_DIR );
 
 		$output = EE::launch( $this->get_ee_shell_command( $command ) );
 
 
-		$this->fs->remove( $query_file );
+		if ( $this->path_exists( $query_file ) ) {
+			unlink( $query_file );
+		}
 		$this->remove_mysql_defaults_files();
 
 
@@ -4020,7 +4075,7 @@ chmod -- "$m" "$n" || exit 5';
 
 		EE::debug( 'Payload being sent: ' . json_encode( array_merge( $payload, [ 'verify' => '******' ] ) ) );
 
-		$success = $this->send_dash_request( $endpoint, $payload );
+		$success = $this->send_dash_request( $endpoint, $payload, 'EasyEngine Dashboard callback sent successfully.' );
 
 		// A success that actually reached the EasyEngine Dashboard is the terminal callback; a failed
 		// attempt is not, so the failure path can still emit the failure callback.
@@ -4060,7 +4115,8 @@ chmod -- "$m" "$n" || exit 5';
 		// Failure is terminal: mark before sending so a concurrent shutdown pass
 		// can never emit a second (duplicate) terminal callback.
 		$this->dash_callback_sent = true;
-		$this->send_dash_request( $endpoint, $payload );
+		// Not "sent successfully": printed right after a failed success callback, that read as if the backup was registered.
+		$this->send_dash_request( $endpoint, $payload, 'EasyEngine Dashboard failure callback sent.' );
 	}
 
 	/**
@@ -4068,10 +4124,11 @@ chmod -- "$m" "$n" || exit 5';
 	 *
 	 * @param string $endpoint The API endpoint URL.
 	 * @param array $payload   The request payload.
+	 * @param string $sent_message Logged once the request went through.
 	 *
 	 * @return bool True if request succeeded, false otherwise.
 	 */
-	private function send_dash_request( $endpoint, $payload ) {
+	private function send_dash_request( $endpoint, $payload, $sent_message ) {
 		$max_retries  = 3;
 		$retry_delay  = 300; // 5 minutes in seconds
 		$max_attempts = $max_retries + 1; // 1 initial attempt + 3 retries = 4 total
@@ -4099,7 +4156,7 @@ chmod -- "$m" "$n" || exit 5';
 
 			// Check if request was successful
 			if ( ! $error && $http_code >= 200 && $http_code < 300 ) {
-				EE::log( 'EasyEngine Dashboard callback sent successfully.' );
+				EE::log( $sent_message );
 				EE::debug( 'EasyEngine Dashboard response: ' . $response_text );
 
 				return true; // Success
@@ -4201,7 +4258,8 @@ chmod -- "$m" "$n" || exit 5';
 		$lock_file = EE_BACKUP_DIR . '/backup-global.lock';
 		$max_wait  = 86400; // 24 hours max wait
 		$waited    = 0;
-		$interval  = 60;    // Check every 60 seconds
+		$interval  = 5;     // A queued backup starts within seconds of the lock's release.
+		$log_every = 60;
 
 		// Ensure backup directory exists
 		if ( ! $this->fs->exists( EE_BACKUP_DIR ) ) {
@@ -4233,12 +4291,14 @@ chmod -- "$m" "$n" || exit 5';
 				EE::error( 'Timeout waiting for another backup. Try again later.' );
 			}
 
-			// Read who has the lock
-			rewind( $this->global_backup_lock_handle );
-			$lock_info = stream_get_contents( $this->global_backup_lock_handle );
+			if ( 0 === $waited % $log_every ) {
+				// Read who has the lock
+				rewind( $this->global_backup_lock_handle );
+				$lock_info = stream_get_contents( $this->global_backup_lock_handle );
 
-			EE::log( sprintf( 'Another backup in progress (%s). Waiting... (%d/%d sec)',
-				trim( $lock_info ) ?: 'unknown', $waited, $max_wait ) );
+				EE::log( sprintf( 'Another backup in progress (%s). Waiting... (%d/%d sec)',
+					trim( $lock_info ) ?: 'unknown', $waited, $max_wait ) );
+			}
 
 			sleep( $interval );
 			$waited += $interval;
