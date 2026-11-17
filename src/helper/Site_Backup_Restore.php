@@ -439,18 +439,33 @@ DEALLOCATE PREPARE ee_stmt;
 		$this->clear_download_dir();
 		$this->restore_in_progress = false;
 
+		$this->finish_restore();
+	}
+
+	/**
+	 * Restart or reload the restored site. The restore is committed, so a failure here must say so rather than exit from inside the restart.
+	 */
+	private function finish_restore() {
+		$action = 'reload';
 		if ( $this->restore_replaced_app ) {
 			// Mounts inside the containers below /var/www/htdocs (admin-tools' ee-admin, custom compose volumes) stay on the old
 			// directory until the containers start again.
 			EE::log( 'Restarting the site containers.' );
-			EE::run_command( [ 'site', 'restart', $this->site_data['site_url'] ], [], [] );
+			$action = 'restart';
 		} else {
 			EE::log( 'Reloading site.' );
-			EE::run_command( [ 'site', 'reload', $this->site_data['site_url'] ], [], [] );
 		}
+		$started = \EE\Site\Utils\run_without_exit(
+			function () use ( $action ) {
+				EE::run_command( [ 'site', $action, $this->site_data['site_url'] ], [], [] );
+			}
+		);
 
 		$this->release_site_lock();
 
+		if ( ! $started ) {
+			EE::error( sprintf( 'The site was restored, but it did not start again. Fix the error above, then run: ee site restart %s', $this->site_data['site_url'] ) );
+		}
 		EE::success( 'Site restored successfully.' );
 	}
 
@@ -1941,6 +1956,7 @@ DEALLOCATE PREPARE ee_stmt;
 		$this->restore_nginx_conf( $backup_dir );
 		if ( in_array( $this->site_data['site_type'], [ 'php', 'wp' ], true ) ) {
 			$this->restore_php_conf( $backup_dir );
+			$this->check_restored_php_conf();
 		}
 		$this->check_restored_nginx_conf();
 		$this->restore_custom_docker_compose( $backup_dir );
@@ -1962,6 +1978,21 @@ DEALLOCATE PREPARE ee_stmt;
 		$test = EE::launch( 'docker-compose -f docker-compose.yml exec -T nginx nginx -t', false, true, [], null, $this->site_data['site_fs_path'] );
 		if ( $test->return_code ) {
 			EE::error( 'The nginx configuration in the backup fails `nginx -t`: ' . trim( $test->stderr ) );
+		}
+	}
+
+	/**
+	 * Like the nginx check: php-fpm would not start after the commit. A php.ini syntax error doesn't fail `php-fpm -t`, but
+	 * php then runs without the rest of that file.
+	 */
+	private function check_restored_php_conf() {
+		$test   = EE::launch( 'docker-compose -f docker-compose.yml exec -T php php-fpm -t', false, true, [], null, $this->site_data['site_fs_path'] );
+		$output = trim( $test->stdout . "\n" . $test->stderr );
+		if ( $test->return_code ) {
+			EE::error( 'The restored php configuration fails `php-fpm -t` in the php container: ' . $output );
+		}
+		if ( preg_match_all( '/^PHP:\s+syntax error.*$/m', $output, $matches ) ) {
+			EE::error( 'The restored php configuration has a syntax error: ' . implode( ' ', $matches[0] ) );
 		}
 	}
 

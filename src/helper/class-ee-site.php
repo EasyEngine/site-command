@@ -1020,7 +1020,14 @@ abstract class EE_Site_Command {
 			}
 			EE::error( $e->getMessage() );
 		}
-		$this->restart( $args, [ 'php' => true ] );
+		$restarted = \EE\Site\Utils\run_without_exit(
+			function () use ( $args ) {
+				$this->restart( $args, [ 'php' => true ] );
+			}
+		);
+		if ( ! $restarted ) {
+			EE::error( sprintf( 'Updated site %1$s to PHP version %2$s, but its php container did not restart. Fix the error above, then run: ee site restart %1$s --php', $this->site_data['site_url'], $php_version ) );
+		}
 		EE::success( 'Updated site ' . $this->site_data['site_url'] . ' to PHP version: ' . $php_version );
 		delem_log( 'site php version update end' );
 	}
@@ -1560,19 +1567,22 @@ abstract class EE_Site_Command {
 			$containers = array_keys( $assoc_args );
 		}
 
+		$failed = [];
 		foreach ( $containers as $container ) {
 			if ( 'nginx' === $container ) {
-				if ( EE::exec( \EE_DOCKER::docker_compose_with_custom() . " exec $container nginx -t", true, true ) ) {
-					\EE\Site\Utils\run_compose_command( 'restart', $container );
-				} else {
+				if ( ! EE::exec( \EE_DOCKER::docker_compose_with_custom() . " exec $container nginx -t", true, true ) ) {
 					\EE\Utils\delem_log( 'site restart stop due to Nginx test failure' );
 					\EE::error( 'Nginx test failed' );
 				}
-			} else {
-				\EE\Site\Utils\run_compose_command( 'restart', $container );
+			}
+			if ( ! \EE\Site\Utils\run_compose_command( 'restart', $container ) ) {
+				$failed[] = $container;
 			}
 		}
 		\EE\Utils\delem_log( 'site restart stop' );
+		if ( $failed ) {
+			\EE::error( sprintf( 'Could not restart %s of %s. See the docker-compose output above.', implode( ', ', $failed ), $this->site_data['site_url'] ) );
+		}
 	}
 
 	/**
@@ -1717,11 +1727,14 @@ abstract class EE_Site_Command {
 		chdir( $this->site_data['site_fs_path'] );
 
 		if ( $all || $no_service_specified ) {
-			$this->reload_services( $whitelisted_containers, $reload_commands );
+			$failed = $this->reload_services( $whitelisted_containers, $reload_commands );
 		} else {
-			$this->reload_services( array_keys( $assoc_args ), $reload_commands );
+			$failed = $this->reload_services( array_keys( $assoc_args ), $reload_commands );
 		}
 		\EE\Utils\delem_log( 'site reload stop' );
+		if ( $failed ) {
+			\EE::error( sprintf( 'Could not reload %s of %s. See the docker-compose output above.', implode( ', ', $failed ), $this->site_data['site_url'] ) );
+		}
 	}
 
 	/**
@@ -1729,12 +1742,19 @@ abstract class EE_Site_Command {
 	 *
 	 * @param array $services        Services to reload.
 	 * @param array $reload_commands Commands to reload the services.
+	 *
+	 * @return string[] The services whose reload command failed.
 	 */
 	private function reload_services( $services, $reload_commands ) {
 
+		$failed = [];
 		foreach ( $services as $service ) {
-			\EE\Site\Utils\run_compose_command( 'exec', $reload_commands[ $service ], 'reload', $service );
+			if ( ! \EE\Site\Utils\run_compose_command( 'exec', $reload_commands[ $service ], 'reload', $service ) ) {
+				$failed[] = $service;
+			}
 		}
+
+		return $failed;
 	}
 
 	/**
