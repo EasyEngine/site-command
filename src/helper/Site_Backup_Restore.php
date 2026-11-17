@@ -431,21 +431,40 @@ DEALLOCATE PREPARE ee_stmt;
 		}
 
 		// Once per restore (BKP-13), after the commit like the restart below: it recreates the containers.
-		if ( $this->restore_custom_compose ) {
-			EE::log( 'Custom docker-compose file(s) updated.' );
-			EE::run_command( [ 'site', 'enable', $this->site_data['site_url'] ], [ 'force' => true ] );
-		}
+		$enabled = ! $this->restore_custom_compose || $this->enable_restored_custom_compose();
 
 		$this->clear_download_dir();
 		$this->restore_in_progress = false;
 
-		$this->finish_restore();
+		$this->finish_restore( $enabled );
+	}
+
+	/**
+	 * Recreate the containers for the restored custom compose files, without exiting: the restore is already committed.
+	 *
+	 * @return bool Whether `ee site enable --force` succeeded.
+	 */
+	private function enable_restored_custom_compose() {
+		EE::log( 'Custom docker-compose file(s) updated.' );
+
+		return \EE\Site\Utils\run_without_exit(
+			function () {
+				EE::run_command( [ 'site', 'enable', $this->site_data['site_url'] ], [ 'force' => true ] );
+			}
+		);
 	}
 
 	/**
 	 * Restart or reload the restored site. The restore is committed, so a failure here must say so rather than exit from inside the restart.
+	 *
+	 * @param bool $enabled False when recreating the containers for restored custom compose files failed: no restart then.
 	 */
-	private function finish_restore() {
+	private function finish_restore( $enabled = true ) {
+		if ( ! $enabled ) {
+			$this->release_site_lock();
+			EE::error( sprintf( 'The site was restored, but it did not start again. Fix the error above, then run: ee site enable %s --force', $this->site_data['site_url'] ) );
+		}
+
 		$action = 'reload';
 		if ( $this->restore_replaced_app ) {
 			// Mounts inside the containers below /var/www/htdocs (admin-tools' ee-admin, custom compose volumes) stay on the old
