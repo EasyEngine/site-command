@@ -3224,6 +3224,8 @@ abstract class EE_Site_Command {
 	 *
 	 * Backups are stored in <rclone-path>/<site>/<host-id>/<backup-id>, so hosts sharing a remote keep their backups apart. The host id is generated on the first backup or restore and kept in the EE database, so a reinstall starts a new one and a copied database shares it. Set `backup-host-id` in config.yml only to take over the backups of a server this one replaces; two running hosts with the same id share (and prune) each other's backups.
 	 *
+	 * A WordPress site deployed by CI/CD (Capistrano, Deployer: the WordPress root reached through a `current` symlink to `releases/<n>`) is backed up with its live release only; the other directories in `releases/` are left out, and a restore keeps the ones on the server. Set `backup-all-releases: true` in config.yml to back up every release. `backup-exclude` in config.yml lists more paths to leave out, relative to the site's app/ directory (e.g. htdocs/current/wp-content/debug.log); in a path, `*` and `?` match within a name and a `**` segment any number of directories. Paths a restore needs (htdocs, the public dir, the WordPress root, wp-content, wp-config.php, wp-cli.yml, `current` and the live release, and the directories above them) are never left out.
+	 *
 	 * ## OPTIONS
 	 *
 	 * [<site-name>]

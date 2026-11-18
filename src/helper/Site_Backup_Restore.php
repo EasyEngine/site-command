@@ -82,6 +82,9 @@ DEALLOCATE PREPARE ee_stmt;
 	// /tmp, the copy into the stage and WP-CLI's cache (WordPress 7.1: 35 MB package, 117 MB extracted).
 	const WP_CORE_SIZE_ESTIMATE = 335544320;
 
+	// Paths one backup-exclude entry may leave out; a pattern matching more is ignored.
+	const BACKUP_EXCLUDE_MAX_MATCHES = 1000;
+
 	private $fs;
 	public $site_data;
 	private $rclone_config_path;
@@ -116,6 +119,9 @@ DEALLOCATE PREPARE ee_stmt;
 
 	// WordPress root the running backup excludes core from ('' = core is archived).
 	private $backup_wp_root = null;
+
+	// CI/CD release layout of the running backup whose other releases are left out (get_release_layout()), or null.
+	private $backup_release_layout = null;
 
 	// stderr of the last failed `rclone lsf`.
 	private $rclone_error = '';
@@ -627,6 +633,16 @@ DEALLOCATE PREPARE ee_stmt;
 				$this->backup_wp_root = '';
 			}
 			$backup_data['wp_root'] = $this->backup_wp_root;
+
+			$this->backup_release_layout = $this->get_release_layout();
+			if ( null !== $this->backup_release_layout && $this->backup_all_releases() ) {
+				EE::log( sprintf( 'backup-all-releases is set in config.yml, so every release in %s/ is backed up.', $this->backup_release_layout['releases_dir'] ) );
+				$this->backup_release_layout = null;
+			}
+			// Restore then keeps the server's other releases (not in the backup) instead of replacing all of app/.
+			if ( null !== $this->backup_release_layout ) {
+				$backup_data['release_layout'] = $this->backup_release_layout;
+			}
 		}
 
 		$backup_data = array_merge( $this->site_data, $backup_data );
@@ -684,6 +700,7 @@ DEALLOCATE PREPARE ee_stmt;
 		$exclude[] = self::RESTORE_STAGE_DIR;
 		// app/ is www-data's home in the php container: its tool caches (WP-CLI keeps every downloaded package) are no site data.
 		$exclude = array_merge( $exclude, [ '.wp-cli/cache', '.composer/cache', '.cache' ] );
+		$exclude = array_merge( $exclude, $this->get_configured_excludes( $exclude ) );
 		if ( ! empty( $this->site_data['db_name'] ) ) {
 			// Added before the files: a site file at this path must not replace the fresh dump.
 			$exclude[] = 'sql/' . $this->site_data['site_url'] . '.sql';
@@ -781,6 +798,312 @@ DEALLOCATE PREPARE ee_stmt;
 		return EE_ROOT_DIR . '/sites/' . $this->site_data['site_url'] . '/app';
 	}
 
+	/**
+	 * CI/CD (Capistrano, Deployer) layout: the WordPress root is reached through a `current` symlink to a direct child of
+	 * the `releases` dir next to it, e.g. htdocs/current -> releases/175.
+	 *
+	 * @return array|null Paths relative to app/: current, releases_dir; and the live_release name.
+	 */
+	private function get_release_layout() {
+		$root     = $this->get_wp_root_rel( false );
+		$app_dir  = $this->get_site_app_dir();
+		$app_real = realpath( $app_dir );
+		if ( null === $root || false === $app_real ) {
+			return null;
+		}
+
+		$path = '';
+		foreach ( explode( '/', $root ) as $part ) {
+			$path = ltrim( $path . '/' . $part, '/' );
+			if ( 'current' !== $part || ! is_link( $app_dir . '/' . $path ) ) {
+				continue;
+			}
+			$parent   = realpath( dirname( $app_dir . '/' . $path ) );
+			$target   = realpath( $app_dir . '/' . $path );
+			$releases = $parent . '/releases';
+			if ( false === $parent || false === $target || ( $parent !== $app_real && 0 !== strpos( $parent, $app_real . '/' ) )
+				|| is_link( $releases ) || ! is_dir( $releases ) || dirname( $target ) !== $releases ) {
+				return null;
+			}
+			$prefix = $parent === $app_real ? '' : substr( $parent, strlen( $app_real ) + 1 ) . '/';
+
+			return [
+				'current'      => $prefix . 'current',
+				'releases_dir' => $prefix . 'releases',
+				'live_release' => basename( $target ),
+			];
+		}
+
+		return null;
+	}
+
+	/**
+	 * `backup-all-releases: true` in config.yml keeps every release of a CI/CD layout in the backup.
+	 *
+	 * @return bool
+	 */
+	private function backup_all_releases() {
+		$value = get_config_value( 'backup-all-releases', false );
+
+		return true === $value || ( is_scalar( $value ) && in_array( strtolower( trim( (string) $value ) ), [ '1', 'true', 'yes', 'on' ], true ) );
+	}
+
+	/**
+	 * Release dirs other than the live one, as paths relative to app/ to leave out of the backup.
+	 *
+	 * @return string[]
+	 */
+	private function get_release_excludes() {
+		$layout = $this->backup_release_layout;
+		if ( null === $layout ) {
+			return [];
+		}
+
+		$dir  = $this->get_site_app_dir() . '/' . $layout['releases_dir'];
+		$keep = [ $layout['live_release'] ];
+		// A deploy since the metadata was written: the release `current` now points to stays too, so the archive is consistent.
+		$now = realpath( $this->get_site_app_dir() . '/' . $layout['current'] );
+		if ( false !== $now && dirname( $now ) === realpath( $dir ) && basename( $now ) !== $layout['live_release'] ) {
+			EE::warning( sprintf( '%s changed to %s during the backup; both releases are backed up.', $layout['current'], basename( $now ) ) );
+			$keep[] = basename( $now );
+		}
+
+		$skipped = [];
+		foreach ( $this->list_dir( $dir ) as $name ) {
+			// Links and files in releases/ (e.g. wp-config.php -> ../wp-config.php) are kept; 7z reads * and ? as wildcards.
+			if ( in_array( $name, $keep, true ) || is_link( $dir . '/' . $name ) || ! is_dir( $dir . '/' . $name ) || false !== strpbrk( $name, '*?' ) ) {
+				continue;
+			}
+			$skipped[] = $name;
+		}
+		natsort( $skipped );
+
+		if ( empty( $skipped ) ) {
+			EE::log( sprintf( 'CI/CD deploy layout: backing up the live release %s/%s (there are no other releases).', $layout['releases_dir'], $layout['live_release'] ) );
+		} else {
+			EE::log( sprintf( 'CI/CD deploy layout: backing up only the live release %s/%s; skipped %d other release(s): %s. Set backup-all-releases: true in config.yml to back up every release.', $layout['releases_dir'], $layout['live_release'], count( $skipped ), implode( ', ', $skipped ) ) );
+		}
+
+		return array_map(
+			function ( $name ) use ( $layout ) {
+				return $layout['releases_dir'] . '/' . $name;
+			},
+			array_values( $skipped )
+		);
+	}
+
+	/**
+	 * `backup-exclude` in config.yml: paths relative to app/ left out of every backup. A segment may hold `*` (any run of
+	 * characters in a name) and `?` (one character), and `**` as a whole segment stands for any number of directories.
+	 * Patterns are matched here against the site's files, and 7z gets each match as a literal path at the place the
+	 * archive holds it, so htdocs/current/wp-content/debug.log leaves out the live release's debug.log.
+	 *
+	 * @param string[] $skip Paths already left out (not searched again).
+	 *
+	 * @return string[] Paths relative to app/.
+	 */
+	private function get_configured_excludes( array $skip = [] ) {
+		$entries = get_config_value( 'backup-exclude', [] );
+		if ( is_string( $entries ) ) {
+			$entries = [ $entries ];
+		}
+		if ( ! is_array( $entries ) ) {
+			EE::warning( 'backup-exclude in config.yml is not a list of paths, so it is ignored.' );
+
+			return [];
+		}
+
+		$app_real = realpath( $this->get_site_app_dir() );
+		if ( false === $app_real ) {
+			return [];
+		}
+		$protected = null;
+		$excludes  = [];
+		foreach ( $entries as $entry ) {
+			$path     = is_scalar( $entry ) ? trim( (string) $entry ) : '';
+			$segments = array_values( array_diff( explode( '/', $path ), [ '', '.' ] ) );
+			if ( empty( $segments ) || '/' === $path[0] || in_array( '..', $segments, true ) || '**' === end( $segments ) || preg_match( '/[\x00-\x1f]/', $path ) ) {
+				EE::warning( sprintf( 'Ignoring backup-exclude entry "%s" in config.yml: give a path relative to the site\'s app/ directory, without ".." and not ending in "**", e.g. htdocs/current/wp-content/debug.log.', is_scalar( $entry ) ? $entry : gettype( $entry ) ) );
+				continue;
+			}
+
+			$matches = $this->match_exclude_pattern( $segments, $skip );
+			if ( null === $matches ) {
+				EE::warning( sprintf( 'Ignoring backup-exclude entry "%s" in config.yml: it matches more than %d paths.', $path, self::BACKUP_EXCLUDE_MAX_MATCHES ) );
+				continue;
+			}
+			if ( empty( $matches ) ) {
+				EE::debug( sprintf( 'backup-exclude: nothing in this site matches %s.', $path ) );
+				continue;
+			}
+
+			$protected = null === $protected ? $this->get_restore_critical_paths() : $protected;
+			foreach ( $matches as $match ) {
+				$resolved = $this->resolve_in_app( $match, false );
+				if ( null === $resolved ) {
+					EE::warning( sprintf( 'Ignoring %s (backup-exclude entry "%s" in config.yml): it leads outside the site directory.', $match, $path ) );
+					continue;
+				}
+				foreach ( $skip as $skipped ) {
+					if ( $resolved === $skipped || 0 === strpos( $resolved, $skipped . '/' ) ) {
+						continue 2;
+					}
+				}
+				// 7z would read these characters in a file name as wildcards.
+				if ( false !== strpbrk( basename( $resolved ), '*?' ) ) {
+					EE::warning( sprintf( 'Ignoring %s (backup-exclude entry "%s" in config.yml): its name has "*" or "?".', $resolved, $path ) );
+					continue;
+				}
+				foreach ( $protected as $needed ) {
+					if ( $resolved === $needed || 0 === strpos( $needed, $resolved . '/' ) ) {
+						EE::warning( sprintf( 'Ignoring %s (backup-exclude entry "%s" in config.yml): a restore of the site needs %s.', $resolved, $path, $needed ) );
+						continue 2;
+					}
+				}
+				$excludes[] = $resolved;
+			}
+		}
+
+		$excludes = array_values( array_unique( $excludes ) );
+		if ( ! empty( $excludes ) ) {
+			EE::log( 'Left out by backup-exclude: ' . implode( ', ', $excludes ) );
+		}
+
+		return $excludes;
+	}
+
+	/**
+	 * Paths of the site that `backup-exclude` matches, as reached from app/ (symlinked dirs like current/ are followed for
+	 * named segments and `*`, never for `**`).
+	 *
+	 * @param string[] $segments Pattern segments.
+	 * @param string[] $skip     Paths (relative to app/, resolved) not searched by `**`.
+	 *
+	 * @return string[]|null Null when there are too many.
+	 */
+	private function match_exclude_pattern( array $segments, array $skip ) {
+		$app_dir = $this->get_site_app_dir();
+		$paths   = [ '' ];
+		foreach ( $segments as $segment ) {
+			$next = [];
+			foreach ( $paths as $path ) {
+				$full = '' === $path ? $app_dir : $app_dir . '/' . $path;
+				if ( '**' === $segment ) {
+					$next = array_merge( $next, [ $path ], $this->list_dirs_below( $path, $skip ) );
+				} elseif ( false === strpbrk( $segment, '*?' ) ) {
+					if ( $this->path_exists( $full . '/' . $segment ) ) {
+						$next[] = ltrim( $path . '/' . $segment, '/' );
+					}
+				} elseif ( is_dir( $full ) ) {
+					$regex = '/^' . str_replace( [ '\*', '\?' ], [ '.*', '.' ], preg_quote( $segment, '/' ) ) . '$/s';
+					foreach ( $this->list_dir( $full ) as $name ) {
+						if ( preg_match( $regex, $name ) && ( '' !== $path || self::RESTORE_STAGE_DIR !== $name ) ) {
+							$next[] = ltrim( $path . '/' . $name, '/' );
+						}
+					}
+				}
+			}
+			$paths = array_values( array_unique( $next ) );
+			if ( count( $paths ) > self::BACKUP_EXCLUDE_MAX_MATCHES * 10 ) {
+				return null;
+			}
+		}
+
+		return count( $paths ) > self::BACKUP_EXCLUDE_MAX_MATCHES ? null : $paths;
+	}
+
+	/**
+	 * @param string   $path Directory relative to app/.
+	 * @param string[] $skip Resolved paths not to descend into.
+	 *
+	 * @return string[] Real directories below $path (not through symlinks), relative to app/.
+	 */
+	private function list_dirs_below( $path, array $skip ) {
+		$app_dir = $this->get_site_app_dir();
+		$found   = [];
+		$queue   = [ $path ];
+		while ( ! empty( $queue ) ) {
+			$dir = array_shift( $queue );
+			foreach ( $this->list_dir( '' === $dir ? $app_dir : $app_dir . '/' . $dir ) as $name ) {
+				$child = ltrim( $dir . '/' . $name, '/' );
+				if ( ( '' === $dir && self::RESTORE_STAGE_DIR === $name ) || ! $this->is_real_dir( $app_dir . '/' . $child ) || in_array( $this->resolve_in_app( $child, false ), $skip, true ) ) {
+					continue;
+				}
+				$found[] = $child;
+				$queue[] = $child;
+				if ( count( $found ) > self::BACKUP_EXCLUDE_MAX_MATCHES * 10 ) {
+					return $found;
+				}
+			}
+		}
+
+		return $found;
+	}
+
+	/**
+	 * Where app/<path> is in the archive: its parent dirs resolved, the last name kept (7z stores a symlink as a link).
+	 *
+	 * @param string $path Relative to app/.
+	 * @param bool   $full Resolve the last name too.
+	 *
+	 * @return string|null Relative to app/; null when it doesn't exist or leads outside app/.
+	 */
+	private function resolve_in_app( $path, $full ) {
+		$app_real = realpath( $this->get_site_app_dir() );
+		$target   = $this->get_site_app_dir() . '/' . $path;
+		$real     = $full ? realpath( $target ) : realpath( dirname( $target ) );
+		if ( false === $app_real || false === $real || ( ! $full && ! $this->path_exists( $target ) ) ) {
+			return null;
+		}
+		if ( ! $full ) {
+			$real .= '/' . basename( $target );
+		}
+		if ( 0 !== strpos( $real, $app_real . '/' ) ) {
+			return null;
+		}
+
+		return substr( $real, strlen( $app_real ) + 1 );
+	}
+
+	/**
+	 * What a restore of the site needs: htdocs/, the public dir, and for WordPress the WordPress root, wp-content, the
+	 * wp-config.php WordPress and WP-CLI read, wp-cli.yml and the `current` link and live release of a CI/CD layout.
+	 * Each as written and as resolved; `backup-exclude` may not name one of them or a directory above one.
+	 *
+	 * @return string[] Paths relative to app/.
+	 */
+	private function get_restore_critical_paths() {
+		$public = trim( str_replace( '/var/www/', '', $this->site_data['site_container_fs_path'] ), '/' );
+		$paths  = [ 'htdocs', $public, 'htdocs/wp-cli.yml', $public . '/wp-cli.yml' ];
+
+		if ( 'wp' === $this->site_data['site_type'] ) {
+			foreach ( array_unique( array_filter( [ $this->get_wp_root_rel( false ), $this->get_wp_root_rel() ], 'is_string' ) ) as $root ) {
+				$paths[] = $root;
+				$paths[] = $root . '/wp-content';
+				// WordPress reads ABSPATH/wp-config.php or the one a level up; WP-CLI the same from its path.
+				$paths[] = $root . '/wp-config.php';
+				$paths[] = ( '.' === dirname( $root ) ? '' : dirname( $root ) . '/' ) . 'wp-config.php';
+			}
+			$layout = $this->get_release_layout();
+			if ( null !== $layout ) {
+				$paths[] = $layout['current'];
+				$paths[] = $layout['releases_dir'] . '/' . $layout['live_release'];
+			}
+		}
+
+		$critical = [];
+		foreach ( array_unique( $paths ) as $path ) {
+			foreach ( [ false, true ] as $full ) {
+				$resolved = $this->resolve_in_app( $path, $full );
+				if ( null !== $resolved ) {
+					$critical[] = $resolved;
+				}
+			}
+		}
+
+		return array_values( array_unique( $critical ) );
+	}
+
 	private function backup_wp_content_dir( $backup_dir ) {
 		$wp_root = $this->get_wp_root_rel();
 
@@ -790,8 +1113,10 @@ DEALLOCATE PREPARE ee_stmt;
 
 			return $this->backup_site_dir( $backup_dir ); // Backup all if wp-content not found
 		}
+		// Independent of core: the other releases stay out even when core is archived.
+		$exclude = $this->get_release_excludes();
 		if ( '' === $this->backup_wp_root ) {
-			return $this->backup_site_dir( $backup_dir );
+			return $this->backup_site_dir( $backup_dir, $exclude );
 		}
 
 		$public_dir = $this->get_site_app_dir() . '/' . trim( str_replace( '/var/www/', '', $this->site_data['site_container_fs_path'] ), '/' );
@@ -801,7 +1126,6 @@ DEALLOCATE PREPARE ee_stmt;
 
 		// Everything in app/ except WordPress core, which restore downloads again for meta.json's version (BKP-9).
 		// meta.json itself stays next to the archive, so it can't clash with a site file of that name.
-		$exclude = [];
 		foreach ( self::WP_CORE_ENTRIES as $entry ) {
 			$exclude[] = $wp_root . '/' . $entry;
 		}
@@ -1403,6 +1727,7 @@ DEALLOCATE PREPARE ee_stmt;
 
 		if ( $format >= 2 ) {
 			$wp_root = $this->get_backup_wp_root();
+			$layout  = $this->get_backup_release_layout();
 			// No version is needed (and none may be known) when core is in the archive.
 			$wp_version = '' === $wp_root ? '' : $this->get_backup_wp_version( $backup_dir, $backup_app );
 
@@ -1414,7 +1739,11 @@ DEALLOCATE PREPARE ee_stmt;
 			if ( '' !== $wp_root ) {
 				$this->stage_wp_core( $wp_version, $wp_root, false );
 			}
-			$this->plan_app_swap();
+			if ( null === $layout ) {
+				$this->plan_app_swap();
+			} else {
+				$this->plan_release_swap( $layout );
+			}
 		} else {
 			// Where develop's backup took wp-content from (it also looked in <public dir>/current).
 			$wp_root = $this->get_wp_root_rel( false );
@@ -1501,6 +1830,29 @@ DEALLOCATE PREPARE ee_stmt;
 		}
 
 		return $wp_root;
+	}
+
+	/**
+	 * CI/CD release layout of a backup that holds only the live release (backup_site_details()), or null.
+	 *
+	 * @return array|null releases_dir (relative to app/) and live_release.
+	 */
+	private function get_backup_release_layout() {
+		if ( ! isset( $this->restore_metadata['release_layout'] ) ) {
+			return null;
+		}
+
+		$layout   = $this->restore_metadata['release_layout'];
+		$releases = is_array( $layout ) && isset( $layout['releases_dir'] ) && is_string( $layout['releases_dir'] ) ? trim( $layout['releases_dir'], '/' ) : '';
+		$live     = is_array( $layout ) && isset( $layout['live_release'] ) && is_string( $layout['live_release'] ) ? $layout['live_release'] : '';
+		if ( '' === $releases || '' === $live || false !== strpos( $live, '/' ) || preg_match( '#[\x00-\x1f]|(^|/)\.\.?(/|$)|//#', $releases . '/' . $live ) ) {
+			EE::error( 'Backup metadata has an invalid release_layout. The site was not changed.' );
+		}
+
+		return [
+			'releases_dir' => $releases,
+			'live_release' => $live,
+		];
 	}
 
 	/**
@@ -1762,6 +2114,61 @@ DEALLOCATE PREPARE ee_stmt;
 			}
 		}
 		$this->restore_replaced_app = true;
+	}
+
+	/**
+	 * Like plan_app_swap() for a backup of the live release only: everything is swapped except the server's release dirs
+	 * the backup doesn't have, which stay as they are (also on a rollback).
+	 *
+	 * @param array $layout From get_backup_release_layout().
+	 */
+	private function plan_release_swap( array $layout ) {
+		$kept = $this->plan_swap_dir( $this->get_site_app_dir(), $this->restore_txn['new'], explode( '/', $layout['releases_dir'] ) );
+		natsort( $kept );
+
+		EE::log(
+			sprintf(
+				'CI/CD deploy layout: restoring the release %s/%s%s',
+				$layout['releases_dir'],
+				$layout['live_release'],
+				empty( $kept ) ? '.' : sprintf( '; the other release(s) on this server are kept: %s.', implode( ', ', $kept ) )
+			)
+		);
+		$this->restore_replaced_app = true;
+	}
+
+	/**
+	 * @param string   $live    Live dir.
+	 * @param string   $new     Staged dir.
+	 * @param string[] $descend Path from $live to the releases dir; descended only while both sides are real dirs.
+	 *
+	 * @return string[] Release dirs kept on the server.
+	 */
+	private function plan_swap_dir( $live, $new, array $descend ) {
+		$kept  = [];
+		$names = array_unique( array_merge( $this->list_dir( $live ), $this->list_dir( $new ) ) );
+		sort( $names );
+
+		foreach ( $names as $name ) {
+			$live_path = $live . '/' . $name;
+			$new_path  = $new . '/' . $name;
+			if ( self::RESTORE_STAGE_DIR === $name && $live === $this->get_site_app_dir() ) {
+				continue;
+			}
+			if ( ! empty( $descend ) && $descend[0] === $name && $this->is_real_dir( $live_path ) && $this->is_real_dir( $new_path ) ) {
+				$kept = $this->plan_swap_dir( $live_path, $new_path, array_slice( $descend, 1 ) );
+			} elseif ( empty( $descend ) && $this->is_real_dir( $live_path ) && ! $this->path_exists( $new_path ) ) {
+				$kept[] = $name;
+			} else {
+				$this->add_restore_pair( $live_path, $new_path );
+			}
+		}
+
+		return $kept;
+	}
+
+	private function is_real_dir( $path ) {
+		return ! is_link( $path ) && is_dir( $path );
 	}
 
 	/**
