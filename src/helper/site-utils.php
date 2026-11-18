@@ -2126,8 +2126,7 @@ function strip_session_sid_settings( string $content ) {
 
 	// A quoted value can span lines, so PHP must read the result as the original minus the two directives.
 	if ( $new_content !== $content ) {
-		// PHP-FPM resolves ${...} from the settings read so far, which parse_ini_string() can't see; it trims spaces around the name and takes a :- fallback.
-		if ( preg_match( '/\$\{[ \t]*session\.sid_(length|bits_per_character)[ \t]*(\}|:-)/', $new_content ) ) {
+		if ( references_session_sid_settings( $new_content ) ) {
 			throw new \Exception( 'another setting refers to them as ${...}, which PHP would then read as empty or as its fallback, so the file was left as it is; remove session.sid_length and session.sid_bits_per_character by hand.' );
 		}
 		// Flat too: a repeated section header hides the earlier section from the sectioned parse, but PHP still reads it.
@@ -2145,9 +2144,33 @@ function strip_session_sid_settings( string $content ) {
 				throw new \Exception( 'the file does not parse, or removing them line by line would change other settings (a quoted value spanning lines), so it was left as it is; remove session.sid_length and session.sid_bits_per_character by hand.' );
 			}
 		}
+		// A repeated section header can hide a removed line inside a quoted value from the parses above; such a line has an edge where the file so far doesn't parse.
+		$edges = [];
+		foreach ( array_keys( $drop ) as $i ) {
+			$edges[ $i ]     = true;
+			$edges[ $i + 1 ] = true;
+		}
+		foreach ( array_keys( $edges ) as $edge ) {
+			if ( ! is_array( @parse_ini_string( implode( '', array_slice( $lines, 0, $edge ) ), false, INI_SCANNER_NORMAL ) ) ) {
+				throw new \Exception( 'the file does not parse, or removing them line by line would change other settings (a quoted value spanning lines), so it was left as it is; remove session.sid_length and session.sid_bits_per_character by hand.' );
+			}
+		}
 	}
 
 	return [ $new_content, $removed ];
+}
+
+/**
+ * Whether INI content refers to session.sid_length or session.sid_bits_per_character as ${...}.
+ * PHP resolves ${...} from the settings read so far, which parse_ini_string() can't see; it trims spaces around the name and takes a :- fallback.
+ *
+ * @param string $content INI content.
+ *
+ * @return bool
+ */
+function references_session_sid_settings( string $content ) {
+
+	return (bool) preg_match( '/\$\{[ \t]*session\.sid_(length|bits_per_character)[ \t]*(\}|:-)/', $content );
 }
 
 /**

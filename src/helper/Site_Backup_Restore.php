@@ -112,6 +112,9 @@ DEALLOCATE PREPARE ee_stmt;
 	// metadata.json of the backup being restored.
 	private $restore_metadata = [];
 
+	// [ is_warning, message ] of drop_deprecated_session_sid_settings(), printed once the restore is committed.
+	private $sid_settings_notice = null;
+
 	private $restore_in_progress = false;
 
 	// WordPress root the running backup excludes core from ('' = core is archived).
@@ -1947,6 +1950,16 @@ DEALLOCATE PREPARE ee_stmt;
 
 		$this->commit_restore_transaction();
 
+		if ( $this->sid_settings_notice ) {
+			list( $is_warning, $message ) = $this->sid_settings_notice;
+			$this->sid_settings_notice    = null;
+			if ( $is_warning ) {
+				EE::warning( $message );
+			} else {
+				EE::log( $message );
+			}
+		}
+
 		if ( 'wp' === $this->site_data['site_type'] ) {
 			$flush = EE::launch( $this->get_ee_shell_command( 'wp cache flush --skip-plugins --skip-themes' ) );
 			if ( $flush->return_code ) {
@@ -3592,7 +3605,7 @@ DEALLOCATE PREPARE ee_stmt;
 				}
 				// Not when it is skipped below.
 				if ( 'php/php.ini' === $path && ! $is_dir && ( $current || 'Darwin' !== PHP_OS_FAMILY ) ) {
-					$content = $this->drop_deprecated_session_sid_settings( $content );
+					$content = $this->drop_deprecated_session_sid_settings( $content, $source, $entries );
 				}
 				if ( ! $current ) {
 					// On macOS config/php isn't mounted (only custom.ini is), so an entry missing there has no effect, as before.
@@ -3637,34 +3650,50 @@ DEALLOCATE PREPARE ee_stmt;
 	 * reports as deprecated, and the migration that removed them doesn't run again; remove them the same way.
 	 *
 	 * @param string $content php.ini from the backup.
+	 * @param string $source  Extracted `php` directory of the backup.
+	 * @param array  $entries Path => lstat() from list_php_conf_backup().
 	 *
 	 * @return string The content to restore.
 	 */
-	private function drop_deprecated_session_sid_settings( $content ) {
+	private function drop_deprecated_session_sid_settings( $content, $source, array $entries ) {
 		$php_version = (string) ( $this->site_data['php_version'] ?? '' );
 		if ( ! \EE\Site\Utils\php_deprecates_session_sid_settings( $php_version ) ) {
 			return $content;
 		}
 
+		$custom = 'php/conf.d/custom.ini';
 		try {
 			list( $new_content, $removed ) = \EE\Site\Utils\strip_session_sid_settings( $content );
+			// Only the shipped quick reference: nothing to remove.
+			if ( ! $removed ) {
+				return $content;
+			}
+			// PHP reads conf.d/custom.ini after php.ini and resolves its ${...} from there.
+			if ( isset( $entries[ $custom ] ) && 0100000 === ( $entries[ $custom ]['mode'] & 0170000 )
+				&& \EE\Site\Utils\references_session_sid_settings( \EE\Site\Utils\get_container_file_contents( "$source/$custom", realpath( $source ) . '/php/conf.d' ) ) ) {
+				throw new \Exception( 'the restored custom.ini refers to them as ${...}, which PHP would then read as empty or as its fallback, so the file was left as it is; remove session.sid_length and session.sid_bits_per_character by hand.' );
+			}
+
+			// Next to the migration's copies: `ee site backup` and `ee site restore` empty EE_BACKUP_DIR/<site>/.
+			$root = EE_BACKUP_DIR . '/session-sid-settings-' . date( 'Ymd-His' );
+			$file = '/' . $this->site_data['site_url'] . '/php.ini';
+			if ( file_exists( $root . $file ) ) {
+				$root .= '-' . getmypid();
+			}
+			try {
+				$this->fs->mkdir( dirname( $root . $file ), 0700 );
+				$this->fs->dumpFile( $root . $file, $content );
+			} catch ( \Exception $e ) {
+				// rmdir() refuses a dir that holds other sites' copies.
+				@rmdir( dirname( $root . $file ) ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- best effort.
+				@rmdir( $root ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- best effort.
+				throw new \Exception( "could not save a copy of it ({$e->getMessage()}), so it was left as it is; remove session.sid_length and session.sid_bits_per_character by hand." );
+			}
 		} catch ( \Exception $e ) {
 			EE::warning( 'Could not remove the session ID settings deprecated as of PHP 8.4 from the restored php.ini: ' . $e->getMessage() );
 
 			return $content;
 		}
-		if ( $new_content === $content ) {
-			return $content;
-		}
-
-		// Next to the migration's copies: `ee site backup` and `ee site restore` empty EE_BACKUP_DIR/<site>/.
-		$root = EE_BACKUP_DIR . '/session-sid-settings-' . date( 'Ymd-His' );
-		$file = '/' . $this->site_data['site_url'] . '/php.ini';
-		if ( file_exists( $root . $file ) ) {
-			$root .= '-' . getmypid();
-		}
-		$this->fs->mkdir( dirname( $root . $file ), 0700 );
-		$this->fs->dumpFile( $root . $file, $content );
 
 		$lines   = array_map(
 			function ( $line ) {
@@ -3673,12 +3702,8 @@ DEALLOCATE PREPARE ee_stmt;
 			array_keys( $removed )
 		);
 		$message = sprintf( 'Removed %s from the restored php.ini: deprecated as of PHP 8.4, so PHP now uses its default. The php.ini from the backup is saved as %s.', implode( ', ', $lines ), $root . $file );
-		// Only a value the user set is worth a warning, as in the migration.
-		if ( in_array( false, $removed, true ) ) {
-			EE::warning( $message );
-		} else {
-			EE::log( $message );
-		}
+		// Only a value the user set is worth a warning, as in the migration. Printed after the commit: a rollback puts the previous php.ini back.
+		$this->sid_settings_notice = [ in_array( false, $removed, true ), $message ];
 
 		return $new_content;
 	}
