@@ -2162,7 +2162,7 @@ DEALLOCATE PREPARE ee_stmt;
 			$this->rollback_unfinished_restore();
 		} catch ( \Throwable $e ) {
 			// An exception here would also skip the shutdown handlers registered after this one.
-			$where = null === $this->restore_txn ? '' : sprintf( ' The previous site files are in %1$s/old and the previous database in %1$s/db-before.sql; the next `ee site restore` retries the rollback.', $this->restore_txn['stage'] );
+			$where = null === $this->restore_txn ? '' : sprintf( ' %s; the next `ee site restore` retries the rollback.', $this->describe_rollback_leftovers( $this->restore_txn ) );
 			EE::warning( 'The rollback stopped: ' . $e->getMessage() . $where );
 		}
 		$this->in_shutdown = false;
@@ -2187,13 +2187,27 @@ DEALLOCATE PREPARE ee_stmt;
 			return;
 		}
 
-		$stage = $this->restore_txn['stage'];
+		$txn = $this->restore_txn;
 		EE::warning( 'The restore did not complete. Rolling the site back.' );
 		if ( $this->rollback_restore_transaction() ) {
-			EE::log( 'Rolled back: the site files and configuration are as they were before the restore, and the database was re-imported from the copy taken before it.' );
+			// The DB is put back only when the import had started; before that it was never changed.
+			EE::log( 'Rolled back: the site files and configuration are as they were before the restore' . ( 'importing' === $txn['db'] ? ', and the database was re-imported from the copy taken before it.' : '.' ) );
 		} else {
-			EE::warning( sprintf( 'The rollback did not complete. The previous site files are in %s/old and the previous database in %s/db-before.sql; the next `ee site restore` retries the rollback.', $stage, $stage ) );
+			EE::warning( sprintf( 'The rollback did not complete. %s; the next `ee site restore` retries the rollback.', $this->describe_rollback_leftovers( $txn ) ) );
 		}
+	}
+
+	/**
+	 * @param array $txn Restore transaction.
+	 *
+	 * @return string Where an unfinished rollback left the previous site files, and the previous DB once its import had started.
+	 */
+	private function describe_rollback_leftovers( array $txn ) {
+		if ( 'importing' === $txn['db'] ) {
+			return sprintf( 'The previous site files are in %1$s/old and the previous database in %1$s/db-before.sql', $txn['stage'] );
+		}
+
+		return sprintf( 'The previous site files are in %s/old', $txn['stage'] );
 	}
 
 	/**
