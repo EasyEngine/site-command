@@ -3590,6 +3590,10 @@ DEALLOCATE PREPARE ee_stmt;
 				if ( realpath( $dir ) !== $dir ) {
 					throw new \Exception( "config/php/$parent is not a directory, or a directory above it is a symlink" );
 				}
+				// Not when it is skipped below.
+				if ( 'php/php.ini' === $path && ! $is_dir && ( $current || 'Darwin' !== PHP_OS_FAMILY ) ) {
+					$content = $this->drop_deprecated_session_sid_settings( $content );
+				}
 				if ( ! $current ) {
 					// On macOS config/php isn't mounted (only custom.ini is), so an entry missing there has no effect, as before.
 					if ( 'Darwin' === PHP_OS_FAMILY ) {
@@ -3626,6 +3630,57 @@ DEALLOCATE PREPARE ee_stmt;
 		if ( $mode_not_set ) {
 			EE::warning( 'Restored, but could not set the backed-up mode of: ' . implode( ', ', $mode_not_set ) . '.' );
 		}
+	}
+
+	/**
+	 * A backup taken before v4.14.0 brings back session.sid_length and session.sid_bits_per_character, which PHP 8.4+
+	 * reports as deprecated, and the migration that removed them doesn't run again; remove them the same way.
+	 *
+	 * @param string $content php.ini from the backup.
+	 *
+	 * @return string The content to restore.
+	 */
+	private function drop_deprecated_session_sid_settings( $content ) {
+		$php_version = (string) ( $this->site_data['php_version'] ?? '' );
+		if ( ! \EE\Site\Utils\php_deprecates_session_sid_settings( $php_version ) ) {
+			return $content;
+		}
+
+		try {
+			list( $new_content, $removed ) = \EE\Site\Utils\strip_session_sid_settings( $content );
+		} catch ( \Exception $e ) {
+			EE::warning( 'Could not remove the session ID settings deprecated as of PHP 8.4 from the restored php.ini: ' . $e->getMessage() );
+
+			return $content;
+		}
+		if ( $new_content === $content ) {
+			return $content;
+		}
+
+		// Next to the migration's copies: `ee site backup` and `ee site restore` empty EE_BACKUP_DIR/<site>/.
+		$root = EE_BACKUP_DIR . '/session-sid-settings-' . date( 'Ymd-His' );
+		$file = '/' . $this->site_data['site_url'] . '/php.ini';
+		if ( file_exists( $root . $file ) ) {
+			$root .= '-' . getmypid();
+		}
+		$this->fs->mkdir( dirname( $root . $file ), 0700 );
+		$this->fs->dumpFile( $root . $file, $content );
+
+		$lines   = array_map(
+			function ( $line ) {
+				return "`$line`";
+			},
+			array_keys( $removed )
+		);
+		$message = sprintf( 'Removed %s from the restored php.ini: deprecated as of PHP 8.4, so PHP now uses its default. The php.ini from the backup is saved as %s.', implode( ', ', $lines ), $root . $file );
+		// Only a value the user set is worth a warning, as in the migration.
+		if ( in_array( false, $removed, true ) ) {
+			EE::warning( $message );
+		} else {
+			EE::log( $message );
+		}
+
+		return $new_content;
 	}
 
 	/**

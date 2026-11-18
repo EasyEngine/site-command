@@ -2018,6 +2018,139 @@ function ini_global_part( string $content ) {
 }
 
 /**
+ * Whether a site's PHP version deprecates session.sid_length and session.sid_bits_per_character (PHP 8.4 and later).
+ *
+ * @param string $php_version Site PHP version; `latest` sites run the php8.4 image.
+ *
+ * @return bool
+ */
+function php_deprecates_session_sid_settings( $php_version ) {
+
+	$php_version = (string) $php_version;
+
+	return 'latest' === $php_version || ( preg_match( '/^\d+\.\d+$/', $php_version ) && version_compare( $php_version, '8.4', '>=' ) );
+}
+
+/**
+ * Remove session.sid_length and session.sid_bits_per_character, wherever they are set, and the shipped comments that document them.
+ * Every other line is kept byte for byte.
+ *
+ * @param string $content php.ini content.
+ *
+ * @return array New content, and the removed directive lines => whether the value is the one EasyEngine shipped.
+ *
+ * @throws \Exception When the edit would change how PHP reads any other setting, or the file doesn't parse.
+ */
+function strip_session_sid_settings( string $content ) {
+
+	// Values EasyEngine shipped; any other value was set by the user.
+	$shipped_values = [
+		'session.sid_length'             => '26',
+		'session.sid_bits_per_character' => '5',
+	];
+	// Comments shipped right above each directive, removed together with it.
+	$shipped_comments = [
+		'session.sid_length'             => [
+			'; Set session ID character length. This value could be between 22 to 256.',
+			'; Shorter length than default is supported only for compatibility reason.',
+			'; Users should use 32 or more chars.',
+			'; http://php.net/session.sid-length',
+			'; Default Value: 32',
+			'; Development Value: 26',
+			'; Production Value: 26',
+		],
+		'session.sid_bits_per_character' => [
+			'; Define how many bits are stored in each character when converting',
+			'; the binary hash data to something readable.',
+			'; Possible values:',
+			';   4  (4 bits: 0-9, a-f)',
+			';   5  (5 bits: 0-9, a-v)',
+			';   6  (6 bits: 0-9, a-z, A-Z, "-", ",")',
+			'; Default Value: 4',
+			'; Development Value: 5',
+			'; Production Value: 5',
+			'; http://php.net/session.hash-bits-per-character',
+		],
+	];
+	// Entry of the quick reference at the top of the shipped php.ini.
+	$shipped_quick_reference = [
+		'; session.sid_bits_per_character',
+		';   Default Value: 4',
+		';   Development Value: 5',
+		';   Production Value: 5',
+	];
+
+	// After every LF, and after a CR not followed by LF, so a CR-only file isn't read as one line.
+	$lines = preg_split( '/(?<=\n)|(?<=\r)(?!\n)/', $content, -1, PREG_SPLIT_NO_EMPTY );
+	$norm  = array_map(
+		function ( $line ) {
+			return rtrim( $line, " \t\r\n" );
+		},
+		$lines
+	);
+	$drop    = [];
+	$removed = [];
+
+	$quick_count = count( $shipped_quick_reference );
+	foreach ( array_keys( $norm ) as $i ) {
+		if ( array_slice( $norm, $i, $quick_count ) === $shipped_quick_reference ) {
+			$drop += array_fill( $i, $quick_count, true );
+			if ( isset( $norm[ $i + $quick_count ] ) && '' === $norm[ $i + $quick_count ] ) {
+				$drop[ $i + $quick_count ] = true;
+			}
+		}
+	}
+
+	foreach ( $norm as $i => $line ) {
+		if ( ! preg_match( '/^\s*(session\.sid_length|session\.sid_bits_per_character)\s*=(.*)$/', $line, $matches ) ) {
+			continue;
+		}
+		$name       = $matches[1];
+		$drop[ $i ] = true;
+
+		// Inline comment and quotes don't change the value.
+		$value                    = trim( preg_replace( '/;.*$/', '', $matches[2] ), " \t\"'" );
+		$removed[ trim( $line ) ] = $shipped_values[ $name ] === $value;
+
+		$comments = $shipped_comments[ $name ];
+		$count    = count( $comments );
+		if ( $i >= $count && array_slice( $norm, $i - $count, $count ) === $comments ) {
+			$drop += array_fill( $i - $count, $count, true );
+			if ( isset( $norm[ $i + 1 ] ) && '' === $norm[ $i + 1 ] ) {
+				$drop[ $i + 1 ] = true;
+			}
+		}
+	}
+
+	$new_content = implode( '', array_diff_key( $lines, $drop ) );
+
+	// A quoted value can span lines, so PHP must read the result as the original minus the two directives.
+	if ( $new_content !== $content ) {
+		// PHP-FPM resolves ${...} from the settings read so far, which parse_ini_string() can't see; it trims spaces around the name and takes a :- fallback.
+		if ( preg_match( '/\$\{[ \t]*session\.sid_(length|bits_per_character)[ \t]*(\}|:-)/', $new_content ) ) {
+			throw new \Exception( 'another setting refers to them as ${...}, which PHP would then read as empty or as its fallback, so the file was left as it is; remove session.sid_length and session.sid_bits_per_character by hand.' );
+		}
+		// Flat too: a repeated section header hides the earlier section from the sectioned parse, but PHP still reads it.
+		foreach ( [ true, false ] as $sections ) {
+			$expected = @parse_ini_string( $content, $sections, INI_SCANNER_NORMAL );
+			if ( is_array( $expected ) ) {
+				foreach ( $expected as $key => $value ) {
+					if ( is_array( $value ) ) {
+						$expected[ $key ] = array_diff_key( $value, $shipped_values );
+					}
+				}
+				$expected = array_diff_key( $expected, $shipped_values );
+			}
+			if ( ! is_array( $expected ) || @parse_ini_string( $new_content, $sections, INI_SCANNER_NORMAL ) !== $expected ) {
+				throw new \Exception( 'the file does not parse, or removing them line by line would change other settings (a quoted value spanning lines), so it was left as it is; remove session.sid_length and session.sid_bits_per_character by hand.' );
+			}
+		}
+	}
+
+	return [ $new_content, $removed ];
+}
+
+/**
  * Real path of a directory in a site's php config. config/php is EasyEngine's own link to the site's config volume; everything below it belongs to the site's php container.
  *
  * @param string $site_fs_path Site root.

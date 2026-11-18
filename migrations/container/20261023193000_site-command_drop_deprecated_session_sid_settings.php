@@ -7,6 +7,7 @@ use EE\Model\Site;
 use function EE\Site\Utils\get_container_file_contents;
 use function EE\Site\Utils\put_container_file_contents;
 use function EE\Site\Utils\site_php_conf_dir;
+use function EE\Site\Utils\strip_session_sid_settings;
 
 /**
  * Removes session.sid_length and session.sid_bits_per_character, deprecated as of PHP 8.4, from the php.ini of PHP 8.4 and 8.5 sites.
@@ -20,45 +21,6 @@ class DropDeprecatedSessionSidSettings extends Base {
 
 	/** `latest` sites run the php8.4 image. */
 	const PHP_VERSIONS = [ '8.4', '8.5', 'latest' ];
-
-	/** Values EasyEngine shipped; any other value was set by the user. */
-	const SHIPPED_VALUES = [
-		'session.sid_length'             => '26',
-		'session.sid_bits_per_character' => '5',
-	];
-
-	/** Comments shipped right above each directive, removed together with it. */
-	const SHIPPED_COMMENTS = [
-		'session.sid_length'             => [
-			'; Set session ID character length. This value could be between 22 to 256.',
-			'; Shorter length than default is supported only for compatibility reason.',
-			'; Users should use 32 or more chars.',
-			'; http://php.net/session.sid-length',
-			'; Default Value: 32',
-			'; Development Value: 26',
-			'; Production Value: 26',
-		],
-		'session.sid_bits_per_character' => [
-			'; Define how many bits are stored in each character when converting',
-			'; the binary hash data to something readable.',
-			'; Possible values:',
-			';   4  (4 bits: 0-9, a-f)',
-			';   5  (5 bits: 0-9, a-v)',
-			';   6  (6 bits: 0-9, a-z, A-Z, "-", ",")',
-			'; Default Value: 4',
-			'; Development Value: 5',
-			'; Production Value: 5',
-			'; http://php.net/session.hash-bits-per-character',
-		],
-	];
-
-	/** Entry of the quick reference at the top of the shipped php.ini. */
-	const SHIPPED_QUICK_REFERENCE = [
-		'; session.sid_bits_per_character',
-		';   Default Value: 4',
-		';   Development Value: 5',
-		';   Production Value: 5',
-	];
 
 	private $sites;
 
@@ -151,7 +113,7 @@ class DropDeprecatedSessionSidSettings extends Base {
 		$dir     = site_php_conf_dir( $site->site_fs_path, 'php' );
 		$content = get_container_file_contents( $ini, $dir, self::MAX_SIZE );
 
-		list( $new_content, $removed ) = self::strip_settings( $content );
+		list( $new_content, $removed ) = strip_session_sid_settings( $content );
 		if ( $new_content === $content ) {
 			EE::debug( "$ini has no deprecated session ID settings." );
 
@@ -199,88 +161,6 @@ class DropDeprecatedSessionSidSettings extends Base {
 		// rmdir() refuses a dir that still holds other sites' files.
 		@rmdir( dirname( $backup ) );
 		@rmdir( dirname( $backup, 2 ) );
-	}
-
-	/**
-	 * Removes the two directives, wherever they are set, and the shipped comments that document them.
-	 * Every other line is kept byte for byte.
-	 *
-	 * @param string $content php.ini content.
-	 *
-	 * @return array New content, and the removed directive lines => whether the value is the shipped one.
-	 *
-	 * @throws \Exception When the edit would change how PHP reads any other setting, or the file doesn't parse.
-	 */
-	public static function strip_settings( $content ) {
-
-		// After every LF, and after a CR not followed by LF, so a CR-only file isn't read as one line.
-		$lines = preg_split( '/(?<=\n)|(?<=\r)(?!\n)/', $content, -1, PREG_SPLIT_NO_EMPTY );
-		$norm  = array_map(
-			function ( $line ) {
-				return rtrim( $line, " \t\r\n" );
-			},
-			$lines
-		);
-		$drop    = [];
-		$removed = [];
-
-		$quick_count = count( self::SHIPPED_QUICK_REFERENCE );
-		foreach ( array_keys( $norm ) as $i ) {
-			if ( array_slice( $norm, $i, $quick_count ) === self::SHIPPED_QUICK_REFERENCE ) {
-				$drop += array_fill( $i, $quick_count, true );
-				if ( isset( $norm[ $i + $quick_count ] ) && '' === $norm[ $i + $quick_count ] ) {
-					$drop[ $i + $quick_count ] = true;
-				}
-			}
-		}
-
-		foreach ( $norm as $i => $line ) {
-			if ( ! preg_match( '/^\s*(session\.sid_length|session\.sid_bits_per_character)\s*=(.*)$/', $line, $matches ) ) {
-				continue;
-			}
-			$name       = $matches[1];
-			$drop[ $i ] = true;
-
-			// Inline comment and quotes don't change the value.
-			$value                    = trim( preg_replace( '/;.*$/', '', $matches[2] ), " \t\"'" );
-			$removed[ trim( $line ) ] = self::SHIPPED_VALUES[ $name ] === $value;
-
-			$comments = self::SHIPPED_COMMENTS[ $name ];
-			$count    = count( $comments );
-			if ( $i >= $count && array_slice( $norm, $i - $count, $count ) === $comments ) {
-				$drop += array_fill( $i - $count, $count, true );
-				if ( isset( $norm[ $i + 1 ] ) && '' === $norm[ $i + 1 ] ) {
-					$drop[ $i + 1 ] = true;
-				}
-			}
-		}
-
-		$new_content = implode( '', array_diff_key( $lines, $drop ) );
-
-		// A quoted value can span lines, so PHP must read the result as the original minus the two directives.
-		if ( $new_content !== $content ) {
-			// PHP-FPM resolves ${...} from the settings read so far, which parse_ini_string() can't see; it trims spaces around the name and takes a :- fallback.
-			if ( preg_match( '/\$\{[ \t]*session\.sid_(length|bits_per_character)[ \t]*(\}|:-)/', $new_content ) ) {
-				throw new \Exception( 'another setting refers to them as ${...}, which PHP would then read as empty or as its fallback, so the file was left as it is; remove session.sid_length and session.sid_bits_per_character by hand.' );
-			}
-			// Flat too: a repeated section header hides the earlier section from the sectioned parse, but PHP still reads it.
-			foreach ( [ true, false ] as $sections ) {
-				$expected = @parse_ini_string( $content, $sections, INI_SCANNER_NORMAL );
-				if ( is_array( $expected ) ) {
-					foreach ( $expected as $key => $value ) {
-						if ( is_array( $value ) ) {
-							$expected[ $key ] = array_diff_key( $value, self::SHIPPED_VALUES );
-						}
-					}
-					$expected = array_diff_key( $expected, self::SHIPPED_VALUES );
-				}
-				if ( ! is_array( $expected ) || @parse_ini_string( $new_content, $sections, INI_SCANNER_NORMAL ) !== $expected ) {
-					throw new \Exception( 'the file does not parse, or removing them line by line would change other settings (a quoted value spanning lines), so it was left as it is; remove session.sid_length and session.sid_bits_per_character by hand.' );
-				}
-			}
-		}
-
-		return [ $new_content, $removed ];
 	}
 
 	/**
