@@ -440,7 +440,7 @@ abstract class EE_Site_Command {
 	 * : Path to the SSL crt file. Required with --ssl=custom.
 	 *
 	 * [--php=<php-version>]
-	 * : PHP version for site. Currently only supports PHP 5.6, 7.0, 7.2, 7.3, 7.4, 8.0, 8.1, 8.2, 8.3, 8.4, and 8.5.
+	 * : PHP version for site. Currently only supports PHP 5.6, 7.0, 7.2, 7.3, 7.4, 8.0, 8.1, 8.2, 8.3, 8.4, 8.5, and 8.6.
 	 * ---
 	 * options:
 	 *  - 5.6
@@ -454,6 +454,7 @@ abstract class EE_Site_Command {
 	 *  - 8.3
 	 *  - 8.4
 	 *  - 8.5
+	 *  - 8.6
 	 * ---
 	 *
 	 * [--proxy-cache=<on-or-off>]
