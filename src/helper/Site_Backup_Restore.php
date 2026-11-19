@@ -2203,11 +2203,21 @@ DEALLOCATE PREPARE ee_stmt;
 	 * @return string Where an unfinished rollback left the previous site files, and the previous DB once its import had started.
 	 */
 	private function describe_rollback_leftovers( array $txn ) {
+		// Describe what is on disk now: the swap may not have started, and the dump may be gone.
+		$parts = [];
+		if ( ! empty( $this->list_dir( $txn['stage'] . '/old' ) ) ) {
+			$parts[] = sprintf( 'The previous site files still staged are in %s/old', $txn['stage'] );
+		}
 		if ( 'importing' === $txn['db'] ) {
-			return sprintf( 'The previous site files are in %1$s/old and the previous database in %1$s/db-before.sql', $txn['stage'] );
+			$parts[] = is_file( $txn['stage'] . '/db-before.sql' )
+				? sprintf( 'the previous database is in %s/db-before.sql', $txn['stage'] )
+				: 'the copy of the previous database is missing';
+		}
+		if ( empty( $parts ) ) {
+			return sprintf( 'No previous site files are staged in %s', $txn['stage'] );
 		}
 
-		return sprintf( 'The previous site files are in %s/old', $txn['stage'] );
+		return ucfirst( implode( ' and ', $parts ) );
 	}
 
 	/**
