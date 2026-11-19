@@ -520,6 +520,11 @@ abstract class EE_Site_Command {
 		$add_domains     = get_flag_value( $assoc_args, 'add-alias-domains', false );
 		$delete_domains  = get_flag_value( $assoc_args, 'delete-alias-domains', false );
 
+		// The synopsis check compares loosely, so values like 8.10 or 08.5 pass it as 8.1 or 8.5.
+		if ( false !== $php && ! preg_match( '/^\d\.\d\z/', (string) $php ) ) {
+			EE::error( "Invalid value specified for 'php': $php" );
+		}
+
 		if ( $ssl ) {
 			$this->update_ssl( $assoc_args );
 		}
