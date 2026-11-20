@@ -38,7 +38,7 @@ class PinLatestPhpVersion extends Base {
 	/**
 	 * Rewrite every `latest` php_version to the version in the site's docker-compose.yml.
 	 *
-	 * @throws EE\ExitException
+	 * @throws \Exception When a row can't be saved.
 	 */
 	public function up() {
 
@@ -58,7 +58,17 @@ class PinLatestPhpVersion extends Base {
 				EE::debug( "Could not read the PHP image of $site->site_url from its docker-compose.yml; using PHP $version." );
 			}
 			$site->php_version = $version;
-			$site->save();
+			$error = '';
+			try {
+				$saved = $site->save();
+			} catch ( \Throwable $e ) {
+				$saved = false;
+				$error = ': ' . $e->getMessage();
+			}
+			// Fail so the migration isn't recorded and runs again; rows already pinned are skipped then.
+			if ( ! $saved ) {
+				throw new \Exception( "Could not set the PHP version of $site->site_url to $version$error" );
+			}
 			EE::log( "Set the PHP version of $site->site_url from latest to $version, the version it runs." );
 		}
 	}
@@ -80,7 +90,7 @@ class PinLatestPhpVersion extends Base {
 			return null;
 		}
 		$content = @file_get_contents( $file, false, null, 0, self::MAX_SIZE );
-		if ( false === $content || ! preg_match_all( '#^\s*image:\s*["\']?easyengine/php(\d+\.\d+)?:#m', $content, $matches ) ) {
+		if ( false === $content || ! preg_match_all( '#^\s*image:\s*["\']?easyengine/php(\d+\.\d+)?(?=[:@"\'\s]|$)#m', $content, $matches ) ) {
 			return null;
 		}
 		$versions = array_unique(
