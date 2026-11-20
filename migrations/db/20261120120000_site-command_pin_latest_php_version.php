@@ -4,6 +4,7 @@ namespace EE\Migration;
 
 use EE;
 use EE\Model\Site;
+use Mustangostang\Spyc;
 
 /**
  * Pins sites stored as `latest` to the PHP version they run.
@@ -90,16 +91,28 @@ class PinLatestPhpVersion extends Base {
 			return null;
 		}
 		$content = @file_get_contents( $file, false, null, 0, self::MAX_SIZE );
-		// The image name after "easyengine/php", up to its tag or digest.
-		if ( false === $content || ! preg_match_all( '#^\s*image:\s*["\']?easyengine/php([^\s"\'@:]*)#m', $content, $matches ) ) {
+		try {
+			// Spyc, as symfony/yaml isn't in the phar.
+			$compose = false === $content ? null : Spyc::YAMLLoadString( $content );
+		} catch ( \Exception $e ) {
+			return null;
+		}
+		if ( ! is_array( $compose ) || ! isset( $compose['services'] ) || ! is_array( $compose['services'] ) ) {
 			return null;
 		}
 		$versions = [];
-		foreach ( $matches[1] as $suffix ) {
-			if ( '' === $suffix ) {
+		foreach ( $compose['services'] as $service ) {
+			if ( ! is_array( $service ) || ! isset( $service['image'] ) || ! is_string( $service['image'] ) ) {
+				continue;
+			}
+			// The image name after "easyengine/php", up to its tag or digest.
+			if ( ! preg_match( '#^easyengine/php([^@:]*)#', $service['image'], $match ) ) {
+				continue;
+			}
+			if ( '' === $match[1] ) {
 				$versions[] = self::UNVERSIONED_IMAGE_VERSION;
-			} elseif ( preg_match( '#^\d+\.\d+$#D', $suffix ) ) {
-				$versions[] = $suffix;
+			} elseif ( preg_match( '#^\d+\.\d+$#D', $match[1] ) ) {
+				$versions[] = $match[1];
 			} else {
 				// Another image (e.g. php8.3-custom): the site isn't on a plain EasyEngine php image.
 				return null;
