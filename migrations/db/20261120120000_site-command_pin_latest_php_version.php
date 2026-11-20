@@ -90,11 +90,15 @@ class PinLatestPhpVersion extends Base {
 		if ( ! is_file( $file ) || ! is_readable( $file ) ) {
 			return null;
 		}
+		// Spyc, as symfony/yaml isn't in the phar. Its absence must fail loudly, not look like an unreadable file.
+		if ( ! class_exists( Spyc::class ) ) {
+			throw new \Exception( 'Spyc is not available to read docker-compose.yml files.' );
+		}
 		$content = @file_get_contents( $file, false, null, 0, self::MAX_SIZE );
 		try {
-			// Spyc, as symfony/yaml isn't in the phar.
-			$compose = false === $content ? null : Spyc::YAMLLoadString( $content );
-		} catch ( \Exception $e ) {
+			// Malformed YAML can make Spyc throw a TypeError on PHP 8.
+			$compose = false === $content ? null : @Spyc::YAMLLoadString( $content );
+		} catch ( \Throwable $e ) {
 			return null;
 		}
 		if ( ! is_array( $compose ) || ! isset( $compose['services'] ) || ! is_array( $compose['services'] ) ) {
