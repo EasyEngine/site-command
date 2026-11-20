@@ -90,17 +90,22 @@ class PinLatestPhpVersion extends Base {
 			return null;
 		}
 		$content = @file_get_contents( $file, false, null, 0, self::MAX_SIZE );
-		if ( false === $content || ! preg_match_all( '#^\s*image:\s*["\']?easyengine/php(\d+\.\d+)?(?=[:@"\'\s]|$)#m', $content, $matches ) ) {
+		// The image name after "easyengine/php", up to its tag or digest.
+		if ( false === $content || ! preg_match_all( '#^\s*image:\s*["\']?easyengine/php([^\s"\'@:]*)#m', $content, $matches ) ) {
 			return null;
 		}
-		$versions = array_unique(
-			array_map(
-				function ( $version ) {
-					return '' === $version ? self::UNVERSIONED_IMAGE_VERSION : $version;
-				},
-				$matches[1]
-			)
-		);
+		$versions = [];
+		foreach ( $matches[1] as $suffix ) {
+			if ( '' === $suffix ) {
+				$versions[] = self::UNVERSIONED_IMAGE_VERSION;
+			} elseif ( preg_match( '#^\d+\.\d+$#D', $suffix ) ) {
+				$versions[] = $suffix;
+			} else {
+				// Another image (e.g. php8.3-custom): the site isn't on a plain EasyEngine php image.
+				return null;
+			}
+		}
+		$versions = array_unique( $versions );
 		if ( 1 !== count( $versions ) ) {
 			return null;
 		}
