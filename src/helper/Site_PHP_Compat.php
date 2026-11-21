@@ -1,0 +1,1446 @@
+<?php
+
+namespace EE\Site\Type;
+
+use EE;
+use Symfony\Component\Process\Exception\ProcessSignaledException;
+use Symfony\Component\Process\Exception\ProcessTimedOutException;
+use Symfony\Component\Process\Process;
+use function EE\Utils\delem_log;
+use function EE\Utils\get_flag_value;
+
+/**
+ * `ee site php-compat`: runs the compat-scanner image against a site's code and prints its verdict or estimate.
+ *
+ * Output goes through `echo` only: EE::exec(), EE::launch() and EE::log() would put findings into ee.log.
+ */
+class Site_PHP_Compat {
+
+	const IMAGE            = 'easyengine/compat-scanner';
+	const SITE_TYPES       = [ 'wp', 'php' ];
+	const DEFAULT_TIMEOUT  = 7200;
+	const ESTIMATE_TIMEOUT = 120;
+	// Docker's own start and teardown on top of the container's deadline, which normally fires first.
+	const PROCESS_MARGIN = 60;
+	const PULL_TIMEOUT   = 1800;
+	const STDOUT_MAX     = 1048576;
+	const STDERR_MAX     = 65536;
+	const REPORT_MAX     = 134217728;
+	// Memory the report may take once decoded; the limit is raised to this when lower.
+	const MEMORY_FLOOR = 1073741824;
+	// Under EE_ROOT_DIR/tmp/, root-only, so no other user or host uid 33 can reach a scan's /out.
+	const TEMP_DIR      = 'php-compat';
+	const SCAN_STATUSES = [ 'ok', 'no_code_found', 'tool_error' ];
+	const SUMMARY_INTS  = [ 'errors', 'warnings', 'files_checked', 'files_not_checked', 'php_bytes', 'components_checked', 'components_with_errors', 'duration_s' ];
+	const ESTIMATE_INTS = [ 'php_files', 'php_bytes', 'components', 'estimated_seconds', 'estimated_seconds_low', 'estimated_seconds_high' ];
+	// --format=json prints only the documented keys (INTERFACE.md), in this order.
+	const SUMMARY_KEYS  = [ 'v', 'status', 'site', 'target', 'safe_to_upgrade', 'errors', 'warnings', 'files_checked', 'files_not_checked', 'php_bytes', 'components_checked', 'components_with_errors', 'duration_s', 'tool' ];
+	const TOOL_KEYS     = [ 'phpcs', 'phpcompatibility', 'phpcompatibility_wp', 'image' ];
+	const ESTIMATE_KEYS = [ 'v', 'status', 'estimate', 'site', 'target', 'php_files', 'php_bytes', 'components', 'estimated_seconds', 'estimated_seconds_low', 'estimated_seconds_high', 'inputs' ];
+	const INPUT_KEYS    = [ 'calibration_bytes', 'calibration_seconds', 'startup_seconds', 'bytes_per_second', 'batches', 'seconds_per_batch', 'cpus', 'load_average_1m', 'low_factor', 'high_factor' ];
+	// File names and messages from the scanned code can hold invalid UTF-8.
+	const JSON_UTF8 = JSON_INVALID_UTF8_SUBSTITUTE; // phpcs:ignore PHPCompatibility.PHP.NewConstants.json_invalid_utf8_substituteFound -- PHP 7.2+; EE needs 7.4.
+	// C1 controls, bidi and zero-width characters: a terminal acts on them or they disguise text.
+	const UNSAFE_CHARS = '\x{80}-\x{9F}\x{061C}\x{200B}-\x{200F}\x{2028}-\x{202E}\x{2060}-\x{2069}\x{FEFF}';
+
+	/** @var string Site name. */
+	protected $site = '';
+
+	/** @var string Target PHP version. */
+	protected $target = '';
+
+	/** @var bool Whether this run is an estimate. */
+	protected $estimate = false;
+
+	/** @var string|null This run's directory mounted at /out, while it exists. */
+	protected $temp_dir;
+
+	/** @var string|null Name of a scan container that may still exist. */
+	protected $active_container;
+
+	/** @var resource|null Lock on the site directory while a scan runs, or on the site's estimate lock file while an estimate runs. */
+	protected $lock;
+
+	/** @var array|null --output directory as validated: path, dev, ino. */
+	protected $output_dir;
+
+	/** @var string|null Temporary file of write_report() until it is renamed. */
+	protected $output_tmp;
+
+	/** @var callable|null Runs pcntl_signal_dispatch() in the site command's scope, where its protected rollback() handlers can be called. */
+	protected $dispatch;
+
+	/** @var bool Set during cleanup(), so a second signal can't interrupt it. */
+	protected $cleaning = false;
+
+	/** @var bool Whether the shutdown cleanup is registered. */
+	private $cleanup_registered = false;
+
+	/**
+	 * Validate the options, run the scan or the estimate and print the result.
+	 *
+	 * @param object        $site_data  Site record from get_site_info( ..., false ).
+	 * @param array         $assoc_args Command options.
+	 * @param callable|null $dispatch   Signal dispatcher from EE_Site_Command; null dispatches here.
+	 */
+	public function run( $site_data, array $assoc_args, $dispatch = null ) {
+
+		$this->site     = $site_data->site_url;
+		$this->target   = (string) get_flag_value( $assoc_args, 'php', '' );
+		$this->estimate = (bool) get_flag_value( $assoc_args, 'estimate', false );
+		$format         = get_flag_value( $assoc_args, 'format', 'table' );
+		$output         = get_flag_value( $assoc_args, 'output', null );
+		$timeout        = get_flag_value( $assoc_args, 'timeout', null );
+
+		// The dispatcher drops a valueless optional flag with only a warning; the runner still has it.
+		$raw = (array) EE::get_runner()->assoc_args;
+		foreach ( [ 'format', 'output', 'timeout' ] as $key ) {
+			if ( ! array_key_exists( $key, $assoc_args ) && isset( $raw[ $key ] ) && true === $raw[ $key ] ) {
+				EE::error( "--$key needs a value." );
+			}
+		}
+		if ( ! in_array( $site_data->site_type, self::SITE_TYPES, true ) ) {
+			EE::error( "ee site php-compat supports wp and php sites; {$this->site} is a {$site_data->site_type} site." );
+		}
+		// The dispatcher compares loosely, so `--php=8` or `--php=8.10` (== 8.1) would pass its check.
+		if ( ! in_array( $this->target, self::php_versions(), true ) ) {
+			EE::error( 'Invalid --php value. Use one of: ' . implode( ', ', self::php_versions() ) . '.' );
+		}
+		if ( ! in_array( $format, [ 'table', 'json' ], true ) ) {
+			EE::error( 'Invalid --format value. Use table or json.' );
+		}
+		if ( $this->estimate && ( null !== $output || null !== $timeout ) ) {
+			EE::error( '--output and --timeout don\'t apply to --estimate.' );
+		}
+		if ( null === $timeout ) {
+			$timeout = self::DEFAULT_TIMEOUT;
+		} elseif ( ! is_string( $timeout ) || ! preg_match( '/^[1-9][0-9]{0,8}$/', $timeout ) ) {
+			EE::error( '--timeout must be a positive whole number of seconds.' );
+		}
+		if ( null !== $output ) {
+			$output = $this->validate_output_path( $output );
+		}
+
+		$this->dispatch = $dispatch;
+		if ( null !== $dispatch && 'json' === $format ) {
+			self::keep_stdout_for_json();
+		}
+
+		delem_log( 'site php-compat start' );
+		EE::debug( sprintf( 'php-compat: site %s, PHP %s, %s', $this->site, $this->target, $this->estimate ? 'estimate' : "scan, timeout $timeout s" ) );
+		$started = microtime( true );
+
+		try {
+			$result = $this->estimate ? $this->run_estimate( $site_data ) : $this->run_scan( $site_data, (int) $timeout, $output );
+		} finally {
+			$this->cleanup();
+		}
+
+		if ( 'json' === $format ) {
+			echo self::encode( $result['doc'] ) . "\n";
+		} elseif ( $this->estimate ) {
+			echo $this->estimate_text( $result['doc'] );
+		} else {
+			// Line by line: a large report isn't copied into one more string.
+			foreach ( $this->table_lines( $result['doc'], $result['report'] ) as $line ) {
+				echo $line, "\n";
+			}
+		}
+
+		$this->log_result( $result['doc'], microtime( true ) - $started );
+		delem_log( 'site php-compat end' );
+	}
+
+	/**
+	 * The --php values of this command's docblock, the same list as `ee site update --php`.
+	 *
+	 * @return string[]
+	 */
+	public static function php_versions() {
+		$doc     = ( new \ReflectionMethod( EE_Site_Command::class, 'php_compat' ) )->getDocComment();
+		$options = ( new \EE\DocParser( $doc ) )->get_param_args( 'php' );
+
+		// YAML reads 8.0 as a float.
+		return array_map(
+			function ( $version ) {
+				return is_float( $version ) ? number_format( $version, 1, '.', '' ) : (string) $version;
+			},
+			isset( $options['options'] ) ? $options['options'] : []
+		);
+	}
+
+	/**
+	 * Refuse an --output the report couldn't be written to, before the scan runs.
+	 *
+	 * @param string $output --output value.
+	 *
+	 * @return string The path.
+	 */
+	protected function validate_output_path( $output ) {
+		$output = (string) $output;
+		if ( '' === $output || '/' !== $output[0] ) {
+			EE::error( '--output must be an absolute path.' );
+		}
+		$name = basename( $output );
+		if ( '/' === substr( $output, -1 ) || '' === $name || '.' === $name || '..' === $name ) {
+			EE::error( '--output must name a file.' );
+		}
+		$dir = realpath( dirname( $output ) );
+		if ( false === $dir || ! is_dir( $dir ) ) {
+			EE::error( 'The directory of --output does not exist: ' . dirname( $output ) );
+		}
+		if ( is_dir( $output ) && ! is_link( $output ) ) {
+			EE::error( "--output is a directory: $output" );
+		}
+		// tempnam() falls back to the system temp dir when $dir isn't writable (read-only mount, not root).
+		$probe    = @tempnam( $dir, '.ee-php-compat-' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- checked below.
+		$writable = false !== $probe && realpath( dirname( $probe ) ) === $dir;
+		if ( false !== $probe ) {
+			@unlink( $probe ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged
+		}
+		if ( ! $writable ) {
+			EE::error( 'The directory of --output is not writable: ' . dirname( $output ) );
+		}
+		$stat             = stat( $dir );
+		$this->output_dir = [
+			'path' => $dir,
+			'dev'  => $stat['dev'],
+			'ino'  => $stat['ino'],
+		];
+
+		return $output;
+	}
+
+	/**
+	 * @param object $site_data Site record.
+	 * @param int    $timeout   --timeout.
+	 * @param string $output    --output path, or null.
+	 *
+	 * @return array 'doc' (summary to print) and 'report' (decoded report, ok only).
+	 */
+	protected function run_scan( $site_data, $timeout, $output ) {
+
+		$image = $this->image();
+		if ( null === $image ) {
+			return $this->doc( 'tool_error', 'no ' . self::IMAGE . ' tag in img-versions.json' );
+		}
+		$code = $this->code_dir( $site_data->site_fs_path );
+		if ( null === $code ) {
+			return $this->doc( 'no_code_found' );
+		}
+		if ( false !== strpbrk( $code, ',"' ) ) {
+			return $this->doc( 'tool_error', 'the site code path has a comma or a quote' );
+		}
+
+		// Two EE runs can't both pass the container check below and then clear each other's directory as a leftover.
+		if ( ! $this->lock_site( $site_data->site_fs_path ) ) {
+			return $this->doc( 'busy' );
+		}
+		$name   = 'ee-php-compat-' . $this->site;
+		$status = $this->container_status( $name );
+		if ( 'running' === $status ) {
+			return $this->doc( 'busy' );
+		}
+		if ( 'exited' === $status ) {
+			EE::debug( "Removing the leftover container $name." );
+			// Known limit: a container whose --rm is still in progress can't be removed again, which reads as this tool_error.
+			if ( 0 !== $this->docker( [ 'docker', 'rm', '-f', $name ], 60 )['code'] ) {
+				return $this->doc( 'tool_error', "could not remove the leftover container $name" );
+			}
+		}
+
+		if ( ! $this->ensure_image( $image ) ) {
+			return $this->doc( 'tool_error', 'image pull failed' );
+		}
+
+		$out = $this->make_temp_dir();
+		if ( null === $out ) {
+			return $this->doc( 'tool_error', 'could not create the temporary directory' );
+		}
+		if ( false !== strpbrk( $out, ',"' ) ) {
+			return $this->doc( 'tool_error', 'the temporary directory path has a comma or a quote' );
+		}
+
+		// From here until cleanup() confirms it is gone, /out may be in use by this container.
+		$this->active_container = $name;
+		$run                    = $this->docker( $this->docker_run_args( 'scan', $image, $site_data, $code, $out, $timeout ), $timeout + self::PROCESS_MARGIN, true );
+		if ( $run['timed_out'] ) {
+			return $this->doc( 'tool_error', "timed out after $timeout s" );
+		}
+
+		// Docker refuses a taken name before creating anything, so nothing is printed, and the other container exists.
+		if ( 125 === $run['code'] && '' === trim( $run['stdout'] ) && false !== stripos( $run['stderr'], 'Conflict' ) && false !== strpos( $run['stderr'], $name ) && false !== $this->container_status( $name ) ) {
+			// That container is another run's: leave it alone.
+			$this->active_container = null;
+
+			return $this->doc( 'busy' );
+		}
+
+		$doc = empty( $run['overflow'] ) ? $this->parse_document( $run['stdout'] ) : null;
+		if ( null === $doc || ! $this->valid_scan_doc( $doc ) ) {
+			return $this->doc( 'tool_error', self::exit_detail( $run, 'without a valid result' ) );
+		}
+		if ( 'ok' !== $doc['status'] ) {
+			return $this->doc( $doc['status'], 'tool_error' === $doc['status'] ? $doc['detail'] : null );
+		}
+
+		// The container ended (docker run --rm returns once it is removed), so nothing changes /out any more.
+		$file = $out . '/report.json';
+		clearstatcache( true, $file );
+		$size = @filesize( $file ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- a missing file is refused below.
+		if ( false !== $size && $size > self::REPORT_MAX ) {
+			return $this->doc( 'tool_error', 'the report is larger than ' . ( self::REPORT_MAX >> 20 ) . ' MiB' );
+		}
+
+		$raw    = null;
+		$report = null;
+		try {
+			self::raise_memory_limit();
+			$raw = \EE\Site\Utils\get_container_file_contents( $file, $out, self::REPORT_MAX );
+			if ( self::decode_cost( $raw ) > $this->memory_available() ) {
+				return $this->doc( 'tool_error', sprintf( 'the report (%s) needs more memory to read than is available', self::size( strlen( $raw ) ) ) );
+			}
+			$report = json_decode( $raw, true, 512, self::JSON_UTF8 );
+		} catch ( \Exception $e ) {
+			EE::debug( 'php-compat report: ' . self::clean( $e->getMessage() ) );
+		}
+		if ( ! is_array( $report ) || ! $this->valid_report( $report, $doc ) ) {
+			return $this->doc( 'tool_error', self::exit_detail( $run, 'without a valid report' ) );
+		}
+
+		$summary = $this->summary( $doc );
+		if ( null !== $output ) {
+			if ( ! $this->write_report( $output, $raw ) ) {
+				return $this->doc( 'tool_error', "could not write the report to $output" );
+			}
+			$summary['report']       = $output;
+			$summary['report_bytes'] = strlen( $raw );
+		}
+
+		return [
+			'doc'    => $summary,
+			'report' => $report,
+		];
+	}
+
+	/**
+	 * @param object $site_data Site record.
+	 *
+	 * @return array 'doc' (estimate to print) and 'report' (always null).
+	 */
+	protected function run_estimate( $site_data ) {
+
+		$image = $this->image();
+		if ( null === $image ) {
+			return $this->doc( 'tool_error', 'no ' . self::IMAGE . ' tag in img-versions.json' );
+		}
+		$code = $this->code_dir( $site_data->site_fs_path );
+		if ( null === $code ) {
+			return $this->doc( 'no_code_found' );
+		}
+		if ( false !== strpbrk( $code, ',"' ) ) {
+			return $this->doc( 'tool_error', 'the site code path has a comma or a quote' );
+		}
+		// One estimate per site at a time; it never waits for a scan.
+		$locked = $this->lock_estimate();
+		if ( null === $locked ) {
+			return $this->doc( 'tool_error', 'could not create the estimate lock' );
+		}
+		if ( ! $locked ) {
+			return $this->doc( 'busy' );
+		}
+		if ( ! $this->ensure_image( $image ) ) {
+			return $this->doc( 'tool_error', 'image pull failed' );
+		}
+
+		$run = $this->docker( $this->docker_run_args( 'estimate', $image, $site_data, $code ), self::ESTIMATE_TIMEOUT + self::PROCESS_MARGIN, true );
+		if ( $run['timed_out'] ) {
+			return $this->doc( 'tool_error', 'timed out after ' . self::ESTIMATE_TIMEOUT . ' s' );
+		}
+
+		$doc = empty( $run['overflow'] ) ? $this->parse_document( $run['stdout'] ) : null;
+		if ( null === $doc || ! $this->valid_estimate_doc( $doc ) ) {
+			return $this->doc( 'tool_error', self::exit_detail( $run, 'without a valid result' ) );
+		}
+		if ( 'ok' !== $doc['status'] ) {
+			return $this->doc( $doc['status'], 'tool_error' === $doc['status'] ? $doc['detail'] : null );
+		}
+
+		return [
+			'doc'    => $this->with_site( self::pick( $doc, self::ESTIMATE_KEYS ) ),
+			'report' => null,
+		];
+	}
+
+	/**
+	 * The `docker run` command line. Estimates have no name, so they never conflict, and no /out.
+	 *
+	 * @param string      $mode      scan or estimate.
+	 * @param string      $image     Image with tag.
+	 * @param object      $site_data Site record.
+	 * @param string      $code      Real path of the site's code.
+	 * @param string|null $out       Directory mounted at /out (scan only).
+	 * @param int|null    $timeout   --timeout (scan only).
+	 *
+	 * @return string[]
+	 */
+	public function docker_run_args( $mode, $image, $site_data, $code, $out = null, $timeout = null ) {
+		$args = [ 'docker', 'run', '--rm', '--init' ];
+		if ( 'scan' === $mode ) {
+			array_push( $args, '--name', 'ee-php-compat-' . $this->site );
+		}
+		// No log driver: the daemon would otherwise keep its own unbounded copy of the container's stdout.
+		array_push(
+			$args,
+			'--network', 'none', '--log-driver', 'none', '--read-only', '--tmpfs', '/tmp:size=64m',
+			'--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--pids-limit', '64',
+			'--memory', '1g', '--memory-swap', '1g', '--cpus', '1', '--cpu-shares', '256',
+			'--ulimit', 'core=0',
+			'--user', '33:33',
+			// The scanner stops at the same report size EE accepts.
+			'-e', 'COMPAT_SITE=' . $this->site, '-e', 'COMPAT_IMAGE=' . $image, '-e', 'COMPAT_REPORT_MAX=' . self::REPORT_MAX,
+			'--mount', "type=bind,src=$code,dst=/var/www,readonly"
+		);
+		if ( 'scan' === $mode ) {
+			array_push( $args, '--mount', "type=bind,src=$out,dst=/out" );
+		}
+		array_push( $args, $image, $mode, $site_data->site_type, $site_data->site_container_fs_path, $this->target );
+		if ( 'scan' === $mode ) {
+			$args[] = (string) $timeout;
+		}
+
+		return $args;
+	}
+
+	/**
+	 * @return string|null Image with its tag from img-versions.json.
+	 */
+	protected function image() {
+		$versions = \EE\Utils\get_image_versions();
+
+		return empty( $versions[ self::IMAGE ] ) ? null : self::IMAGE . ':' . $versions[ self::IMAGE ];
+	}
+
+	/**
+	 * `app` is a symlink to the htdocs volume; Docker needs its real path.
+	 *
+	 * @param string $site_fs_path Site directory.
+	 *
+	 * @return string|null Real path, or null when it isn't a directory.
+	 */
+	protected function code_dir( $site_fs_path ) {
+		$real = realpath( $site_fs_path . '/app' );
+
+		return ( false !== $real && is_dir( $real ) ) ? $real : null;
+	}
+
+	/**
+	 * @param string $site_fs_path Site directory.
+	 *
+	 * @return bool False when another php-compat run holds it.
+	 */
+	protected function lock_site( $site_fs_path ) {
+		$handle = @fopen( $site_fs_path, 'r' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- handled below.
+		if ( false === $handle ) {
+			EE::debug( "Could not open $site_fs_path to lock it; relying on the container name." );
+
+			return true;
+		}
+		if ( ! flock( $handle, LOCK_EX | LOCK_NB, $would_block ) ) {
+			fclose( $handle );
+			if ( ! $would_block ) {
+				EE::debug( "Could not lock $site_fs_path; relying on the container name." );
+
+				return true;
+			}
+
+			return false;
+		}
+		$this->lock = $handle;
+
+		return true;
+	}
+
+	/**
+	 * @return bool|null False when another estimate of the site holds the lock; null when the lock file can't be made.
+	 */
+	protected function lock_estimate() {
+		$parent = $this->temp_parent();
+		// Not in the per-site directory, whose leftovers a scan removes; a site name never starts with a dot.
+		$handle = null === $parent ? false : @fopen( "$parent/.estimate-{$this->site}.lock", 'c' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- handled below.
+		if ( false === $handle ) {
+			return null;
+		}
+		if ( ! flock( $handle, LOCK_EX | LOCK_NB, $would_block ) ) {
+			fclose( $handle );
+			if ( ! $would_block ) {
+				EE::debug( "Could not lock the estimate of {$this->site}; running without the lock." );
+
+				return true;
+			}
+
+			return false;
+		}
+		$this->lock = $handle;
+
+		return true;
+	}
+
+	/**
+	 * @param string $name Container name.
+	 *
+	 * @return string|false running, exited, or false when there is none.
+	 */
+	protected function container_status( $name ) {
+		return \EE_DOCKER::container_status( $name );
+	}
+
+	/**
+	 * Remove a container if it still exists and confirm it is gone.
+	 *
+	 * @param string $name Container name.
+	 *
+	 * @return bool
+	 */
+	protected function container_gone( $name ) {
+		$this->docker( [ 'docker', 'rm', '-f', $name ], 60 );
+		for ( $try = 1; ; $try++ ) {
+			if ( false === $this->container_status( $name ) ) {
+				return true;
+			}
+			if ( 3 === $try ) {
+				return false;
+			}
+			sleep( 1 );
+		}
+	}
+
+	/**
+	 * Pull on first use; most servers never run a check, so a fresh install doesn't pull it.
+	 *
+	 * @param string $image Image with tag.
+	 *
+	 * @return bool Whether it is present.
+	 */
+	protected function ensure_image( $image ) {
+		if ( 0 === $this->docker( [ 'docker', 'image', 'inspect', '--format', '{{.Id}}', $image ], 60 )['code'] ) {
+			return true;
+		}
+		EE::debug( "Pulling $image." );
+		if ( 0 !== $this->docker( [ 'docker', 'pull', $image ], self::PULL_TIMEOUT )['code'] ) {
+			return false;
+		}
+		$this->remove_other_tags( $image );
+
+		return true;
+	}
+
+	/**
+	 * After pulling a new tag, remove the scanner's other tags that no container uses; failures only cost disk.
+	 *
+	 * @param string $image The pinned image with its tag, never removed.
+	 */
+	protected function remove_other_tags( $image ) {
+		$list = $this->docker( [ 'docker', 'image', 'ls', '--format', '{{.Tag}}', self::IMAGE ], 60 );
+		if ( 0 !== $list['code'] ) {
+			EE::debug( 'Could not list the ' . self::IMAGE . ' tags.' );
+
+			return;
+		}
+		foreach ( array_unique( preg_split( '/\s+/', trim( $list['stdout'] ), -1, PREG_SPLIT_NO_EMPTY ) ) as $tag ) {
+			$old = self::IMAGE . ':' . $tag;
+			if ( $old === $image || ! preg_match( '/^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/', $tag ) ) {
+				continue;
+			}
+			$users = $this->docker( [ 'docker', 'ps', '-a', '-q', '--filter', "ancestor=$old" ], 60 );
+			if ( 0 !== $users['code'] || '' !== trim( $users['stdout'] ) ) {
+				EE::debug( "Keeping $old: a container uses it." );
+				continue;
+			}
+			// Without -f, Docker also refuses an image a container started in the meantime.
+			if ( 0 !== $this->docker( [ 'docker', 'image', 'rm', $old ], 60 )['code'] ) {
+				EE::debug( "Could not remove $old." );
+			}
+		}
+	}
+
+	/**
+	 * This run's /out: a new random directory in a root-only per-site directory, after removing what a killed run left there.
+	 *
+	 * Only called with the site lock held and no container of the site left, so nothing else uses that directory.
+	 *
+	 * @return string|null Its real path.
+	 */
+	protected function make_temp_dir() {
+		$parent = $this->temp_parent();
+		if ( null === $parent ) {
+			return null;
+		}
+		$site_dir = $parent . '/' . $this->site;
+		if ( ! $this->own_dir( $site_dir ) ) {
+			EE::debug( "Refusing $site_dir as a temporary directory: not a directory of this user with mode 0700." );
+
+			return null;
+		}
+
+		foreach ( array_diff( (array) @scandir( $site_dir ), [ '.', '..', false ] ) as $entry ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- an unreadable dir has nothing to remove.
+			EE::debug( "Removing the leftover temporary directory $site_dir/" . self::clean( $entry ) . '.' );
+			// One that can't be removed doesn't block this run: it gets its own directory.
+			$this->remove_tree( "$site_dir/$entry" );
+		}
+
+		$dir = $site_dir . '/' . bin2hex( random_bytes( 8 ) );
+		if ( ! @mkdir( $dir, 0700 ) ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- reported as tool_error.
+			return null;
+		}
+		$this->temp_dir = $dir;
+		$this->register_cleanup();
+		clearstatcache( true, $dir );
+		// Without root (macOS), Docker Desktop's file sharing maps the owner itself.
+		if ( is_link( $dir ) || ! is_dir( $dir ) || ! chmod( $dir, 0700 ) || ( 0 === self::euid() && ! ( chown( $dir, 33 ) && chgrp( $dir, 33 ) ) ) ) {
+			return null;
+		}
+		$real = realpath( $dir );
+		if ( false === $real ) {
+			return null;
+		}
+		$this->temp_dir = $real;
+
+		return $real;
+	}
+
+	/**
+	 * @return string|null EE_ROOT_DIR/tmp/php-compat, checked to be root-only; null when it isn't.
+	 */
+	protected function temp_parent() {
+		$base = rtrim( $this->temp_base(), '/' );
+		foreach ( [ $base, $base . '/' . self::TEMP_DIR ] as $dir ) {
+			if ( ! $this->own_dir( $dir ) ) {
+				EE::debug( "Refusing $dir as a temporary directory: not a directory of this user with mode 0700." );
+
+				return null;
+			}
+		}
+
+		return $base . '/' . self::TEMP_DIR;
+	}
+
+	/**
+	 * Create a directory 0700 when missing, and accept it only as a real directory of this user that no one else can enter.
+	 *
+	 * @param string $dir Path.
+	 *
+	 * @return bool
+	 */
+	protected function own_dir( $dir ) {
+		@mkdir( $dir, 0700 ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- it may exist; checked below.
+		clearstatcache( true, $dir );
+		$stat = @lstat( $dir ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- checked below.
+		$euid = self::euid();
+		if ( ! $stat || 0040000 !== ( $stat['mode'] & 0170000 ) || ( null !== $euid && $stat['uid'] !== $euid ) ) {
+			return false;
+		}
+
+		return 0 === ( $stat['mode'] & 0077 ) || chmod( $dir, 0700 );
+	}
+
+	/**
+	 * Remove a tree without following symlinks: rm's *at() calls also survive a directory swapped mid-way and any depth.
+	 *
+	 * @param string $path Path.
+	 *
+	 * @return bool Whether it is gone.
+	 */
+	protected function remove_tree( $path ) {
+		$argv = ( defined( 'IS_DARWIN' ) && IS_DARWIN ) ? [ 'rm', '-rf', '--', $path ] : [ 'rm', '-rf', '--one-file-system', '--', $path ];
+		$run  = $this->run_process( $argv, 600 );
+		clearstatcache( true, $path );
+		if ( file_exists( $path ) || is_link( $path ) ) {
+			// stderr can hold names chosen inside the container.
+			EE::debug( 'rm: ' . self::clean( trim( $run['stderr'] ) ) );
+
+			return false;
+		}
+
+		return true;
+	}
+
+	/**
+	 * @return string Base directory with a trailing slash.
+	 */
+	protected function temp_base() {
+		return EE_ROOT_DIR . '/tmp/';
+	}
+
+	/**
+	 * Run a docker command without EE::exec()/EE::launch(), which would copy its output into ee.log.
+	 *
+	 * @param string[] $argv     Command and arguments.
+	 * @param int      $timeout  Seconds.
+	 * @param bool     $bounded  Stop it once stdout or stderr passes its cap.
+	 *
+	 * @return array code (int|null), stdout, stderr, timed_out, overflow, signal (int|null).
+	 */
+	protected function docker( array $argv, $timeout, $bounded = false ) {
+		EE::debug( 'COMMAND: ' . implode( ' ', array_map( 'escapeshellarg', $argv ) ) );
+		$run = $this->run_process( $argv, $timeout, $bounded );
+		EE::debug( 'RETURN CODE: ' . var_export( $run['code'], true ) );
+
+		return $run;
+	}
+
+	/**
+	 * @param string[] $argv    Command and arguments.
+	 * @param int      $timeout Seconds.
+	 * @param bool     $bounded Stop it once stdout or stderr passes its cap.
+	 *
+	 * @return array See docker().
+	 */
+	protected function run_process( array $argv, $timeout, $bounded = false ) {
+		$result  = [
+			'code'      => null,
+			'stdout'    => '',
+			'stderr'    => '',
+			'timed_out' => false,
+			'overflow'  => false,
+			'signal'    => null,
+		];
+		$process = new Process( $argv );
+		$process->setTimeout( $timeout );
+		// Process keeps its own copy of all output unless disabled; the callback keeps a capped one.
+		$process->disableOutput();
+		try {
+			$process->start(
+				function ( $type, $buffer ) use ( &$result ) {
+					$key = Process::OUT === $type ? 'stdout' : 'stderr';
+					$max = 'stdout' === $key ? self::STDOUT_MAX : self::STDERR_MAX;
+					// One callback can carry everything a fast writer produced since the last read.
+					$room = $max + 1 - strlen( $result[ $key ] );
+					if ( $room > 0 ) {
+						$result[ $key ] .= substr( $buffer, 0, $room );
+					}
+					if ( strlen( $result[ $key ] ) > $max ) {
+						$result['overflow'] = true;
+					}
+				}
+			);
+			// wait() never dispatches signals, so poll: SIGTERM/SIGINT then reach the command's handlers, whose exit runs cleanup().
+			while ( $process->isRunning() ) {
+				if ( ! $this->cleaning && function_exists( 'pcntl_signal_dispatch' ) ) {
+					null === $this->dispatch ? pcntl_signal_dispatch() : call_user_func( $this->dispatch );
+				}
+				$process->checkTimeout();
+				if ( $bounded && $result['overflow'] ) {
+					$process->stop( 0 );
+
+					return $result;
+				}
+				usleep( 20000 );
+			}
+			$process->wait();
+			$result['code'] = $process->getExitCode();
+		} catch ( ProcessTimedOutException $e ) {
+			$result['timed_out'] = true;
+		} catch ( ProcessSignaledException $e ) {
+			$result['signal'] = $e->getSignal();
+		} catch ( \Exception $e ) {
+			EE::debug( 'Could not run ' . $argv[0] . ': ' . self::clean( $e->getMessage() ) );
+		}
+
+		return $result;
+	}
+
+	/**
+	 * @param string $stdout Container stdout.
+	 *
+	 * @return array|null One JSON object with v and status.
+	 */
+	protected function parse_document( $stdout ) {
+		if ( strlen( $stdout ) > self::STDOUT_MAX ) {
+			return null;
+		}
+		$doc = json_decode( trim( $stdout ), true, 32, self::JSON_UTF8 );
+		if ( ! is_array( $doc ) || array_values( $doc ) === $doc || ! array_key_exists( 'v', $doc ) || ! array_key_exists( 'status', $doc ) ) {
+			return null;
+		}
+
+		return $doc;
+	}
+
+	/**
+	 * @param array $doc Container stdout document.
+	 *
+	 * @return bool
+	 */
+	protected function valid_scan_doc( array $doc ) {
+		if ( 1 !== $doc['v'] || ! in_array( $doc['status'], self::SCAN_STATUSES, true ) ) {
+			return false;
+		}
+		if ( 'tool_error' === $doc['status'] ) {
+			return isset( $doc['detail'] ) && is_string( $doc['detail'] );
+		}
+		if ( 'ok' !== $doc['status'] ) {
+			return true;
+		}
+		if ( ! isset( $doc['target'] ) || $this->target !== $doc['target'] || ! array_key_exists( 'safe_to_upgrade', $doc ) || ! isset( $doc['tool'] ) || ! is_array( $doc['tool'] ) ) {
+			return false;
+		}
+		foreach ( self::SUMMARY_INTS as $key ) {
+			if ( ! isset( $doc[ $key ] ) || ! is_int( $doc[ $key ] ) || $doc[ $key ] < 0 ) {
+				return false;
+			}
+		}
+		if ( $doc['errors'] > 0 ) {
+			$verdict = false;
+		} else {
+			$verdict = $doc['files_not_checked'] > 0 ? null : true;
+		}
+
+		return $verdict === $doc['safe_to_upgrade'];
+	}
+
+	/**
+	 * @param array $doc Container stdout document.
+	 *
+	 * @return bool
+	 */
+	protected function valid_estimate_doc( array $doc ) {
+		if ( 1 !== $doc['v'] || ! in_array( $doc['status'], self::SCAN_STATUSES, true ) ) {
+			return false;
+		}
+		if ( 'tool_error' === $doc['status'] ) {
+			return isset( $doc['detail'] ) && is_string( $doc['detail'] );
+		}
+		if ( 'ok' !== $doc['status'] ) {
+			return true;
+		}
+		if ( ! isset( $doc['estimate'], $doc['target'], $doc['inputs'] ) || true !== $doc['estimate'] || $this->target !== $doc['target'] || ! is_array( $doc['inputs'] ) ) {
+			return false;
+		}
+		foreach ( self::ESTIMATE_INTS as $key ) {
+			if ( ! isset( $doc[ $key ] ) || ! is_int( $doc[ $key ] ) || $doc[ $key ] < 0 ) {
+				return false;
+			}
+		}
+
+		return true;
+	}
+
+	/**
+	 * The report must carry the stdout summary, and its lists must add up to it.
+	 *
+	 * @param array $report Decoded /out/report.json.
+	 * @param array $doc    Validated stdout summary.
+	 *
+	 * @return bool
+	 */
+	protected function valid_report( array $report, array $doc ) {
+		foreach ( $doc as $key => $value ) {
+			if ( ! array_key_exists( $key, $report ) || $report[ $key ] !== $value ) {
+				return false;
+			}
+		}
+		if ( ! isset( $report['components'], $report['not_checked'] ) || ! is_array( $report['components'] ) || ! is_array( $report['not_checked'] ) ) {
+			return false;
+		}
+		if ( count( $report['components'] ) !== $doc['components_checked'] || count( $report['not_checked'] ) !== $doc['files_not_checked'] ) {
+			return false;
+		}
+		$errors      = 0;
+		$warnings    = 0;
+		$with_errors = 0;
+		foreach ( $report['components'] as $component ) {
+			if ( ! is_array( $component ) || ! self::valid_place( $component ) || ! isset( $component['errors'], $component['warnings'], $component['findings'] ) || ! is_int( $component['errors'] ) || ! is_int( $component['warnings'] ) || ! is_array( $component['findings'] ) ) {
+				return false;
+			}
+			foreach ( [ 'name', 'version' ] as $key ) {
+				if ( ! array_key_exists( $key, $component ) || ! ( null === $component[ $key ] || is_string( $component[ $key ] ) ) ) {
+					return false;
+				}
+			}
+			$counts = [
+				'ERROR'   => 0,
+				'WARNING' => 0,
+			];
+			foreach ( $component['findings'] as $finding ) {
+				if ( ! is_array( $finding ) || ! isset( $finding['file'], $finding['line'], $finding['type'], $finding['source'], $finding['message'] ) || ! is_string( $finding['file'] ) || ! is_int( $finding['line'] ) || ! in_array( $finding['type'], [ 'ERROR', 'WARNING' ], true ) || ! is_string( $finding['source'] ) || ! is_string( $finding['message'] ) ) {
+					return false;
+				}
+				++$counts[ $finding['type'] ];
+			}
+			// Every error and warning is listed, so the component's counts are its findings'.
+			if ( $counts['ERROR'] !== $component['errors'] || $counts['WARNING'] !== $component['warnings'] ) {
+				return false;
+			}
+			$errors      += $component['errors'];
+			$warnings    += $component['warnings'];
+			$with_errors += $component['errors'] > 0 ? 1 : 0;
+		}
+		foreach ( $report['not_checked'] as $entry ) {
+			if ( ! is_array( $entry ) || ! self::valid_place( $entry ) || ! isset( $entry['file'], $entry['reason'] ) || ! is_string( $entry['file'] ) || ! is_string( $entry['reason'] ) ) {
+				return false;
+			}
+		}
+
+		return $errors === $doc['errors'] && $warnings === $doc['warnings'] && $with_errors === $doc['components_with_errors'];
+	}
+
+	/**
+	 * @param array $item Component or not_checked entry.
+	 *
+	 * @return bool Whether type, slug and branch have the right types.
+	 */
+	private static function valid_place( array $item ) {
+		return isset( $item['type'], $item['slug'] ) && is_string( $item['type'] ) && is_string( $item['slug'] ) && array_key_exists( 'branch', $item ) && ( null === $item['branch'] || is_string( $item['branch'] ) );
+	}
+
+	/**
+	 * Upper bound of what json_decode() allocates: a non-empty array or object costs far more than its bytes.
+	 *
+	 * @param string $raw JSON.
+	 *
+	 * @return int Bytes.
+	 */
+	protected static function decode_cost( $raw ) {
+		$nodes = substr_count( $raw, '{' ) + substr_count( $raw, '[' );
+
+		// Measured on 7.4 and 8.5: up to ~450 per array or object, ~80 per element (hash growth), ~40 per string, plus the bytes.
+		return strlen( $raw ) + $nodes * 450 + ( substr_count( $raw, ',' ) + $nodes ) * 80 + (int) ( substr_count( $raw, '"' ) / 2 ) * 40;
+	}
+
+	/**
+	 * @return int Bytes the report may still take: up to MEMORY_FLOOR when there is no limit.
+	 */
+	protected function memory_available() {
+		$limit = self::bytes( ini_get( 'memory_limit' ) );
+
+		return ( $limit > 0 ? $limit : self::MEMORY_FLOOR ) - memory_get_usage();
+	}
+
+	/**
+	 * Write the report as root, 0600, through a temporary file and a rename, into the directory validated at the start.
+	 *
+	 * @param string $path    --output.
+	 * @param string $content Report, byte for byte.
+	 *
+	 * @return bool
+	 */
+	protected function write_report( $path, $content ) {
+		$dir = $this->output_dir['path'];
+		if ( ! $this->output_dir_unchanged( $path ) ) {
+			EE::debug( "The directory of $path changed during the check." );
+
+			return false;
+		}
+		$tmp = @tempnam( $dir, '.ee-php-compat-' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- checked below.
+		if ( false === $tmp ) {
+			return false;
+		}
+		$this->output_tmp = $tmp;
+		$written          = @file_put_contents( $tmp, $content ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- checked below.
+		// Checked again right before the rename, so a directory swapped for a symlink meanwhile isn't written through.
+		$ok = realpath( dirname( $tmp ) ) === $dir && strlen( $content ) === $written && chmod( $tmp, 0600 ) && ( 0 !== self::euid() || ( chown( $tmp, 0 ) && chgrp( $tmp, 0 ) ) ) && $this->output_dir_unchanged( $path ) && @rename( $tmp, $dir . '/' . basename( $path ) ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- reported as tool_error.
+		if ( ! $ok ) {
+			@unlink( $tmp ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged
+		}
+		$this->output_tmp = null;
+
+		return $ok;
+	}
+
+	/**
+	 * @param string $path --output.
+	 *
+	 * @return bool Whether its directory still resolves to the one validated at the start.
+	 */
+	protected function output_dir_unchanged( $path ) {
+		clearstatcache();
+		$real = realpath( dirname( $path ) );
+		$stat = false === $real ? false : @stat( $real ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- checked below.
+
+		return $real === $this->output_dir['path'] && $stat && $stat['dev'] === $this->output_dir['dev'] && $stat['ino'] === $this->output_dir['ino'];
+	}
+
+	/**
+	 * Container scan summary to print: findings never, `site` always.
+	 *
+	 * @param array $doc Validated stdout summary.
+	 *
+	 * @return array
+	 */
+	protected function summary( array $doc ) {
+		return $this->with_site( self::pick( $doc, self::SUMMARY_KEYS ) );
+	}
+
+	/**
+	 * Only the documented keys, in their order; tool strings and estimate input numbers only.
+	 *
+	 * @param array    $doc  Validated document.
+	 * @param string[] $keys Keys to keep.
+	 *
+	 * @return array
+	 */
+	protected static function pick( array $doc, array $keys ) {
+		$picked = [];
+		foreach ( $keys as $key ) {
+			if ( array_key_exists( $key, $doc ) ) {
+				$picked[ $key ] = $doc[ $key ];
+			}
+		}
+		if ( isset( $picked['tool'] ) ) {
+			$picked['tool'] = array_filter( array_intersect_key( $picked['tool'], array_flip( self::TOOL_KEYS ) ), 'is_string' );
+		}
+		if ( isset( $picked['inputs'] ) ) {
+			$picked['inputs'] = array_filter(
+				array_intersect_key( $picked['inputs'], array_flip( self::INPUT_KEYS ) ),
+				function ( $value ) {
+					return is_int( $value ) || is_float( $value );
+				}
+			);
+		}
+
+		return $picked;
+	}
+
+	/**
+	 * Put `site` after v, status and estimate, whatever the container sent.
+	 *
+	 * @param array $doc Document.
+	 *
+	 * @return array
+	 */
+	protected function with_site( array $doc ) {
+		$head = [
+			'v'      => $doc['v'],
+			'status' => $doc['status'],
+		];
+		if ( array_key_exists( 'estimate', $doc ) ) {
+			$head['estimate'] = $doc['estimate'];
+		}
+		$head['site'] = $this->site;
+
+		return $head + $doc;
+	}
+
+	/**
+	 * A document other than `ok`: only v, status, site, target, safe_to_upgrade and, for tool_error, detail.
+	 *
+	 * @param string      $status busy, no_code_found or tool_error.
+	 * @param string|null $detail tool_error only.
+	 *
+	 * @return array 'doc' and 'report'.
+	 */
+	protected function doc( $status, $detail = null ) {
+		$doc = [
+			'v'      => 1,
+			'status' => $status,
+		];
+		if ( $this->estimate ) {
+			$doc['estimate'] = true;
+		}
+		$doc += [
+			'site'            => $this->site,
+			'target'          => $this->target,
+			'safe_to_upgrade' => null,
+		];
+		if ( 'tool_error' === $status ) {
+			$doc['detail'] = (string) $detail;
+		}
+
+		return [
+			'doc'    => $doc,
+			'report' => null,
+		];
+	}
+
+	/**
+	 * Detail of a tool_error EE reports for the container: its exit code and, for Docker's own errors, Docker's message.
+	 *
+	 * @param array  $run  docker() result.
+	 * @param string $what What was missing.
+	 *
+	 * @return string
+	 */
+	protected static function exit_detail( array $run, $what ) {
+		if ( ! empty( $run['overflow'] ) ) {
+			return 'the scanner printed more output than a result can have';
+		}
+		if ( ! empty( $run['signal'] ) ) {
+			return "the scanner was interrupted by signal {$run['signal']}";
+		}
+		if ( null === $run['code'] ) {
+			return 'the scanner could not be started';
+		}
+		$detail = "the scanner exited with code {$run['code']} $what";
+		// 125-127 come from Docker itself, not from the scanned code.
+		if ( in_array( $run['code'], [ 125, 126, 127 ], true ) && '' !== trim( $run['stderr'] ) ) {
+			$line    = strtok( trim( $run['stderr'] ), "\n" );
+			$detail .= ': ' . self::clean( strlen( $line ) > 300 ? substr( $line, 0, 300 ) . '...' : $line );
+		}
+
+		return $detail;
+	}
+
+	/**
+	 * The table, for tests and callers that want one string.
+	 *
+	 * @param array      $doc    Summary.
+	 * @param array|null $report Decoded report (ok only).
+	 *
+	 * @return string
+	 */
+	protected function table( array $doc, $report ) {
+		return implode( "\n", iterator_to_array( $this->table_lines( $doc, $report ), false ) ) . "\n";
+	}
+
+	/**
+	 * @param array      $doc    Summary.
+	 * @param array|null $report Decoded report (ok only).
+	 *
+	 * @return \Generator Lines without newlines.
+	 */
+	protected function table_lines( array $doc, $report ) {
+		$site   = $this->site;
+		$target = $this->target;
+		switch ( $doc['status'] ) {
+			case 'busy':
+				yield "A check of $site is already running.";
+				return;
+			case 'no_code_found':
+				yield "No PHP code found to check in $site.";
+				return;
+			case 'tool_error':
+				yield "The check of $site for PHP $target didn't finish: " . self::clean( $doc['detail'] );
+				return;
+		}
+
+		$tail = sprintf( '%s. %s checked.', self::count_of( $doc['warnings'], 'warning' ), self::count_of( $doc['files_checked'], 'file' ) );
+		if ( false === $doc['safe_to_upgrade'] ) {
+			yield sprintf( 'Not safe to upgrade %s to PHP %s: %s in %s. %s', $site, $target, self::count_of( $doc['errors'], 'error' ), self::count_of( $doc['components_with_errors'], 'component' ), $tail );
+		} elseif ( true === $doc['safe_to_upgrade'] ) {
+			yield sprintf( 'Safe to upgrade %s to PHP %s: 0 errors. %s', $site, $target, $tail );
+		} else {
+			$could = 1 === $doc['files_not_checked'] ? 'file couldn\'t' : 'files couldn\'t';
+			yield sprintf( 'Can\'t confirm %s is safe for PHP %s: %d %s be checked. %s', $site, $target, $doc['files_not_checked'], $could, $tail );
+		}
+		yield '';
+
+		$warnings_only = [];
+		foreach ( $report['components'] as $component ) {
+			if ( $component['errors'] > 0 ) {
+				yield sprintf( '%s: %s, %s', self::component_heading( $component ), self::count_of( $component['errors'], 'error' ), self::count_of( $component['warnings'], 'warning' ) );
+				foreach ( $component['findings'] as $finding ) {
+					if ( 'ERROR' !== $finding['type'] ) {
+						continue;
+					}
+					yield '  ' . self::clean( $finding['file'] ) . ':' . $finding['line'];
+					yield '    ' . self::clean( $finding['message'] );
+					yield '    ' . self::clean( $finding['source'] );
+				}
+				yield '';
+			} elseif ( $component['warnings'] > 0 ) {
+				$warnings_only[] = self::component_name( $component ) . ' (' . $component['warnings'] . ')';
+			}
+		}
+		if ( $warnings_only ) {
+			yield 'Warnings only: ' . implode( ', ', $warnings_only );
+			yield '';
+		}
+
+		if ( $report['not_checked'] ) {
+			yield 'Not checked:';
+			foreach ( $report['not_checked'] as $entry ) {
+				yield '  ' . self::place( $entry ) . ': ' . self::clean( $entry['file'] ) . ' (' . self::clean( $entry['reason'] ) . ')';
+			}
+			yield '';
+		}
+
+		if ( isset( $doc['report'] ) ) {
+			yield 'Full report: ' . $doc['report'];
+			yield '';
+		}
+
+		$tool = isset( $doc['tool']['phpcompatibility'] ) && is_string( $doc['tool']['phpcompatibility'] ) ? ' ' . self::clean( $doc['tool']['phpcompatibility'] ) : '';
+		yield "This is static analysis with PHPCompatibility$tool. Its coverage isn't complete and it can't see breakage that only shows at runtime.";
+	}
+
+	/**
+	 * @param array $doc Estimate document.
+	 *
+	 * @return string
+	 */
+	protected function estimate_text( array $doc ) {
+		$site   = $this->site;
+		$target = $this->target;
+		switch ( $doc['status'] ) {
+			case 'busy':
+				return "An estimate for $site is already running.\n";
+			case 'no_code_found':
+				return "No PHP code found to check in $site.\n";
+			case 'tool_error':
+				return "Couldn't estimate a check of $site for PHP $target: " . self::clean( $doc['detail'] ) . "\n";
+		}
+
+		return sprintf(
+			"A check of %s for PHP %s should take %s: %s, %s, %s. This is an estimate.\n",
+			$site,
+			$target,
+			self::duration( $doc['estimated_seconds'], $doc['estimated_seconds_low'], $doc['estimated_seconds_high'] ),
+			self::count_of( $doc['php_files'], 'PHP file', true ),
+			self::size( $doc['php_bytes'] ),
+			self::count_of( $doc['components'], 'component', true )
+		);
+	}
+
+	/**
+	 * "about 3 minutes (2 to 4)", in one unit for all three.
+	 *
+	 * @return string
+	 */
+	public static function duration( $seconds, $low, $high ) {
+		if ( $high < 120 ) {
+			list( $unit, $name, $precision ) = [ 1, 'second', 0 ];
+		} elseif ( $seconds < 5400 ) {
+			list( $unit, $name, $precision ) = [ 60, 'minute', 0 ];
+		} else {
+			list( $unit, $name, $precision ) = [ 3600, 'hour', 1 ];
+		}
+		$value = function ( $s ) use ( $unit, $precision ) {
+			return max( $precision ? 0.1 : 1, round( $s / $unit, $precision ) );
+		};
+		$main = $value( $seconds );
+
+		return sprintf( 'about %s %s%s (%s to %s)', $main, $name, 1 == $main ? '' : 's', $value( $low ), $value( $high ) );
+	}
+
+	/**
+	 * @return string "87 MB", "6.9 MB", "512 KB".
+	 */
+	public static function size( $bytes ) {
+		$mb = $bytes / 1048576;
+		if ( $mb >= 10 ) {
+			return round( $mb ) . ' MB';
+		}
+		if ( $mb >= 1 ) {
+			return round( $mb, 1 ) . ' MB';
+		}
+
+		return max( 1, (int) round( $bytes / 1024 ) ) . ' KB';
+	}
+
+	/**
+	 * @return string "1 error", "3 errors", "14,614 PHP files".
+	 */
+	protected static function count_of( $n, $noun, $separators = false ) {
+		return ( $separators ? number_format( $n ) : $n ) . " $noun" . ( 1 === $n ? '' : 's' );
+	}
+
+	/**
+	 * @return string "WPForms Lite 1.9.2 (plugin wpforms-lite)", "mu-plugins (mu-plugin)".
+	 */
+	protected static function component_heading( array $component ) {
+		$detail = $component['type'];
+		if ( null !== $component['name'] && '' !== $component['slug'] ) {
+			$detail .= ' ' . $component['slug'];
+		}
+		if ( null !== $component['branch'] ) {
+			$detail .= ', branch ' . $component['branch'];
+		}
+
+		return self::component_name( $component ) . ' (' . self::clean( $detail ) . ')';
+	}
+
+	/**
+	 * @return string Name and version, or the slug, or "other files".
+	 */
+	protected static function component_name( array $component ) {
+		if ( null !== $component['name'] && '' !== $component['name'] ) {
+			$name = $component['name'];
+		} else {
+			$name = '' !== $component['slug'] ? $component['slug'] : 'other files';
+		}
+		if ( null !== $component['version'] && '' !== $component['version'] ) {
+			$name .= ' ' . $component['version'];
+		}
+
+		return self::clean( $name );
+	}
+
+	/**
+	 * @return string "plugin huge-plugin", "other, branch main".
+	 */
+	protected static function place( array $entry ) {
+		$place = $entry['type'] . ( '' !== $entry['slug'] ? ' ' . $entry['slug'] : '' ) . ( null !== $entry['branch'] ? ', branch ' . $entry['branch'] : '' );
+
+		return self::clean( $place );
+	}
+
+	/**
+	 * Text from the scanned code must not drive the terminal: control, bidi and zero-width characters become '?'.
+	 *
+	 * @param string $text Text.
+	 *
+	 * @return string
+	 */
+	public static function clean( $text ) {
+		$text = (string) $text;
+		// Invalid UTF-8 would make the /u pattern fail, and a raw 0x9B byte is a C1 CSI.
+		if ( ! preg_match( '//u', $text ) ) {
+			$text = preg_replace( '/[\x80-\xFF]/', '?', $text );
+		}
+
+		return preg_replace( '/[\x00-\x1F\x7F' . self::UNSAFE_CHARS . ']/u', '?', $text );
+	}
+
+	/**
+	 * One line of JSON, with characters a terminal would act on escaped (the data stays the same).
+	 *
+	 * @return string
+	 */
+	public static function encode( array $doc ) {
+		$json = json_encode( $doc, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | self::JSON_UTF8 );
+
+		return preg_replace_callback(
+			'/[' . self::UNSAFE_CHARS . ']/u',
+			function ( $char ) {
+				return substr( json_encode( $char[0] ), 1, -1 );
+			},
+			$json
+		);
+	}
+
+	/**
+	 * Command, target, duration, verdict and counts only; findings and details never reach ee.log.
+	 *
+	 * @param array $doc     Printed document.
+	 * @param float $elapsed Seconds.
+	 */
+	protected function log_result( array $doc, $elapsed ) {
+		$counts = '';
+		$keys   = $this->estimate ? [ 'php_files', 'php_bytes', 'components', 'estimated_seconds' ] : [ 'errors', 'warnings', 'files_checked', 'files_not_checked', 'components_with_errors' ];
+		foreach ( $keys as $key ) {
+			if ( isset( $doc[ $key ] ) && is_int( $doc[ $key ] ) ) {
+				$counts .= ", $key {$doc[ $key ]}";
+			}
+		}
+		EE::debug(
+			sprintf(
+				'php-compat %s of %s for PHP %s: status %s, safe_to_upgrade %s%s, %d s.',
+				$this->estimate ? 'estimate' : 'scan',
+				$this->site,
+				$this->target,
+				$doc['status'],
+				var_export( isset( $doc['safe_to_upgrade'] ) ? $doc['safe_to_upgrade'] : null, true ),
+				$counts,
+				(int) round( $elapsed )
+			)
+		);
+	}
+
+	/**
+	 * @param string|false $value php.ini size such as 128M.
+	 *
+	 * @return int Bytes; -1 for no limit.
+	 */
+	protected static function bytes( $value ) {
+		$value = trim( (string) $value );
+		if ( '-1' === $value || '' === $value ) {
+			return -1;
+		}
+		$bytes = (int) $value;
+		switch ( strtolower( substr( $value, -1 ) ) ) {
+			case 'g':
+				$bytes *= 1024;
+				// Fall through.
+			case 'm':
+				$bytes *= 1024;
+				// Fall through.
+			case 'k':
+				$bytes *= 1024;
+		}
+
+		return $bytes;
+	}
+
+	/**
+	 * Raise PHP's memory limit to at least MEMORY_FLOOR before reading a report.
+	 */
+	protected static function raise_memory_limit() {
+		$limit = self::bytes( ini_get( 'memory_limit' ) );
+		if ( $limit > 0 && $limit < self::MEMORY_FLOOR ) {
+			ini_set( 'memory_limit', (string) self::MEMORY_FLOOR );
+		}
+	}
+
+	/**
+	 * With --format=json stdout holds the document or nothing: a signal ends the run in rollback(), whose "Success:" line goes to stderr instead.
+	 */
+	protected static function keep_stdout_for_json() {
+		$runner = EE::get_runner();
+		if ( ! empty( $runner->config['quiet'] ) ) {
+			return;
+		}
+		EE::set_logger(
+			new class( $runner->in_color() ) extends \EE\Loggers\Regular {
+				public function info( $message ) {
+					$this->write( STDERR, $message . "\n" );
+				}
+
+				public function success( $message ) {
+					$this->_line( $message, 'Success', '%G', STDERR );
+				}
+			}
+		);
+	}
+
+	/**
+	 * @return int|null Effective uid, null without the posix extension.
+	 */
+	protected static function euid() {
+		return function_exists( 'posix_geteuid' ) ? posix_geteuid() : null;
+	}
+
+	protected function register_cleanup() {
+		if ( ! $this->cleanup_registered ) {
+			$this->cleanup_registered = true;
+			// EE::error() exits without running finally blocks. EE_Site_Command::shut_down_function() also calls cleanup(), before its rollback() exits.
+			register_shutdown_function( [ $this, 'cleanup' ] );
+		}
+	}
+
+	/**
+	 * Remove a scan container that may still exist, then, once it is gone, the temporary directory; release the lock. Safe to call twice.
+	 */
+	public function cleanup() {
+		$this->cleaning = true;
+		if ( null !== $this->active_container ) {
+			$name                   = $this->active_container;
+			$this->active_container = null;
+			// /out is the container's until it is gone: never remove it under a running one.
+			if ( ! $this->container_gone( $name ) && null !== $this->temp_dir ) {
+				EE::warning( "Left {$this->temp_dir} in place: the container $name could not be removed." );
+				$this->temp_dir = null;
+			}
+		}
+		if ( null !== $this->temp_dir ) {
+			$dir            = $this->temp_dir;
+			$this->temp_dir = null;
+			if ( $this->remove_tree( $dir ) ) {
+				// The per-site directory, once empty.
+				@rmdir( dirname( $dir ) ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- a leftover in it keeps it.
+			} else {
+				EE::warning( "Could not remove $dir." );
+			}
+		}
+		if ( null !== $this->output_tmp ) {
+			@unlink( $this->output_tmp ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged
+			$this->output_tmp = null;
+		}
+		if ( null !== $this->lock ) {
+			flock( $this->lock, LOCK_UN );
+			fclose( $this->lock );
+			$this->lock = null;
+		}
+		$this->cleaning = false;
+	}
+}
