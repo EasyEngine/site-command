@@ -4,6 +4,9 @@ services:
   {{#service_name}}
   {{name}}:
   {{/service_name}}
+    {{#container_name}}
+    container_name: {{container_name}}
+    {{/container_name}}
     {{#image}}
     image: {{name}}
     {{/image}}
