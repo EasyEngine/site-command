@@ -638,7 +638,7 @@ abstract class EE_Site_Command {
 			// LE sites drop HTTPS here for the HTTP-01 challenge; the renewal below turns it back on, other SSL types keep theirs.
 			$nohttps                          = ! $is_ssl || $pending_le || ( 'le' === $this->site_data['site_ssl'] && 'dns' !== $preferred_ssl_challenge );
 			$this->dump_docker_compose_yml( [ 'nohttps' => $nohttps ] );
-			\EE_DOCKER::docker_compose_up( $this->site_data['site_fs_path'], [ 'nginx' ] );
+			\EE\Site\Utils\up_site_containers( $this->site_data['site_fs_path'], [ 'nginx' ] );
 		} catch ( \Exception $e ) {
 			if ( $pre_hook_fired ) {
 				/**
@@ -708,7 +708,7 @@ abstract class EE_Site_Command {
 
 		chdir( $this->site_data['site_fs_path'] );
 		// Required as env variables have changed.
-		\EE_DOCKER::docker_compose_up( $this->site_data['site_fs_path'], [ 'nginx' ] );
+		\EE\Site\Utils\up_site_containers( $this->site_data['site_fs_path'], [ 'nginx' ] );
 		EE::success( 'Alias domains updated on site ' . $this->site_data['site_url'] . '.' );
 
 		try {
@@ -1075,7 +1075,7 @@ abstract class EE_Site_Command {
 			EE::warning( "Could not restore docker-compose.yml to PHP $old_version ({$e->getMessage()}). $manual" );
 		}
 
-		if ( $rollback['stopped'] && ! \EE_DOCKER::docker_compose_up( $site_fs_path, [ 'php' ] ) ) {
+		if ( $rollback['stopped'] && ! \EE\Site\Utils\up_site_containers( $site_fs_path, [ 'php' ] ) ) {
 			EE::warning( "Could not start the php container again. $manual" );
 		}
 	}
@@ -1407,7 +1407,7 @@ abstract class EE_Site_Command {
 			}
 		}
 
-		if ( \EE_DOCKER::docker_compose_up( $this->site_data->site_fs_path, $containers_to_start ) ) {
+		if ( \EE\Site\Utils\up_site_containers( $this->site_data->site_fs_path, $containers_to_start ) ) {
 			$this->site_data->site_enabled = 1;
 			$this->site_data->save();
 			$success = true;
