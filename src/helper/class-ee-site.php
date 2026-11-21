@@ -2081,7 +2081,7 @@ abstract class EE_Site_Command {
 
 			return;
 		}
-		$api_key_absent = empty( get_config_value( 'cloudflare-api-key' ) );
+		$api_key_absent = empty( get_config_value( 'cloudflare-api-key' ) ) &&  empty ( get_config_value( 'cloudflare-api-token' ) );
 		if ( $is_solver_dns && $api_key_absent ) {
 			echo \cli\Colors::colorize( '%YIMPORTANT:%n Run `ee site ssl-verify ' . $site_url . '` once the DNS changes have propagated to complete the certification generation and installation.', null ) . PHP_EOL;
 		} else {
@@ -2247,7 +2247,7 @@ abstract class EE_Site_Command {
 
 		// This checks if this method was called internally by ee or by user
 		$called_by_ee   = ! empty( $this->site_data['site_url'] );
-		$api_key_absent = empty( get_config_value( 'cloudflare-api-key' ) );
+		$api_key_absent = empty( get_config_value( 'cloudflare-api-key' ) ) &&  empty ( get_config_value( 'cloudflare-api-token' ) );
 
 		if ( ! $called_by_ee ) {
 			$this->site_data = get_site_info( $args );
@@ -2285,7 +2285,7 @@ abstract class EE_Site_Command {
 
 		if ( ! $client->check( $domains, $this->site_data['site_ssl_wildcard'], $preferred_challenge ) ) {
 			$is_solver_dns   = ( $this->site_data['site_ssl_wildcard'] || 'dns' === $preferred_challenge ) ? true : false;
-			$api_key_present = ! empty( get_config_value( 'cloudflare-api-key' ) );
+			$api_key_present = ! empty( get_config_value( 'cloudflare-api-key' ) ) &&  ! empty ( get_config_value( 'cloudflare-api-token' ) );
 
 			if ( $is_solver_dns && $api_key_present ) {
 				EE::warning( 'The DNS records have not propagated yet. Check them with `host -t TXT _acme-challenge.' . $this->site_data['site_url'] . '`.' );
@@ -2553,7 +2553,7 @@ abstract class EE_Site_Command {
 
 		if ( $all ) {
 			$sites                 = Site::all();
-			$api_key_absent        = empty( get_config_value( 'cloudflare-api-key' ) );
+			$api_key_absent        = empty( get_config_value( 'cloudflare-api-key' ) ) &&  empty ( get_config_value( 'cloudflare-api-token' ) );
 			$skip_wildcard_warning = false;
 			foreach ( $sites as $site ) {
 				if ( 'le' !== $site->site_ssl || ! $site->site_enabled ) {
