@@ -62,3 +62,10 @@ Feature: Restart and reload site services
     When I write "# Custom Nginx configuration can be put here\n" to the file "{SITES_DIR}/bh-site-command-58.test/config/nginx/custom/user.conf"
     And I run 'bin/ee site reload bh-site-command-58.test'
     Then the command should succeed
+
+  Scenario: Reload fails when the nginx config test fails
+    Given the html site "bh-site-command-57.test" exists
+    And I write "# Custom Nginx configuration can be put here\nbh_invalid_directive on;\n" to the file "{SITES_DIR}/bh-site-command-57.test/config/nginx/custom/user.conf"
+    When I run 'bin/ee site reload bh-site-command-57.test'
+    And I write "# Custom Nginx configuration can be put here\n" to the file "{SITES_DIR}/bh-site-command-57.test/config/nginx/custom/user.conf"
+    Then the command should fail

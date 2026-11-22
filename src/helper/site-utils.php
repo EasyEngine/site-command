@@ -848,6 +848,8 @@ function stop_site_containers( $site_fs_path, $containers ) {
  * @param string $container          The container on which action has to be run.
  * @param string $action_to_display  The action message to be displayed.
  * @param string $service_to_display The service message to be displayed.
+ *
+ * @return bool Whether docker-compose exited with 0.
  */
 function run_compose_command( $action, $container, $action_to_display = null, $service_to_display = null ) {
 
@@ -855,7 +857,29 @@ function run_compose_command( $action, $container, $action_to_display = null, $s
 	$display_service = $service_to_display ? $service_to_display : $container;
 
 	EE::log( ucfirst( $display_action ) . 'ing ' . $display_service );
-	EE::exec( \EE_DOCKER::docker_compose_with_custom() . " $action $container", true, true );
+
+	return EE::exec( \EE_DOCKER::docker_compose_with_custom() . " $action $container", true, true );
+}
+
+/**
+ * Call $fn with EE::error() and EE::halt() throwing instead of exiting, for a step after a change that is already done.
+ *
+ * @param callable $fn Step to run.
+ *
+ * @return bool False when the step exited with a non-zero code.
+ */
+function run_without_exit( callable $fn ) {
+
+	$previous = EE::set_capture_exit( true );
+	try {
+		$fn();
+	} catch ( \EE\ExitException $e ) {
+		return 0 === $e->getCode();
+	} finally {
+		EE::set_capture_exit( $previous );
+	}
+
+	return true;
 }
 
 /**

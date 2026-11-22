@@ -124,7 +124,7 @@ Legend: covered / partial / not covered (reason). Feature files are abbreviated:
 | restart (no flag, `--nginx`, `--all`), unknown service flag | covered | rr: Restart the site containers (outline); Restart rejects services... |
 | restart refuses a broken nginx config | covered | rr: Restart refuses a broken nginx config and keeps the site serving |
 | reload (no flag, `--nginx`, `--all`), custom config applied | covered | rr: Reload nginx... (outline); Custom nginx config is applied on reload |
-| reload with a broken config | not covered yet | reload exits 0 when `nginx -t` fails (its scenario comes back with the fix) |
+| reload with a broken config | covered | rr: Reload fails when the nginx config test fails |
 | `custom-compose` config branch of restart/enable | not covered | needs a custom compose setup (config change) |
 | clean: no flags, `--object`, `--page`, `--proxy` without proxy cache | covered | clean: first four scenarios |
 | clean `--proxy` with proxy cache | covered (@destructive, regression check for the purge without a terminal) | clean: Cleaning the proxy cache empties it |
@@ -224,10 +224,10 @@ DB and container migrations under `migrations/` (core upgrade flow), the AcmePhp
 
 ## Coverage estimate
 
-Counting the rows above as items: 124 items, 91 covered, 1 partial, 32 not covered (8 of them, marked "not covered yet", are open bugs whose scenarios come back with their fixes), i.e. about 73% of the inventory. Every user-facing subcommand and option of the html type has at least one scenario except `ssl-renew --force`, `clone --ssl/--wildcard` and a live `share`.
+Counting the rows above as items: 124 items, 92 covered, 1 partial, 31 not covered (7 of them, marked "not covered yet", are open bugs whose scenarios come back with their fixes), i.e. about 74% of the inventory. Every user-facing subcommand and option of the html type has at least one scenario except `ssl-renew --force`, `clone --ssl/--wildcard` and a live `share`.
 
 ## Known bugs left out
 
-13 scenarios that expose open bugs are not part of this suite; each comes back with the PR that fixes its bug. They cover: the www redirect of a site whose next label starts with `w`, and the redirect after re-enabling a site when the www check fails; the owner lookup of an alias that contains another alias; `update --ssl=inherit` skipping the parent check; the inherit error message dumping the parent site object; the self-signed certificate leaving out alias domains; `ssl-info --get-dns-records` on self-signed sites; `ssl-verify` on a valid Let's Encrypt site; `site reload` exiting 0 when `nginx -t` fails; `site clean` without flags on html sites; invalid `--proxy-cache` values; the removed EE v3 cache flags message; and `update --php` on html sites failing late.
+12 scenarios that expose open bugs are not part of this suite; each comes back with the PR that fixes its bug. They cover: the www redirect of a site whose next label starts with `w`, and the redirect after re-enabling a site when the www check fails; the owner lookup of an alias that contains another alias; `update --ssl=inherit` skipping the parent check; the inherit error message dumping the parent site object; the self-signed certificate leaving out alias domains; `ssl-info --get-dns-records` on self-signed sites; `ssl-verify` on a valid Let's Encrypt site; `site clean` without flags on html sites; invalid `--proxy-cache` values; the removed EE v3 cache flags message; and `update --php` on html sites failing late.
 
 PRs that change what passing scenarios assert, to revisit when they merge: EasyEngine/site-command#480 keeps `<site>.lock` after a successful backup/restore (drop the two "lock should not exist" lines in backup).
