@@ -699,6 +699,19 @@ class FeatureContext implements Context
 	}
 
 	/**
+	 * Strict: "should be" reads null and "" alike.
+	 *
+	 * @Then /^the JSON field "([^"]*)" in STDOUT should be null$/
+	 */
+	public function theJsonFieldShouldBeNull( $path )
+	{
+		$actual = $this->json_path( $this->decode_stdout_json(), $path );
+		if ( null !== $actual ) {
+			throw new Exception( sprintf( "Expected JSON field %s to be null, got %s.\n%s", $path, var_export( $actual, true ), $this->describe( $this->last_command() ) ) );
+		}
+	}
+
+	/**
 	 * @Then /^the JSON field "([^"]*)" in STDOUT should contain "(.*)"$/
 	 */
 	public function theJsonFieldShouldContain( $path, $expected )

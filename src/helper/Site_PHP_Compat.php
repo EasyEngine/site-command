@@ -189,6 +189,10 @@ class Site_PHP_Compat {
 		if ( false === $dir || ! is_dir( $dir ) ) {
 			EE::error( 'The directory of --output does not exist: ' . dirname( $output ) );
 		}
+		// Another user who can rename entries there could redirect the root-owned write.
+		if ( ! $this->trusted_dir( $dir ) ) {
+			EE::error( "--output must be in a directory only root can change: $dir or one of its parents is owned by another user or writable by others." );
+		}
 		if ( is_dir( $output ) && ! is_link( $output ) ) {
 			EE::error( "--output is a directory: $output" );
 		}
@@ -932,20 +936,63 @@ class Site_PHP_Compat {
 
 			return false;
 		}
-		$tmp = @tempnam( $dir, '.ee-php-compat-' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- checked below.
-		if ( false === $tmp ) {
+		$tmp = $dir . '/.ee-php-compat-' . bin2hex( random_bytes( 8 ) );
+		// 'x' (O_EXCL) never follows or reuses an entry, and the file is written through this handle only, never reopened by name.
+		$mask   = umask( 0077 );
+		$handle = @fopen( $tmp, 'x' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- checked below.
+		umask( $mask );
+		if ( false === $handle ) {
 			return false;
 		}
 		$this->output_tmp = $tmp;
-		$written          = @file_put_contents( $tmp, $content ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- checked below.
-		// Checked again right before the rename, so a directory swapped for a symlink meanwhile isn't written through.
-		$ok = realpath( dirname( $tmp ) ) === $dir && strlen( $content ) === $written && chmod( $tmp, 0600 ) && ( 0 !== self::euid() || ( chown( $tmp, 0 ) && chgrp( $tmp, 0 ) ) ) && $this->output_dir_unchanged( $path ) && @rename( $tmp, $dir . '/' . basename( $path ) ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- reported as tool_error.
+		$written          = 0;
+		while ( $written < strlen( $content ) ) {
+			$chunk = fwrite( $handle, substr( $content, $written, 1048576 ) );
+			if ( ! $chunk ) {
+				break;
+			}
+			$written += $chunk;
+		}
+		$ok     = strlen( $content ) === $written && fflush( $handle );
+		$file   = fstat( $handle );
+		$target = $dir . '/' . basename( $path );
+		// lchown/lchgrp never follow a link (a setgid directory gives the file its group); the directory is checked again right before the rename.
+		$ok = $ok && ( 0 !== self::euid() || ( @lchown( $tmp, 0 ) && @lchgrp( $tmp, 0 ) ) ) && $this->output_dir_unchanged( $path ) && @rename( $tmp, $target ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- reported as tool_error.
 		if ( ! $ok ) {
 			@unlink( $tmp ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged
 		}
 		$this->output_tmp = null;
+		if ( $ok ) {
+			clearstatcache( true, $target );
+			$published = @lstat( $target ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- checked below.
+			// What was renamed must be the file written above; the open handle keeps its inode number from being reused.
+			$ok = $published && $file && 0100000 === ( $published['mode'] & 0170000 ) && $published['dev'] === $file['dev'] && $published['ino'] === $file['ino'];
+		}
+		fclose( $handle );
 
 		return $ok;
+	}
+
+	/**
+	 * @param string $dir Real path of a directory.
+	 *
+	 * @return bool Whether no other user can change its entries or those of its parents: each is owned by root or this user, and not group- or world-writable unless sticky.
+	 */
+	protected function trusted_dir( $dir ) {
+		$euid = self::euid();
+		for ( $path = $dir; ; $path = dirname( $path ) ) {
+			clearstatcache( true, $path );
+			$stat = @lstat( $path ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- checked below.
+			if ( ! $stat || 0040000 !== ( $stat['mode'] & 0170000 ) || ( 0 !== $stat['uid'] && $euid !== $stat['uid'] ) ) {
+				return false;
+			}
+			if ( ( $stat['mode'] & 0022 ) && ! ( $stat['mode'] & 01000 ) ) {
+				return false;
+			}
+			if ( '/' === $path || '.' === $path ) {
+				return '/' === $path;
+			}
+		}
 	}
 
 	/**
@@ -958,7 +1005,7 @@ class Site_PHP_Compat {
 		$real = realpath( dirname( $path ) );
 		$stat = false === $real ? false : @stat( $real ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- checked below.
 
-		return $real === $this->output_dir['path'] && $stat && $stat['dev'] === $this->output_dir['dev'] && $stat['ino'] === $this->output_dir['ino'];
+		return $real === $this->output_dir['path'] && $stat && $stat['dev'] === $this->output_dir['dev'] && $stat['ino'] === $this->output_dir['ino'] && $this->trusted_dir( $real );
 	}
 
 	/**
@@ -994,7 +1041,8 @@ class Site_PHP_Compat {
 			$picked['inputs'] = array_filter(
 				array_intersect_key( $picked['inputs'], array_flip( self::INPUT_KEYS ) ),
 				function ( $value ) {
-					return is_int( $value ) || is_float( $value );
+					// json_decode() reads 1e999 as INF, which json_encode() refuses.
+					return is_int( $value ) || ( is_float( $value ) && is_finite( $value ) );
 				}
 			);
 		}

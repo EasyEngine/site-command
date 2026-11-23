@@ -3274,10 +3274,10 @@ abstract class EE_Site_Command {
 	 * ---
 	 *
 	 * [--output=<path>]
-	 * : Also write the full report, with every error and warning, as JSON to this absolute path. The file is owned by root with mode 0600 and replaces an existing one. It is written only when the check finishes with a result (status ok); otherwise an existing file is left as it was. Not with --estimate.
+	 * : Also write the full report, with every error and warning, as JSON to this absolute path. The file is owned by root with mode 0600 and replaces an existing one. It is written only when the check finishes with a result (status ok); otherwise an existing file is left as it was. Its directory and every parent must be owned by root and not writable by other users (a sticky directory such as /tmp is fine). Not with --estimate.
 	 *
 	 * [--timeout=<seconds>]
-	 * : Safety limit for the whole check, in seconds. A check that hits it reports tool_error and no verdict. Default: 7200. Not with --estimate.
+	 * : Time limit for the scan itself, in seconds. A scan that hits it reports tool_error and no verdict. Pulling the scanner image on first use isn't counted. Default: 7200. Not with --estimate.
 	 *
 	 * ## EXAMPLES
 	 *

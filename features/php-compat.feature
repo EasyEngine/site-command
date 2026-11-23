@@ -191,7 +191,7 @@ Feature: Check the PHP compatibility of a site's code
     When I run 'bin/ee site php-compat bh-site-command-183.test --php=8.4 --format=json --timeout=1'
     Then the command should succeed
     And the JSON field "status" in STDOUT should be "tool_error"
-    And the JSON field "safe_to_upgrade" in STDOUT should be ""
+    And the JSON field "safe_to_upgrade" in STDOUT should be null
     And the JSON field "detail" in STDOUT should contain "timed out after 1 s"
     And the directory "{EE_ROOT_DIR}/tmp/php-compat/bh-site-command-183.test" should not exist
     And the docker container "ee-php-compat-bh-site-command-183.test" should not exist
