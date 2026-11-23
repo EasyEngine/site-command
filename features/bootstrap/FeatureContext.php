@@ -125,6 +125,27 @@ class FeatureContext implements Context
 	private static $run_id = '';
 
 	/**
+	 * Command started by "I start ... in the background": proc, stdout and stderr files, command, start time, exit code.
+	 *
+	 * @var array|null
+	 */
+	private $background = null;
+
+	/**
+	 * Byte offsets noted by "I note the size of the file ...".
+	 *
+	 * @var array
+	 */
+	private $noted_sizes = [];
+
+	/**
+	 * Whether the scenario ran php-compat scans, whose containers and temporary directories are purged afterwards.
+	 *
+	 * @var bool
+	 */
+	private $compat_used = false;
+
+	/**
 	 * Initializes context.
 	 */
 	public function __construct()
@@ -444,7 +465,7 @@ class FeatureContext implements Context
 	 *
 	 * Written to be copied as-is into other packages' contexts: only SITE_PREFIX changes.
 	 * Every string argument goes through v(), so {NAME} variables work everywhere:
-	 * built-ins are {EE}, {EE_ROOT_DIR}, {SITES_DIR}, {PROXY_DIR}, {BACKUP_DIR}, {TMP}, {RUN_ID}, {PUBLIC_IP},
+	 * built-ins are {EE}, {EE_ROOT_DIR}, {SITES_DIR}, {PROXY_DIR}, {BACKUP_DIR}, {TMP}, {SYS_TMP}, {RUN_ID}, {PUBLIC_IP},
 	 * {RCLONE_PATH} and {LE_ISSUER}; others come from the "I save ..." steps.
 	 * ===================================================================== */
 
@@ -458,6 +479,8 @@ class FeatureContext implements Context
 		$this->variables   = [];
 		$this->response    = null;
 		$this->start_times = [];
+		$this->noted_sizes = [];
+		$this->compat_used = false;
 	}
 
 	/**
@@ -472,6 +495,12 @@ class FeatureContext implements Context
 			$this->remove_hosts_entry( $host );
 		}
 		$this->added_hosts = [];
+
+		// Before {TMP} goes: the background command writes its output there.
+		$this->stop_background();
+		if ( $this->compat_used ) {
+			self::purge_compat_leftovers();
+		}
 
 		if ( $this->tmp_dir && 0 === strpos( $this->tmp_dir, '/var/tmp/' . self::SITE_PREFIX ) ) {
 			EE::launch( 'rm -rf ' . escapeshellarg( $this->tmp_dir ), false, true );
@@ -666,6 +695,19 @@ class FeatureContext implements Context
 		$actual   = is_bool( $actual ) ? ( $actual ? 'true' : 'false' ) : ( is_scalar( $actual ) || null === $actual ? (string) $actual : json_encode( $actual ) );
 		if ( ( $actual === $expected ) === (bool) $not ) {
 			throw new Exception( sprintf( "Expected JSON field %s %sto be %s, got %s.\n%s", $path, $not, var_export( $expected, true ), var_export( $actual, true ), $this->describe( $this->last_command() ) ) );
+		}
+	}
+
+	/**
+	 * Strict: "should be" reads null and "" alike.
+	 *
+	 * @Then /^the JSON field "([^"]*)" in STDOUT should be null$/
+	 */
+	public function theJsonFieldShouldBeNull( $path )
+	{
+		$actual = $this->json_path( $this->decode_stdout_json(), $path );
+		if ( null !== $actual ) {
+			throw new Exception( sprintf( "Expected JSON field %s to be null, got %s.\n%s", $path, var_export( $actual, true ), $this->describe( $this->last_command() ) ) );
 		}
 	}
 
@@ -1387,7 +1429,349 @@ class FeatureContext implements Context
 		}
 	}
 
+	/* ----- background commands, logs and php-compat ----- */
+
+	/**
+	 * Runs a command like "I run", but without EE::launch(), which copies the command and its output into ee.log.
+	 *
+	 * @When /^I run (['"])(.*)\1 without logging it$/
+	 */
+	public function iRunWithoutLoggingIt( $quote, $command )
+	{
+		$this->commands[] = \EE\Process::create( $this->v( $command ), null, null )->run();
+	}
+
+	/**
+	 * One command at a time; "I wait up to N seconds for the background command to finish" makes it the last command.
+	 *
+	 * @When /^I start (['"])(.*)\1 in the background$/
+	 */
+	public function iStartInTheBackground( $quote, $command )
+	{
+		if ( null !== $this->background ) {
+			throw new Exception( 'A background command is already running in this scenario.' );
+		}
+		$command = $this->v( $command );
+		$out     = $this->tmp_dir . '/background.stdout';
+		$err     = $this->tmp_dir . '/background.stderr';
+		// exec: the shell becomes the command, so stopping the process stops the command, not only its shell.
+		$proc    = proc_open( 'exec ' . $command, [ 0 => [ 'file', '/dev/null', 'r' ], 1 => [ 'file', $out, 'w' ], 2 => [ 'file', $err, 'w' ] ], $pipes );
+		if ( ! is_resource( $proc ) ) {
+			throw new Exception( "Could not start $command" );
+		}
+		$this->background = [
+			'proc'     => $proc,
+			'stdout'   => $out,
+			'stderr'   => $err,
+			'command'  => $command,
+			'start'    => microtime( true ),
+			'exitcode' => null,
+		];
+	}
+
+	/**
+	 * @Then the background command should still be running
+	 */
+	public function theBackgroundCommandShouldStillBeRunning()
+	{
+		if ( ! $this->background_running() ) {
+			throw new Exception( "The background command has already finished.\n" . $this->describe( $this->background_result() ) );
+		}
+	}
+
+	/**
+	 * @When /^I wait up to (\d+) seconds for the background command to finish$/
+	 */
+	public function iWaitForTheBackgroundCommandToFinish( $seconds )
+	{
+		$deadline = time() + (int) $seconds;
+		while ( $this->background_running() ) {
+			if ( time() >= $deadline ) {
+				throw new Exception( "The background command is still running after $seconds seconds: " . $this->background['command'] );
+			}
+			usleep( 200000 );
+		}
+		$this->commands[] = $this->background_result();
+		proc_close( $this->background['proc'] );
+		$this->background = null;
+	}
+
+	/**
+	 * @When /^I note the size of the file "([^"]*)"$/
+	 */
+	public function iNoteTheSizeOfTheFile( $path )
+	{
+		$path = $this->v( $path );
+		clearstatcache( true, $path );
+		$this->noted_sizes[ $path ] = is_file( $path ) ? filesize( $path ) : 0;
+	}
+
+	/**
+	 * @Then /^what was appended to the file "([^"]*)" since its size was noted should (not )?contain "(.*)"$/
+	 */
+	public function whatWasAppendedShouldContain( $path, $not, $text )
+	{
+		$path = $this->v( $path );
+		$text = $this->v( $text );
+		if ( ! isset( $this->noted_sizes[ $path ] ) ) {
+			throw new Exception( "The size of $path was not noted." );
+		}
+		$added = (string) file_get_contents( $path, false, null, $this->noted_sizes[ $path ] );
+		if ( ( false !== strpos( $added, $text ) ) === (bool) $not ) {
+			throw new Exception( "Expected what was appended to $path {$not}to contain $text.\n--- appended ---\n$added" );
+		}
+	}
+
+	/**
+	 * @Then /^the file "([^"]*)" should be owned by uid (\d+) with mode ([0-7]{3,4})$/
+	 */
+	public function theFileShouldBeOwnedByWithMode( $path, $uid, $mode )
+	{
+		$path = $this->v( $path );
+		clearstatcache( true, $path );
+		if ( ! is_file( $path ) || is_link( $path ) ) {
+			throw new Exception( "$path is not a regular file." );
+		}
+		$actual_uid  = fileowner( $path );
+		$actual_mode = fileperms( $path ) & 07777;
+		if ( (int) $uid !== $actual_uid || octdec( $mode ) !== $actual_mode ) {
+			throw new Exception( sprintf( 'Expected %s to be owned by uid %d with mode %s, it is uid %d with mode %04o.', $path, $uid, $mode, $actual_uid, $actual_mode ) );
+		}
+	}
+
+	/**
+	 * Every top-level field of the STDOUT JSON, except a comma-separated list, has the same value in the JSON file.
+	 *
+	 * @Then /^the JSON file "([^"]*)" should hold every field of the STDOUT JSON except "([^"]*)"$/
+	 */
+	public function theJsonFileShouldHoldEveryFieldOfStdout( $path, $except )
+	{
+		$path   = $this->v( $path );
+		$stdout = $this->decode_stdout_json();
+		$file   = is_file( $path ) ? json_decode( file_get_contents( $path ), true ) : null;
+		if ( ! is_array( $stdout ) || ! is_array( $file ) ) {
+			throw new Exception( "STDOUT and $path must both hold a JSON object.\n" . $this->describe( $this->last_command() ) );
+		}
+		$skip = array_map( 'trim', explode( ',', $except ) );
+		foreach ( $stdout as $key => $value ) {
+			if ( in_array( $key, $skip, true ) ) {
+				continue;
+			}
+			if ( ! array_key_exists( $key, $file ) || $file[ $key ] !== $value ) {
+				throw new Exception( sprintf( "Field %s is %s in STDOUT but %s in %s.", $key, json_encode( $value ), array_key_exists( $key, $file ) ? json_encode( $file[ $key ] ) : 'missing', $path ) );
+			}
+		}
+	}
+
+	/**
+	 * @Then /^the JSON field "([^"]*)" in STDOUT should be the size of the file "([^"]*)"$/
+	 */
+	public function theJsonFieldShouldBeTheSizeOfTheFile( $field, $path )
+	{
+		$path   = $this->v( $path );
+		$actual = $this->json_path( $this->decode_stdout_json(), $field );
+		clearstatcache( true, $path );
+		$size = is_file( $path ) ? filesize( $path ) : null;
+		if ( $actual !== $size ) {
+			throw new Exception( sprintf( 'Expected JSON field %s (%s) to be the size of %s (%s).', $field, var_export( $actual, true ), $path, var_export( $size, true ) ) );
+		}
+	}
+
+	/**
+	 * The scanner runs as uid 33, so fixtures written as root must be world-readable whatever the umask.
+	 *
+	 * @When /^I make everything under "([^"]*)" readable by everyone$/
+	 */
+	public function iMakeEverythingReadable( $path )
+	{
+		$path = $this->v( $path );
+		$this->assert_writable_path( $path );
+		$paths = [ $path ];
+		if ( is_dir( $path ) && ! is_link( $path ) ) {
+			$items = new RecursiveIteratorIterator( new RecursiveDirectoryIterator( $path, FilesystemIterator::SKIP_DOTS ), RecursiveIteratorIterator::SELF_FIRST );
+			foreach ( $items as $item ) {
+				$paths[] = $item->getPathname();
+			}
+		}
+		foreach ( $paths as $item ) {
+			if ( ! is_link( $item ) && ! chmod( $item, is_dir( $item ) ? 0755 : 0644 ) ) {
+				throw new Exception( "Could not chmod $item" );
+			}
+		}
+	}
+
+	/**
+	 * Clean PHP files of about 6 KB each, to make a php-compat scan last long enough to overlap with other commands.
+	 *
+	 * @Given /^the directory "([^"]*)" holds (\d+) generated PHP files$/
+	 */
+	public function theDirectoryHoldsGeneratedPhpFiles( $dir, $count )
+	{
+		$dir = $this->v( $dir );
+		$this->assert_writable_path( $dir );
+		if ( ! is_dir( $dir ) && ! mkdir( $dir, 0755, true ) ) {
+			throw new Exception( "Could not create $dir" );
+		}
+		for ( $i = 1; $i <= (int) $count; $i++ ) {
+			$file = sprintf( '%s/gen-%05d.php', $dir, $i );
+			if ( is_file( $file ) ) {
+				continue;
+			}
+			$body = "<?php\nfunction bh_compat_gen_$i() {\n\treturn array(\n";
+			for ( $j = 0; $j < 200; $j++ ) {
+				$body .= "\t\t'key_$j' => 'value $i $j',\n";
+			}
+			$body .= "\t);\n}\n";
+			if ( false === file_put_contents( $file, $body ) ) {
+				throw new Exception( "Could not write $file" );
+			}
+		}
+		$this->iMakeEverythingReadable( $dir );
+	}
+
+	/**
+	 * Pulls the image once when it is missing, as the command itself would.
+	 *
+	 * @Given the compat-scanner image is available
+	 */
+	public function theCompatScannerImageIsAvailable()
+	{
+		$this->compat_used = true;
+		$image = $this->compat_image();
+		if ( 0 === EE::launch( "docker image inspect --format '{{.Id}}' " . escapeshellarg( $image ), false, true )->return_code ) {
+			return;
+		}
+		$pull = EE::launch( 'docker pull ' . escapeshellarg( $image ), false, true );
+		if ( 0 !== $pull->return_code ) {
+			throw new Exception( "$image is not present and could not be pulled.\n" . $this->describe( $pull ) );
+		}
+	}
+
+	/**
+	 * What a php-compat scan killed before its cleanup leaves: its temporary directory and a stopped container with its name.
+	 *
+	 * @Given /^a killed php-compat scan of site "([^"]*)" left its temporary directory and container behind$/
+	 */
+	public function aKilledPhpCompatScanLeftovers( $site )
+	{
+		$site = $this->v( $site );
+		$this->assert_own_name( $site );
+		$this->compat_used = true;
+		$name = 'ee-php-compat-' . $site;
+		// A run's /out: a random directory in the root-only per-site one.
+		$dir = $this->variable( 'EE_ROOT_DIR' ) . '/tmp/php-compat/' . $site . '/0123456789abcdef';
+		if ( ! is_dir( $dir ) && ! mkdir( $dir . '/.work', 0700, true ) ) {
+			throw new Exception( "Could not create $dir" );
+		}
+		file_put_contents( $dir . '/report.json.tmp', '{"v":1,"status":"ok"' );
+		EE::launch( 'chown -R 33:33 ' . escapeshellarg( $dir ), false, true );
+
+		EE::launch( 'docker rm -f ' . escapeshellarg( $name ), false, true );
+		$create = EE::launch( 'docker create --name ' . escapeshellarg( $name ) . ' --entrypoint true ' . escapeshellarg( $this->compat_image() ), false, true );
+		if ( 0 !== $create->return_code ) {
+			throw new Exception( "Could not create the leftover container $name.\n" . $this->describe( $create ) );
+		}
+	}
+
 	/* ----- helpers ----- */
+
+	/**
+	 * @return string The scanner image with the tag core's img-versions.json pins.
+	 */
+	private function compat_image()
+	{
+		$versions = json_decode( (string) file_get_contents( EE_ROOT . '/img-versions.json' ), true );
+		if ( empty( $versions['easyengine/compat-scanner'] ) ) {
+			throw new Exception( 'img-versions.json of this core has no easyengine/compat-scanner tag; php-compat scenarios need a core that pins the scanner image.' );
+		}
+
+		return 'easyengine/compat-scanner:' . $versions['easyengine/compat-scanner'];
+	}
+
+	private function background_running()
+	{
+		if ( null === $this->background ) {
+			throw new Exception( 'No background command was started in this scenario.' );
+		}
+		if ( null !== $this->background['exitcode'] ) {
+			return false;
+		}
+		$status = proc_get_status( $this->background['proc'] );
+		if ( $status['running'] ) {
+			return true;
+		}
+		// proc_get_status() reports the exit code only once.
+		$this->background['exitcode'] = $status['exitcode'];
+
+		return false;
+	}
+
+	private function background_result()
+	{
+		return new \EE\ProcessRun(
+			[
+				'stdout'      => (string) @file_get_contents( $this->background['stdout'] ),
+				'stderr'      => (string) @file_get_contents( $this->background['stderr'] ),
+				'return_code' => $this->background['exitcode'],
+				'command'     => $this->background['command'],
+				'cwd'         => getcwd(),
+				'env'         => null,
+				'run_time'    => microtime( true ) - $this->background['start'],
+			]
+		);
+	}
+
+	/**
+	 * Ends a background command left by a failed scenario, so it can't hold a site's lock into the next one.
+	 */
+	private function stop_background()
+	{
+		if ( null === $this->background ) {
+			return;
+		}
+		if ( $this->background_running() ) {
+			// A running scan keeps bin/ee waiting; removing its container lets bin/ee clean up after itself.
+			self::purge_compat_leftovers();
+			$deadline = time() + 30;
+			while ( $this->background_running() && time() < $deadline ) {
+				usleep( 200000 );
+			}
+			if ( $this->background_running() ) {
+				proc_terminate( $this->background['proc'], 9 );
+			}
+		}
+		proc_close( $this->background['proc'] );
+		$this->background = null;
+	}
+
+	/**
+	 * Removes php-compat containers and temporary directories of this suite's sites, never others.
+	 */
+	private static function purge_compat_leftovers()
+	{
+		$prefix = 'ee-php-compat-' . self::SITE_PREFIX;
+		$run    = EE::launch( "docker ps -a --format '{{.Names}}'", false, true );
+		foreach ( array_filter( explode( "\n", trim( $run->stdout ) ) ) as $name ) {
+			if ( 0 === strpos( $name, $prefix ) ) {
+				EE::launch( 'docker rm -f ' . escapeshellarg( $name ), false, true );
+			}
+		}
+		// A directory whose container is still there may still be in use: keep it and say so.
+		$ps = EE::launch( "docker ps -a --format '{{.Names}}'", false, true );
+		if ( 0 !== $ps->return_code ) {
+			fwrite( STDERR, "Could not list the containers; kept the php-compat temporary directories.\n" );
+
+			return;
+		}
+		$left = array_filter( explode( "\n", trim( $ps->stdout ) ) );
+		foreach ( glob( EE_ROOT_DIR . '/tmp/php-compat/' . self::SITE_PREFIX . '*' ) ?: [] as $path ) {
+			if ( in_array( 'ee-php-compat-' . basename( $path ), $left, true ) ) {
+				fwrite( STDERR, "Could not remove the container ee-php-compat-" . basename( $path ) . "; kept $path.\n" );
+				continue;
+			}
+			EE::launch( 'rm -rf ' . escapeshellarg( $path ), false, true );
+		}
+	}
 
 	/**
 	 * Expands {NAME} variables.
@@ -1427,6 +1811,9 @@ class FeatureContext implements Context
 				return EE_ROOT_DIR . '/.backup';
 			case 'TMP':
 				return $this->tmp_dir;
+			case 'SYS_TMP':
+				// What bin/ee's get_temp_dir() resolves to: it inherits this process's TMPDIR.
+				return rtrim( \EE\Utils\get_temp_dir(), '/' );
 			case 'RUN_ID':
 				return self::$run_id;
 			case 'PUBLIC_IP':
