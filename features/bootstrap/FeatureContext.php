@@ -1757,7 +1757,13 @@ class FeatureContext implements Context
 			}
 		}
 		// A directory whose container is still there may still be in use: keep it and say so.
-		$left = array_filter( explode( "\n", trim( EE::launch( "docker ps -a --format '{{.Names}}'", false, true )->stdout ) ) );
+		$ps = EE::launch( "docker ps -a --format '{{.Names}}'", false, true );
+		if ( 0 !== $ps->return_code ) {
+			fwrite( STDERR, "Could not list the containers; kept the php-compat temporary directories.\n" );
+
+			return;
+		}
+		$left = array_filter( explode( "\n", trim( $ps->stdout ) ) );
 		foreach ( glob( EE_ROOT_DIR . '/tmp/php-compat/' . self::SITE_PREFIX . '*' ) ?: [] as $path ) {
 			if ( in_array( 'ee-php-compat-' . basename( $path ), $left, true ) ) {
 				fwrite( STDERR, "Could not remove the container ee-php-compat-" . basename( $path ) . "; kept $path.\n" );
