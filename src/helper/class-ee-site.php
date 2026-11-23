@@ -3265,6 +3265,7 @@ abstract class EE_Site_Command {
 	 *  - 8.3
 	 *  - 8.4
 	 *  - 8.5
+	 *  - 8.6
 	 * ---
 	 *
 	 * [--estimate]
