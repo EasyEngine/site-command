@@ -1454,7 +1454,8 @@ class FeatureContext implements Context
 		$command = $this->v( $command );
 		$out     = $this->tmp_dir . '/background.stdout';
 		$err     = $this->tmp_dir . '/background.stderr';
-		$proc    = proc_open( $command, [ 0 => [ 'file', '/dev/null', 'r' ], 1 => [ 'file', $out, 'w' ], 2 => [ 'file', $err, 'w' ] ], $pipes );
+		// exec: the shell becomes the command, so stopping the process stops the command, not only its shell.
+		$proc    = proc_open( 'exec ' . $command, [ 0 => [ 'file', '/dev/null', 'r' ], 1 => [ 'file', $out, 'w' ], 2 => [ 'file', $err, 'w' ] ], $pipes );
 		if ( ! is_resource( $proc ) ) {
 			throw new Exception( "Could not start $command" );
 		}
@@ -1755,7 +1756,13 @@ class FeatureContext implements Context
 				EE::launch( 'docker rm -f ' . escapeshellarg( $name ), false, true );
 			}
 		}
+		// A directory whose container is still there may still be in use: keep it and say so.
+		$left = array_filter( explode( "\n", trim( EE::launch( "docker ps -a --format '{{.Names}}'", false, true )->stdout ) ) );
 		foreach ( glob( EE_ROOT_DIR . '/tmp/php-compat/' . self::SITE_PREFIX . '*' ) ?: [] as $path ) {
+			if ( in_array( 'ee-php-compat-' . basename( $path ), $left, true ) ) {
+				fwrite( STDERR, "Could not remove the container ee-php-compat-" . basename( $path ) . "; kept $path.\n" );
+				continue;
+			}
 			EE::launch( 'rm -rf ' . escapeshellarg( $path ), false, true );
 		}
 	}

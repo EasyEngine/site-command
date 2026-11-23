@@ -308,7 +308,8 @@ class Site_PHP_Compat {
 		} catch ( \Exception $e ) {
 			EE::debug( 'php-compat report: ' . self::clean( $e->getMessage() ) );
 		}
-		if ( ! is_array( $report ) || ! $this->valid_report( $report, $doc ) ) {
+		// The scanner never prints invalid UTF-8; the decode above only substitutes it, and --output publishes these bytes as they are.
+		if ( ! is_array( $report ) || 1 !== preg_match( '//u', $raw ) || ! $this->valid_report( $report, $doc ) ) {
 			return $this->doc( 'tool_error', self::exit_detail( $run, 'without a valid report' ) );
 		}
 
@@ -945,6 +946,16 @@ class Site_PHP_Compat {
 			return false;
 		}
 		$this->output_tmp = $tmp;
+		// A default ACL on the directory replaces the umask, so set the mode, and check it on the handle before writing anything.
+		@chmod( $tmp, 0600 ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- checked below.
+		$created = fstat( $handle );
+		if ( ! $created || 0600 !== ( $created['mode'] & 07777 ) ) {
+			fclose( $handle );
+			@unlink( $tmp ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged
+			$this->output_tmp = null;
+
+			return false;
+		}
 		$written          = 0;
 		while ( $written < strlen( $content ) ) {
 			$chunk = fwrite( $handle, substr( $content, $written, 1048576 ) );
