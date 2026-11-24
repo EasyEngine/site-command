@@ -60,6 +60,9 @@ class Site_PHP_Compat {
 	/** @var string|null Cancel request file a scan watches once it holds the site lock. */
 	protected $cancel_marker;
 
+	/** @var resource|null Shared lock --cancel holds while its request is live. */
+	protected $cancel_guard;
+
 	/** @var string|null This run's directory mounted at /out, while it exists. */
 	protected $temp_dir;
 
@@ -280,8 +283,7 @@ class Site_PHP_Compat {
 		$parent = $this->temp_parent();
 		if ( null !== $parent ) {
 			$this->cancel_marker = $this->cancel_path( $parent );
-			// Holding the lock, a request already there was for a run that is gone (killed, or its cancel gave up).
-			@unlink( $this->cancel_marker ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- usually missing.
+			$this->clear_stale_cancel();
 		}
 		$name   = 'ee-php-compat-' . $this->site;
 		$status = $this->container_status( $name );
@@ -445,16 +447,13 @@ class Site_PHP_Compat {
 		$name    = 'ee-php-compat-' . $this->site;
 		$marker  = $this->cancel_path( $parent );
 		$stopped = false;
+		$this->hold_cancel_guard( $marker );
 
 		if ( ! $this->lock_site( $site_data->site_fs_path ) ) {
-			// A scan holds the lock: ask it to stop, stop its container, then wait until it has cleaned up and let go.
+			// A scan holds the lock: ask it to stop, then wait until it has removed its container, cleaned up and let go.
 			$token = $this->request_cancel( $marker );
 			if ( null === $token ) {
 				return $this->doc( 'tool_error', 'could not write the cancel request' );
-			}
-			if ( 'running' === $this->container_status( $name ) ) {
-				// The scan's own cleanup and --rm race this removal; the check after the wait has the last word.
-				$stopped = $this->container_gone( $name );
 			}
 			if ( ! $this->wait_for_site_lock( $site_data->site_fs_path ) ) {
 				// The request stays: the scan still reports cancelled when it gets to it.
@@ -506,6 +505,41 @@ class Site_PHP_Compat {
 	 */
 	protected function cancel_path( $parent ) {
 		return "$parent/.cancel-{$this->site}";
+	}
+
+	/**
+	 * Held shared from before --cancel writes its request until it ends, so no scan clears that request as stale.
+	 *
+	 * @param string $marker cancel_path().
+	 */
+	protected function hold_cancel_guard( $marker ) {
+		$guard = @fopen( "$marker.lock", 'c' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- handled below.
+		if ( false === $guard ) {
+			return;
+		}
+		// Blocks only while a scan clears a stale request.
+		if ( ! flock( $guard, LOCK_SH ) ) {
+			fclose( $guard );
+			return;
+		}
+		$this->cancel_guard = $guard;
+	}
+
+	/**
+	 * With the site lock: remove a request no --cancel waits on any more (its scan was killed, or the cancel gave up or was killed).
+	 * A request of a waiting --cancel is for this scan, even one written for a scan that ended just before this one started.
+	 */
+	protected function clear_stale_cancel() {
+		// Not created here: a --cancel creates it before its request, so while it is missing any request is a live one.
+		$guard = @fopen( $this->cancel_marker . '.lock', 'r' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- missing is handled.
+		if ( false === $guard ) {
+			return;
+		}
+		if ( flock( $guard, LOCK_EX | LOCK_NB, $would_block ) || ! $would_block ) {
+			// Removed under the exclusive lock, so a --cancel starting now writes its request after this.
+			@unlink( $this->cancel_marker ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- usually missing.
+		}
+		fclose( $guard );
 	}
 
 	/**
@@ -1765,6 +1799,10 @@ class Site_PHP_Compat {
 			flock( $this->lock, LOCK_UN );
 			fclose( $this->lock );
 			$this->lock = null;
+		}
+		if ( null !== $this->cancel_guard ) {
+			fclose( $this->cancel_guard );
+			$this->cancel_guard = null;
 		}
 		$this->cleaning = false;
 	}
