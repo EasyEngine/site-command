@@ -958,9 +958,11 @@ class Site_PHP_Compat {
 		}
 		$real  = self::resolve_in( $code, $config );
 		$files = [ substr( $real, strlen( $code ) + 1 ) ];
-		$dir   = dirname( dirname( $files[0] ) );
-		if ( '.' !== $dir && null !== self::resolve_in( $code, "$dir/config/application.php" ) ) {
-			$files[] = "$dir/config/application.php";
+		// Bedrock: config/ beside the loader's directory; app/wp-config.php has no such parent.
+		$dir        = dirname( dirname( $files[0] ) );
+		$app_config = ( '.' === $dir ? '' : "$dir/" ) . 'config/application.php';
+		if ( '.' !== dirname( $files[0] ) && null !== self::resolve_in( $code, $app_config ) ) {
+			$files[] = $app_config;
 		}
 
 		return $files;
@@ -1001,7 +1003,9 @@ class Site_PHP_Compat {
 		foreach ( $matches as $match ) {
 			$name = $match[5][0];
 			$at   = $match[0][1];
-			if ( ( '' !== $match[2][0] && $match[2][0] !== $name ) || ! isset( $depths[ $at ] ) || 0 !== $depths[ $at ] || isset( $found[ $name ] ) ) {
+			// A statement of its own: after `if (…)`, `else` or `:` it may never run.
+			$own = 0 === $at || in_array( $code[ $at - 1 ], [ ';', '}' ], true );
+			if ( ! $own || ( '' !== $match[2][0] && $match[2][0] !== $name ) || ! isset( $depths[ $at ] ) || 0 !== $depths[ $at ] || isset( $found[ $name ] ) ) {
 				return $name;
 			}
 			$found[ $name ] = $match[6][0];
