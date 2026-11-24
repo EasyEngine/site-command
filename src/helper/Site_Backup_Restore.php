@@ -2092,6 +2092,8 @@ DEALLOCATE PREPARE ee_stmt;
 		$ok         = true;
 		$config_dir = EE_ROOT_DIR . '/sites/' . $this->site_data['site_url'] . '/config';
 
+		$this->sid_settings_notice = null;
+
 		// First: the php config and DB steps below reach the containers through these files.
 		if ( ! empty( $txn['compose'] ) ) {
 			$ok = $this->rollback_custom_compose() && $ok;
@@ -2158,12 +2160,41 @@ DEALLOCATE PREPARE ee_stmt;
 		}
 
 		if ( $ok ) {
+			// Before the journal goes: a kill in between leaves it to retry. Kept on a failed rollback, as php.ini may still be the stripped one.
+			$this->remove_sid_settings_copy( $txn );
 			$this->restore_txn = null;
 			$this->remove_scratch_dir();
 			$this->fs->remove( [ $this->get_restore_journal_file(), $txn['stage'], $this->get_compose_snapshot_dir() ] );
 		}
 
 		return $ok;
+	}
+
+	/**
+	 * Remove the copy of the backup's php.ini that drop_deprecated_session_sid_settings() saved for a restore that was rolled back.
+	 *
+	 * @param array $txn Restore transaction.
+	 */
+	private function remove_sid_settings_copy( array $txn ) {
+		$file = $txn['sid_copy'] ?? null;
+		// The journal may be the stage's copy, which the site can write when the stage is inside app/: only the exact path the restore writes.
+		$shape = '#^' . preg_quote( EE_BACKUP_DIR . '/', '#' ) . 'session-sid-settings-[0-9]+-[0-9]+-restore-[0-9]+/' . preg_quote( (string) $this->site_data['site_url'], '#' ) . '/php\.ini\z#';
+		if ( ! is_string( $file ) || false !== strpos( $file, '..' ) || ! preg_match( $shape, $file ) ) {
+			return;
+		}
+
+		$site_dir = dirname( $file );
+		$root     = dirname( $site_dir );
+		clearstatcache( true );
+		if ( is_link( $root ) || is_link( $site_dir ) || is_link( $file ) ) {
+			return;
+		}
+		if ( is_file( $file ) ) {
+			unlink( $file );
+		}
+		// rmdir() refuses a dir that holds other sites' copies.
+		@rmdir( $site_dir ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- best effort.
+		@rmdir( $root ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- best effort.
 	}
 
 	/**
@@ -3734,6 +3765,9 @@ DEALLOCATE PREPARE ee_stmt;
 
 			return $content;
 		}
+		// Journaled so a rollback, also the next restore's after a kill, removes it; a failed write fails the restore.
+		$this->restore_txn['sid_copy'] = $root . $file;
+		$this->write_restore_journal();
 
 		// The lines come from the archive: printable ASCII only, since an 8-bit terminal reads any byte 0x80-0x9F as a control character.
 		$lines   = array_map(
