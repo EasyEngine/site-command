@@ -961,7 +961,8 @@ class Site_PHP_Compat {
 		// Bedrock: config/ beside the loader's directory; app/wp-config.php has no such parent.
 		$dir        = dirname( dirname( $files[0] ) );
 		$app_config = ( '.' === $dir ? '' : "$dir/" ) . 'config/application.php';
-		if ( '.' !== dirname( $files[0] ) && null !== self::resolve_in( $code, $app_config ) ) {
+		// Only when the loader includes it: a stale copy WordPress never reads says nothing.
+		if ( '.' !== dirname( $files[0] ) && null !== self::resolve_in( $code, $app_config ) && false !== strpos( (string) $this->read_site_file( $code, $files[0] ), 'config/application.php' ) ) {
 			$files[] = $app_config;
 		}
 
@@ -977,18 +978,39 @@ class Site_PHP_Compat {
 	 *                      the file sets or uses in any other way.
 	 */
 	public static function dir_defines( $source ) {
+		$skip   = [ T_WHITESPACE, T_COMMENT, T_DOC_COMMENT, T_OPEN_TAG, T_CLOSE_TAG, T_INLINE_HTML ];
+		$tokens = [];
+		foreach ( @token_get_all( $source ) as $token ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- a broken file still tokenises.
+			if ( ! is_array( $token ) || ! in_array( $token[0], $skip, true ) ) {
+				$tokens[] = is_array( $token ) ? $token : [ null, $token ];
+			}
+		}
+		// Block depth at each token: braces, and the `if (…): … endif;` forms (a define in any block may never run).
+		$opens  = [ T_IF, T_WHILE, T_FOR, T_FOREACH, T_SWITCH, T_DECLARE ];
+		$ends   = [ T_ENDIF, T_ENDWHILE, T_ENDFOR, T_ENDFOREACH, T_ENDSWITCH, T_ENDDECLARE ];
 		$code   = '';
 		$depths = [];
 		$level  = 0;
-		$skip   = [ T_WHITESPACE, T_COMMENT, T_DOC_COMMENT, T_OPEN_TAG, T_CLOSE_TAG, T_INLINE_HTML ];
-		foreach ( @token_get_all( $source ) as $token ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- a broken file still tokenises.
-			if ( is_array( $token ) && in_array( $token[0], $skip, true ) ) {
-				continue;
-			}
-			$text                    = is_array( $token ) ? $token[1] : $token;
+		$parens = 0;
+		$header = null;
+		foreach ( $tokens as $i => list( $type, $text ) ) {
 			$depths[ strlen( $code ) ] = $level;
-			$code                   .= $text;
-			if ( '{' === $text || ( is_array( $token ) && in_array( $token[0], [ T_CURLY_OPEN, T_DOLLAR_OPEN_CURLY_BRACES ], true ) ) ) {
+			$code                     .= $text;
+			if ( in_array( $type, $opens, true ) ) {
+				$header = $parens;
+			} elseif ( '(' === $text ) {
+				$parens++;
+			} elseif ( ')' === $text ) {
+				$parens--;
+				if ( $header === $parens ) {
+					$header = null;
+					if ( isset( $tokens[ $i + 1 ] ) && ':' === $tokens[ $i + 1 ][1] ) {
+						$level++;
+					}
+				}
+			} elseif ( in_array( $type, $ends, true ) ) {
+				$level--;
+			} elseif ( '{' === $text || in_array( $type, [ T_CURLY_OPEN, T_DOLLAR_OPEN_CURLY_BRACES ], true ) ) {
 				$level++;
 			} elseif ( '}' === $text ) {
 				$level--;
