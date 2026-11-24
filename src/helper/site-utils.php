@@ -2055,6 +2055,177 @@ function ini_global_part( string $content ) {
 }
 
 /**
+ * Whether a site's PHP version deprecates session.sid_length and session.sid_bits_per_character (PHP 8.4 and later).
+ *
+ * @param string $php_version Site PHP version; `latest` sites run the php8.4 image.
+ *
+ * @return bool
+ */
+function php_deprecates_session_sid_settings( $php_version ) {
+
+	$php_version = (string) $php_version;
+
+	return 'latest' === $php_version || ( preg_match( '/^\d+\.\d+$/', $php_version ) && version_compare( $php_version, '8.4', '>=' ) );
+}
+
+/**
+ * Remove session.sid_length and session.sid_bits_per_character, wherever they are set, and the shipped comments that document them.
+ * Every other line is kept byte for byte.
+ *
+ * @param string $content php.ini content.
+ *
+ * @return array New content, and the removed directive lines => whether the value is the one EasyEngine shipped.
+ *
+ * @throws \Exception When the edit would change how PHP reads any other setting, or the file doesn't parse.
+ */
+function strip_session_sid_settings( string $content ) {
+
+	// Values EasyEngine shipped; any other value was set by the user.
+	$shipped_values = [
+		'session.sid_length'             => '26',
+		'session.sid_bits_per_character' => '5',
+	];
+	// Comments shipped right above each directive, removed together with it.
+	$shipped_comments = [
+		'session.sid_length'             => [
+			'; Set session ID character length. This value could be between 22 to 256.',
+			'; Shorter length than default is supported only for compatibility reason.',
+			'; Users should use 32 or more chars.',
+			'; http://php.net/session.sid-length',
+			'; Default Value: 32',
+			'; Development Value: 26',
+			'; Production Value: 26',
+		],
+		'session.sid_bits_per_character' => [
+			'; Define how many bits are stored in each character when converting',
+			'; the binary hash data to something readable.',
+			'; Possible values:',
+			';   4  (4 bits: 0-9, a-f)',
+			';   5  (5 bits: 0-9, a-v)',
+			';   6  (6 bits: 0-9, a-z, A-Z, "-", ",")',
+			'; Default Value: 4',
+			'; Development Value: 5',
+			'; Production Value: 5',
+			'; http://php.net/session.hash-bits-per-character',
+		],
+	];
+	// Entry of the quick reference at the top of the shipped php.ini.
+	$shipped_quick_reference = [
+		'; session.sid_bits_per_character',
+		';   Default Value: 4',
+		';   Development Value: 5',
+		';   Production Value: 5',
+	];
+
+	// PHP skips a UTF-8 BOM, so a directive on the first line must still match; the BOM stays in the result.
+	$bom  = 0 === strncmp( $content, "\xEF\xBB\xBF", 3 ) ? "\xEF\xBB\xBF" : '';
+	$body = substr( $content, strlen( $bom ) );
+	// After every LF, and after a CR not followed by LF, so a CR-only file isn't read as one line.
+	$lines = preg_split( '/(?<=\n)|(?<=\r)(?!\n)/', $body, -1, PREG_SPLIT_NO_EMPTY );
+	$norm  = array_map(
+		function ( $line ) {
+			return rtrim( $line, " \t\r\n" );
+		},
+		$lines
+	);
+	$drop    = [];
+	$removed = [];
+
+	$quick_count = count( $shipped_quick_reference );
+	foreach ( array_keys( $norm ) as $i ) {
+		if ( array_slice( $norm, $i, $quick_count ) === $shipped_quick_reference ) {
+			$drop += array_fill( $i, $quick_count, true );
+			if ( isset( $norm[ $i + $quick_count ] ) && '' === $norm[ $i + $quick_count ] ) {
+				$drop[ $i + $quick_count ] = true;
+			}
+		}
+	}
+
+	foreach ( $norm as $i => $line ) {
+		if ( ! preg_match( '/^\s*(session\.sid_length|session\.sid_bits_per_character)\s*=(.*)$/', $line, $matches ) ) {
+			continue;
+		}
+		$name       = $matches[1];
+		$drop[ $i ] = true;
+
+		// Inline comment and quotes don't change the value.
+		$value                    = trim( preg_replace( '/;.*$/', '', $matches[2] ), " \t\"'" );
+		$removed[ trim( $line ) ] = $shipped_values[ $name ] === $value;
+
+		$comments = $shipped_comments[ $name ];
+		$count    = count( $comments );
+		if ( $i >= $count && array_slice( $norm, $i - $count, $count ) === $comments ) {
+			$drop += array_fill( $i - $count, $count, true );
+			if ( isset( $norm[ $i + 1 ] ) && '' === $norm[ $i + 1 ] ) {
+				$drop[ $i + 1 ] = true;
+			}
+		}
+	}
+
+	$new_content = $bom . implode( '', array_diff_key( $lines, $drop ) );
+
+	// A quoted value can span lines, so PHP must read the result as the original minus the two directives.
+	if ( $new_content !== $content ) {
+		if ( references_session_sid_settings( $new_content ) ) {
+			throw new \Exception( 'another setting refers to them as ${...}, which PHP would then read as empty or as its fallback, so the file was left as it is; remove session.sid_length and session.sid_bits_per_character by hand.' );
+		}
+		// Flat too: a repeated section header hides the earlier section from the sectioned parse, but PHP still reads it.
+		foreach ( [ true, false ] as $sections ) {
+			$expected = @parse_ini_string( $content, $sections, INI_SCANNER_NORMAL );
+			if ( is_array( $expected ) ) {
+				foreach ( $expected as $key => $value ) {
+					if ( is_array( $value ) ) {
+						$expected[ $key ] = array_diff_key( $value, $shipped_values );
+					}
+				}
+				$expected = array_diff_key( $expected, $shipped_values );
+			}
+			if ( ! is_array( $expected ) || @parse_ini_string( $new_content, $sections, INI_SCANNER_NORMAL ) !== $expected ) {
+				throw new \Exception( 'the file does not parse, or removing them line by line would change other settings (a quoted value spanning lines), so it was left as it is; remove session.sid_length and session.sid_bits_per_character by hand.' );
+			}
+		}
+		// A repeated section header can hide a removed line inside a quoted value from the parses above; such a line has an edge where the file so far doesn't parse.
+		$edges = [];
+		foreach ( array_keys( $drop ) as $i ) {
+			$edges[ $i ]     = true;
+			$edges[ $i + 1 ] = true;
+		}
+		$offsets = [ 0 ];
+		foreach ( $lines as $i => $line ) {
+			$offsets[ $i + 1 ] = $offsets[ $i ] + strlen( $line );
+		}
+		// Each edge parses the file up to it; a shipped php.ini needs under 2 MiB in all, thousands of removed lines would need GiBs.
+		$probe_bytes = 0;
+		foreach ( array_keys( $edges ) as $edge ) {
+			$probe_bytes += $offsets[ $edge ];
+		}
+		if ( $probe_bytes > 64 * 1048576 ) {
+			throw new \Exception( sprintf( 'there are too many of them to check (%d lines to remove), so the file was left as it is; remove session.sid_length and session.sid_bits_per_character by hand.', count( $drop ) ) );
+		}
+		foreach ( array_keys( $edges ) as $edge ) {
+			if ( ! is_array( @parse_ini_string( substr( $body, 0, $offsets[ $edge ] ), false, INI_SCANNER_NORMAL ) ) ) {
+				throw new \Exception( 'the file does not parse, or removing them line by line would change other settings (a quoted value spanning lines), so it was left as it is; remove session.sid_length and session.sid_bits_per_character by hand.' );
+			}
+		}
+	}
+
+	return [ $new_content, $removed ];
+}
+
+/**
+ * Whether INI content refers to session.sid_length or session.sid_bits_per_character as ${...}.
+ * PHP resolves ${...} from the settings read so far, which parse_ini_string() can't see; it trims spaces around the name and takes a :- fallback.
+ *
+ * @param string $content INI content.
+ *
+ * @return bool
+ */
+function references_session_sid_settings( string $content ) {
+
+	return (bool) preg_match( '/\$\{[ \t]*session\.sid_(length|bits_per_character)[ \t]*(\}|:-)/', $content );
+}
+
+/**
  * Real path of a directory in a site's php config. config/php is EasyEngine's own link to the site's config volume; everything below it belongs to the site's php container.
  *
  * @param string $site_fs_path Site root.
