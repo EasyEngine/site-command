@@ -487,7 +487,7 @@ class Site_Letsencrypt {
 		return $certificates;
 	}
 
-	public function check( Array $domains, $wildcard = false, $preferred_challenge = '' ) {
+	public function check( Array $domains, $wildcard = false, $preferred_challenge = '', $force = false ) {
 		$is_solver_dns = ( $wildcard || 'dns' === $preferred_challenge ) ? true : false;
 		\EE::debug( ( 'Starting check with solver ' ) . ( $is_solver_dns ? 'dns' : 'http' ) );
 		if ( $is_solver_dns ) {
@@ -535,7 +535,7 @@ class Site_Letsencrypt {
 			if ( $is_solver_dns && empty( get_config_value( 'cloudflare-api-key' ) ) ) {
 				$primary_domain = str_replace( '*.', '', $domains[0] );
 				\EE::warning( "The previous ACME order for $primary_domain had expired or failed. A fresh DNS-01 challenge was issued and its new TXT record is printed above." );
-				\EE::log( "Publish the new TXT record, then re-run: ee site ssl-verify $primary_domain" );
+				\EE::log( "Publish the new TXT record, then re-run: ee site ssl-verify $primary_domain" . ( $force ? ' --force' : '' ) );
 
 				return false;
 			}
@@ -961,7 +961,7 @@ class Site_Letsencrypt {
 			if ( $this->is_rate_limit_exception( $e ) ) {
 				\EE::warning( 'Let\'s Encrypt rate limit hit for: ' . $domain . '. Please wait before retrying. Ref: https://letsencrypt.org/docs/rate-limits/' );
 			}
-			\EE::log( 'You can fix the issue and re-run: ee site ssl-verify ' . $domain );
+			\EE::log( 'You can fix the issue and re-run: ee site ssl-verify ' . $domain . ( $force ? ' --force' : '' ) );
 
 			return false;
 		} catch ( \Throwable $e ) {
@@ -971,7 +971,7 @@ class Site_Letsencrypt {
 			if ( $this->is_rate_limit_exception( $e ) ) {
 				\EE::warning( 'Let\'s Encrypt rate limit hit for: ' . $domain . '. Please wait before retrying. Ref: https://letsencrypt.org/docs/rate-limits/' );
 			}
-			\EE::log( 'You can fix the issue and re-run: ee site ssl-verify ' . $domain );
+			\EE::log( 'You can fix the issue and re-run: ee site ssl-verify ' . $domain . ( $force ? ' --force' : '' ) );
 
 			return false;
 		}

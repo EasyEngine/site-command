@@ -1876,7 +1876,7 @@ abstract class EE_Site_Command {
 						// A manual DNS-01 challenge keeps site_ssl without a certificate until `ee site ssl-verify` completes it.
 						if ( \EE\Site\Utils\is_le_ssl_pending( $this->site_data['site_url'], $this->site_data['site_ssl'] ) ) {
 							$this->serve_without_https( $containers_to_start );
-							EE::log( sprintf( '%1$s is served over HTTP until `ee site ssl-verify %1$s` succeeds.', $this->site_data['site_url'] ) );
+							EE::log( sprintf( '%1$s is served over HTTP until `%2$s` succeeds.', $this->site_data['site_url'], $this->ssl_verify_command( $this->site_data['site_url'], $force ) ) );
 
 							return;
 						}
@@ -2321,7 +2321,7 @@ abstract class EE_Site_Command {
 
 		$preferred_challenge = get_preferred_ssl_challenge( $domains );
 
-		if ( ! $client->check( $domains, $this->site_data['site_ssl_wildcard'], $preferred_challenge ) ) {
+		if ( ! $client->check( $domains, $this->site_data['site_ssl_wildcard'], $preferred_challenge, $force ) ) {
 			$is_solver_dns   = ( $this->site_data['site_ssl_wildcard'] || 'dns' === $preferred_challenge ) ? true : false;
 			$api_key_present = ! empty( get_config_value( 'cloudflare-api-key' ) );
 
@@ -2332,7 +2332,7 @@ abstract class EE_Site_Command {
 			}
 			// During a create, update or renewal, the caller says how to retry.
 			if ( ! $called_by_ee ) {
-				EE::warning( sprintf( 'Check logs and retry `ee site ssl-verify %s` once the issue is resolved.', $this->site_data['site_url'] ) );
+				EE::warning( sprintf( 'Check logs and retry `%s` once the issue is resolved.', $this->ssl_verify_command( $this->site_data['site_url'], $force ) ) );
 			}
 
 			return false;
