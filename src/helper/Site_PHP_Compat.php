@@ -971,7 +971,7 @@ class Site_PHP_Compat {
 	}
 
 	/**
-	 * Whether a require or include statement in the source names a file ending in $suffix (as a string in its operand).
+	 * Whether a require or include in the source names a file ending in $suffix (a string in its operand).
 	 *
 	 * @param string $source PHP source.
 	 * @param string $suffix End of the path, e.g. config/application.php (a whole path segment).
@@ -979,14 +979,11 @@ class Site_PHP_Compat {
 	 * @return bool
 	 */
 	public static function includes( $source, $suffix ) {
-		$inside = false;
-		foreach ( @token_get_all( $source ) as $token ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- a broken file still tokenises.
-			$type = is_array( $token ) ? $token[0] : null;
-			if ( in_array( $type, [ T_REQUIRE, T_REQUIRE_ONCE, T_INCLUDE, T_INCLUDE_ONCE ], true ) ) {
-				$inside = true;
-			} elseif ( $inside && ';' === $token ) {
-				$inside = false;
-			} elseif ( $inside && T_CONSTANT_ENCAPSED_STRING === $type ) {
+		foreach ( self::include_operands( $source ) as $operand ) {
+			foreach ( $operand as $token ) {
+				if ( T_CONSTANT_ENCAPSED_STRING !== $token[0] ) {
+					continue;
+				}
 				$path = substr( $token[1], 1, -1 );
 				if ( $path === $suffix || substr( $path, -strlen( $suffix ) - 1 ) === "/$suffix" ) {
 					return true;
@@ -995,6 +992,56 @@ class Site_PHP_Compat {
 		}
 
 		return false;
+	}
+
+	/**
+	 * The operand tokens of every require and include, each ending where PHP ends that expression: at `;`, `,`, `=>`, `?>`
+	 * or a `:` that closes no `?` of the operand, or at a bracket that closes one opened before it.
+	 *
+	 * @param string $source PHP source.
+	 *
+	 * @return array[] Lists of [ type, text ] tokens, without whitespace and comments.
+	 */
+	public static function include_operands( $source ) {
+		$tokens = [];
+		foreach ( @token_get_all( $source ) as $token ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- a broken file still tokenises.
+			if ( ! is_array( $token ) || ! in_array( $token[0], [ T_WHITESPACE, T_COMMENT, T_DOC_COMMENT ], true ) ) {
+				$tokens[] = is_array( $token ) ? [ $token[0], $token[1] ] : [ null, $token ];
+			}
+		}
+		$operands = [];
+		foreach ( $tokens as $i => $token ) {
+			if ( ! in_array( $token[0], [ T_REQUIRE, T_REQUIRE_ONCE, T_INCLUDE, T_INCLUDE_ONCE ], true ) ) {
+				continue;
+			}
+			$operand = [];
+			$depth   = 0;
+			$ternary = 0;
+			for ( $j = $i + 1; isset( $tokens[ $j ] ); $j++ ) {
+				list( $type, $text ) = $tokens[ $j ];
+				$open                = null === $type && in_array( $text, [ '(', '[', '{' ], true ) || in_array( $type, [ T_CURLY_OPEN, T_DOLLAR_OPEN_CURLY_BRACES ], true );
+				$close               = null === $type && in_array( $text, [ ')', ']', '}' ], true );
+				if ( $close && 0 === $depth ) {
+					break;
+				}
+				if ( 0 === $depth && ( in_array( $type, [ T_CLOSE_TAG, T_INLINE_HTML, T_DOUBLE_ARROW ], true ) || ( null === $type && in_array( $text, [ ';', ',' ], true ) ) ) ) {
+					break;
+				}
+				if ( 0 === $depth && null === $type && ':' === $text ) {
+					if ( 0 === $ternary ) {
+						break;
+					}
+					$ternary--;
+				} elseif ( 0 === $depth && null === $type && '?' === $text ) {
+					$ternary++;
+				}
+				$depth     += $open ? 1 : ( $close ? -1 : 0 );
+				$operand[] = $tokens[ $j ];
+			}
+			$operands[] = $operand;
+		}
+
+		return $operands;
 	}
 
 	/**
