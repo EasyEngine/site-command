@@ -459,10 +459,13 @@ class Site_PHP_Compat {
 			}
 			$grace  = min( self::CANCEL_GRACE, $this->cancel_wait() );
 			$locked = $this->wait_for_site_lock( $site_data->site_fs_path, $grace );
-			// Request not taken: the lock is held by a killed scan's docker client (it inherited the lock) or a frozen scan. A scan
-			// started since can't have passed its pre-run check while this request is there, so the container is the target.
-			if ( ! $locked && $token === $this->read_cancel( $marker ) && 'running' === $this->container_status( $name ) ) {
-				$stopped = $this->container_gone( $name );
+			if ( ! $locked ) {
+				// Untaken: a killed scan's docker client (it inherits the lock) or a frozen scan holds the lock. The id is read
+				// first: no scan starts a container while the request stays, so a later scan's container is never this id.
+				$id = $this->running_container_id( $name );
+				if ( null !== $id && $token === $this->read_cancel( $marker ) ) {
+					$stopped = 0 === $this->docker( [ 'docker', 'rm', '-f', $id ], 60 )['code'];
+				}
 			}
 			if ( ! $locked && ! $this->wait_for_site_lock( $site_data->site_fs_path, $this->cancel_wait() - $grace ) ) {
 				// The request stays: the scan still reports cancelled when it gets to it.
@@ -759,6 +762,17 @@ class Site_PHP_Compat {
 	 */
 	protected function container_status( $name ) {
 		return \EE_DOCKER::container_status( $name );
+	}
+
+	/**
+	 * @param string $name Container name.
+	 *
+	 * @return string|null Id of the container when it is running.
+	 */
+	protected function running_container_id( $name ) {
+		$run = $this->docker( [ 'docker', 'inspect', '--format', '{{.State.Running}} {{.Id}}', $name ], 60 );
+
+		return 0 === $run['code'] && 1 === preg_match( '/^true ([0-9a-f]{64})$/', trim( $run['stdout'] ), $m ) ? $m[1] : null;
 	}
 
 	/**
