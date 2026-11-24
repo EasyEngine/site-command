@@ -822,9 +822,9 @@ class Site_PHP_Compat {
 			}
 		}
 		$candidates = array_values( array_unique( $candidates ) );
-		// A WordPress directory without wp-content may still load code from elsewhere (WP_CONTENT_DIR).
-		foreach ( [ 'wp-content', 'wp-settings.php' ] as $marker ) {
-			foreach ( $candidates as $candidate ) {
+		// In order; a WordPress directory without wp-content may still load code from elsewhere (WP_CONTENT_DIR).
+		foreach ( $candidates as $candidate ) {
+			foreach ( [ 'wp-content', 'wp-settings.php' ] as $marker ) {
 				if ( null !== self::resolve_in( $code, $candidate . '/' . $marker ) ) {
 					return $candidate;
 				}
@@ -877,7 +877,11 @@ class Site_PHP_Compat {
 		$abspath = self::resolve_in( $code, $root );
 		$values  = [];
 		foreach ( $this->wp_config_files( $code, $root, $abspath ) as $file ) {
-			$found = self::dir_defines( (string) $this->read_site_file( $code, $file ) );
+			$source = $this->read_site_file( $code, $file );
+			if ( null === $source ) {
+				return "can't read $app$file, so this check can't tell which plugins and themes WordPress loads";
+			}
+			$found = self::dir_defines( $source );
 			if ( is_string( $found ) ) {
 				return "can't resolve $found in $app$file, so this check can't tell which plugins and themes WordPress loads. It follows only define( '$found', <__DIR__, dirname( __FILE__ ), dirname( __DIR__ ), ABSPATH or WP_CONTENT_DIR> . '<path>' ) or a /var/www path";
 			}
@@ -1043,7 +1047,8 @@ class Site_PHP_Compat {
 			$path = substr( $path, strlen( '/var/www/' ) );
 		} elseif ( preg_match( "/^(__DIR__|dirname\\(__FILE__\\)|dirname\\(__DIR__\\)|dirname\\(dirname\\(__FILE__\\)\\)|ABSPATH|WP_CONTENT_DIR)\\.($string)$/i", $expr, $m ) ) {
 			$dir = dirname( $file );
-			if ( '.' === $dir && 0 === stripos( $m[1], 'dirname(d' ) ) {
+			// dirname() of app/ itself is outside the site.
+			if ( '.' === $dir && 0 === stripos( $m[1], 'dirname(' ) && 0 !== strcasecmp( $m[1], 'dirname(__FILE__)' ) ) {
 				return null;
 			}
 			$base = [
@@ -1062,20 +1067,13 @@ class Site_PHP_Compat {
 		} else {
 			return null;
 		}
-		$parts = [];
-		foreach ( explode( '/', $base . '/' . $path ) as $part ) {
-			if ( '' === $part || '.' === $part ) {
-				continue;
+		// `..` stays for resolve_in(), which takes it after the links before it, as the kernel does.
+		$parts = array_filter(
+			explode( '/', $base . '/' . $path ),
+			function ( $part ) {
+				return '' !== $part && '.' !== $part;
 			}
-			if ( '..' === $part ) {
-				if ( ! $parts ) {
-					return null;
-				}
-				array_pop( $parts );
-				continue;
-			}
-			$parts[] = $part;
-		}
+		);
 
 		return $parts ? implode( '/', $parts ) : null;
 	}
