@@ -2082,7 +2082,7 @@ abstract class EE_Site_Command {
 		}
 		$api_key_absent = empty( get_config_value( 'cloudflare-api-key' ) );
 		if ( $is_solver_dns && $api_key_absent ) {
-			echo \cli\Colors::colorize( '%YIMPORTANT:%n Run `ee site ssl-verify ' . $site_url . '` once the DNS changes have propagated to complete the certification generation and installation.', null ) . PHP_EOL;
+			echo \cli\Colors::colorize( '%YIMPORTANT:%n Run `' . $this->ssl_verify_command( $site_url, $force ) . '` once the DNS changes have propagated to complete the certification generation and installation.', null ) . PHP_EOL;
 			$this->le_dns_verify_pending = true;
 		} else {
 			if ( ! $api_key_absent && $is_solver_dns ) {
@@ -2591,12 +2591,25 @@ abstract class EE_Site_Command {
 			if ( $this->le_dns_verify_pending ) {
 				// `ssl-renew --force` on a site still waiting for its first certificate has none to keep.
 				$still_kept = \EE\Site\Utils\is_le_ssl_pending( $this->site_data['site_url'], 'le' ) ? '' : ' The current certificate is kept until then.';
-				EE::warning( sprintf( 'SSL renewal of %1$s is pending: no new certificate was issued yet. Run `ee site ssl-verify %1$s` once the DNS TXT records have propagated.%2$s', $this->site_data['site_url'], $still_kept ) );
+				EE::warning( sprintf( 'SSL renewal of %1$s is pending: no new certificate was issued yet. Run `%3$s` once the DNS TXT records have propagated.%2$s', $this->site_data['site_url'], $still_kept, $this->ssl_verify_command( $this->site_data['site_url'], $force ) ) );
 
 				return;
 			}
 		}
 		EE::success( 'SSL renewal completed.' );
+	}
+
+	/**
+	 * The `ee site ssl-verify` command that finishes a manual DNS challenge.
+	 *
+	 * @param string $site_url Name of the site.
+	 * @param bool   $force    Whether the challenge was started by a forced renewal.
+	 *
+	 * @return string
+	 */
+	private function ssl_verify_command( $site_url, $force ) {
+		// Without --force, ssl-verify keeps a certificate valid for 35 more days and never finalizes the new order.
+		return 'ee site ssl-verify ' . $site_url . ( $force ? ' --force' : '' );
 	}
 
 	/**
