@@ -856,7 +856,7 @@ class Site_PHP_Compat {
 			$root = $rel;
 		}
 		$this->scan_path = '/var/www/' . $root;
-		$this->looked_in = $app . $root . '/wp-content';
+		$this->looked_in = $app . $root;
 		EE::debug( "php-compat: WordPress root $root (nginx root $served)" );
 
 		$detail = $this->check_wp_dirs( $code, $root, $app );
@@ -1177,7 +1177,7 @@ class Site_PHP_Compat {
 				// The scanner checks <path>/wp-content: point it at the parent of this one.
 				$content         = substr( $real, strlen( $code ) + 1 );
 				$this->scan_path = '/var/www/' . dirname( $content );
-				$this->looked_in = $app . $content;
+				$this->looked_in = $app . dirname( $content );
 				continue;
 			}
 			$what = 'WP_CONTENT_DIR' === $name ? 'plugins and themes' : ( 'WP_PLUGIN_DIR' === $name ? 'plugins' : 'must-use plugins' );
@@ -2524,7 +2524,7 @@ class Site_PHP_Compat {
 			return "$text Looked for PHP files in $dir.";
 		}
 
-		return "$text Looked for plugins, themes and other WordPress code in $dir. The check follows the directory nginx serves (root in {$this->nginx_conf}), its current/ and wp-cli.yml's path:.";
+		return "$text Looked in $dir: everything there except WordPress core, wp-content included. The check follows the directory nginx serves (root in {$this->nginx_conf}), its current/ and wp-cli.yml's path:.";
 	}
 
 	/**
