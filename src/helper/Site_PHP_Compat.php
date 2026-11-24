@@ -1858,10 +1858,24 @@ class Site_PHP_Compat {
 	protected function hold_image() {
 		$parent = $this->temp_parent();
 		$handle = null === $parent ? false : @fopen( "$parent/.image-lock", 'ce' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- handled below.
-		// Blocks only while another check removes old tags.
-		if ( false !== $handle && flock( $handle, LOCK_SH ) ) {
-			$this->image_lock = $handle;
+		if ( false === $handle ) {
+			return;
 		}
+		// Held exclusive only while another check removes old tags; polled, so signals still reach the handlers.
+		$until = microtime( true ) + 60;
+		while ( ! flock( $handle, LOCK_SH | LOCK_NB, $would_block ) ) {
+			if ( ! $would_block || microtime( true ) >= $until ) {
+				fclose( $handle );
+				EE::debug( 'Going on without the scanner image lock.' );
+
+				return;
+			}
+			usleep( 100000 );
+			if ( function_exists( 'pcntl_signal_dispatch' ) ) {
+				null === $this->dispatch ? pcntl_signal_dispatch() : call_user_func( $this->dispatch );
+			}
+		}
+		$this->image_lock = $handle;
 	}
 
 	/**
@@ -2922,6 +2936,17 @@ class Site_PHP_Compat {
 			if ( false !== $this->container_status( $name ) && ! $this->container_gone( $name ) ) {
 				return "could not remove the container $name";
 			}
+			// A scan whose container was just removed lets go of the site lock as it ends; kept as below.
+			if ( ! $this->lock_site( $site_data->site_fs_path ) ) {
+				if ( $this->restore_running( $site_data->site_fs_path ) ) {
+					return 'a restore of the site is running';
+				}
+				if ( ! $this->wait_for_site_lock( $site_data->site_fs_path, $this->cancel_wait() ) ) {
+					return 'the running check did not stop within ' . $this->cancel_wait() . ' s';
+				}
+			}
+			$this->delete_lock = $this->lock;
+			$this->lock        = null;
 
 			return null;
 		}
