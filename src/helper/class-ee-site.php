@@ -1136,7 +1136,7 @@ abstract class EE_Site_Command {
 	 *
 	 * @param string $volume Real path of config/php.
 	 *
-	 * @throws \Exception When a running container still mounts it.
+	 * @throws \Exception When a running container still mounts it, or the containers that mount it can't be listed.
 	 */
 	private static function check_config_volume_unused( $volume ) {
 
@@ -1144,12 +1144,24 @@ abstract class EE_Site_Command {
 			return;
 		}
 		$users = EE::launch( 'docker ps -q --filter ' . escapeshellarg( 'volume=' . basename( dirname( $volume ) ) ) );
-		$ids   = preg_split( '/\s+/', trim( $users->stdout ), -1, PREG_SPLIT_NO_EMPTY );
+		if ( $users->return_code ) {
+			$error = trim( $users->stderr );
+			throw new \Exception( 'Could not list the containers that mount the php config volume: ' . ( '' === $error ? 'docker ps exited with code ' . $users->return_code : $error ) . '; re-run the update once docker responds.' );
+		}
+		$ids = preg_split( '/\s+/', trim( $users->stdout ), -1, PREG_SPLIT_NO_EMPTY );
 		// docker ps can still list a container stopped a moment ago; inspect waits for the engine to record the stop.
 		$ids = array_filter( $ids, function ( $id ) {
-			return 'exited' !== \EE_DOCKER::container_status( $id );
+			$status = \EE_DOCKER::container_status( $id );
+			if ( false === $status ) {
+				// inspect also fails for a container removed since the listing; drop it only if a working listing no longer has it.
+				$all = EE::launch( 'docker ps -aq --no-trunc --filter ' . escapeshellarg( 'id=' . $id ) );
+
+				return $all->return_code || '' !== trim( $all->stdout );
+			}
+
+			return 'exited' !== $status;
 		} );
-		if ( $users->return_code || $ids ) {
+		if ( $ids ) {
 			throw new \Exception( 'The php config volume is still mounted by a running container (' . implode( ', ', $ids ) . '); stop it and re-run the update.' );
 		}
 	}
