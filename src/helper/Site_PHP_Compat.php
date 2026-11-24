@@ -361,6 +361,9 @@ class Site_PHP_Compat {
 		if ( 'running' === $status ) {
 			return $this->doc( 'busy' );
 		}
+		if ( 'unknown' === $status ) {
+			return $this->doc( 'tool_error', "could not check the container $name" );
+		}
 		if ( 'exited' === $status ) {
 			EE::debug( "Removing the leftover container $name." );
 			// Known limit: a container whose --rm is still in progress can't be removed again, which reads as this tool_error.
@@ -536,7 +539,9 @@ class Site_PHP_Compat {
 		if ( null === $marker ) {
 			return $this->doc( 'tool_error', 'could not create the temporary directory' );
 		}
-		$this->hold_cancel_guard( $marker );
+		if ( ! $this->hold_cancel_guard( $marker ) ) {
+			return $this->doc( 'tool_error', 'another cancel of the site is still running' );
+		}
 
 		if ( ! $this->lock_site( $site_data->site_fs_path ) ) {
 			// A scan holds the lock: ask it to stop, then wait until it has removed its container, cleaned up and let go.
@@ -632,17 +637,24 @@ class Site_PHP_Compat {
 	 * --cancel waits for the first, so it never replaces a request the first still waits on.
 	 *
 	 * @param string $marker cancel_path().
+	 *
+	 * @return bool False when another --cancel still holds it after twice cancel_wait() (e.g. stuck on a hung docker).
 	 */
 	protected function hold_cancel_guard( $marker ) {
 		$guard = $this->own_dir( dirname( self::guard_path( $marker ) ) ) ? @fopen( self::guard_path( $marker ), 'c' ) : false; // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- handled below.
 		if ( false === $guard ) {
-			return;
+			return true;
 		}
-		// Polled, so signals still reach the handlers; the holder ends within cancel_wait() and its sweep.
+		// Polled, so signals still reach the handlers.
+		$until = microtime( true ) + 2 * $this->cancel_wait();
 		while ( ! flock( $guard, LOCK_EX | LOCK_NB, $would_block ) ) {
 			if ( ! $would_block ) {
 				fclose( $guard );
-				return;
+				return true;
+			}
+			if ( microtime( true ) >= $until ) {
+				fclose( $guard );
+				return false;
 			}
 			usleep( 100000 );
 			if ( function_exists( 'pcntl_signal_dispatch' ) ) {
@@ -650,6 +662,8 @@ class Site_PHP_Compat {
 			}
 		}
 		$this->cancel_guard = $guard;
+
+		return true;
 	}
 
 	/**
@@ -1628,10 +1642,15 @@ class Site_PHP_Compat {
 	/**
 	 * @param string $name Container name.
 	 *
-	 * @return string|false running, exited, or false when there is none.
+	 * @return string|false running, exited, unknown (docker failed or timed out), or false when there is none.
 	 */
 	protected function container_status( $name ) {
-		return \EE_DOCKER::container_status( $name );
+		$run = $this->docker( [ 'docker', 'inspect', '--format', '{{.State.Running}}', $name ], 60 );
+		if ( 0 === $run['code'] ) {
+			return 'true' === trim( $run['stdout'] ) ? 'running' : 'exited';
+		}
+		// Only Docker's own answer means none: a daemon that fails or hangs may still run it.
+		return 1 === $run['code'] && preg_match( '/no such (object|container)/i', $run['stderr'] ) ? false : 'unknown';
 	}
 
 	/**
@@ -2908,6 +2927,8 @@ class Site_PHP_Compat {
 			fclose( $this->cancel_guard );
 			$this->cancel_guard = null;
 		}
-		$this->cleaning = false;
+		// Without the lock, a request that comes now is for another scan: a second cleanup() leaves it.
+		$this->cancel_marker = null;
+		$this->cleaning      = false;
 	}
 }
