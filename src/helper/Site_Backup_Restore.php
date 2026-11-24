@@ -2213,24 +2213,34 @@ DEALLOCATE PREPARE ee_stmt;
 	/**
 	 * @param array $txn Restore transaction.
 	 *
-	 * @return string Where an unfinished rollback left the previous site files, and the previous DB once its import had started.
+	 * @return string Where an unfinished rollback left the previous site files, configuration and DB.
 	 */
 	private function describe_rollback_leftovers( array $txn ) {
 		// Describe what is on disk now: the swap may not have started, and the dump may be gone.
 		$parts = [];
 		if ( ! empty( $this->list_dir( $txn['stage'] . '/old' ) ) ) {
-			$parts[] = sprintf( 'The previous site files still staged are in %s/old', $txn['stage'] );
+			$parts[] = sprintf( 'the previous site files still staged are in %s/old', $txn['stage'] );
+		}
+		if ( ( ! empty( $txn['conf'] ) || ! empty( $txn['php_conf'] ) ) && is_dir( $txn['stage'] . '/config-before' ) ) {
+			$parts[] = sprintf( 'the previous site configuration is saved in %s/config-before', $txn['stage'] );
+		}
+		// Not in the stage, see get_compose_snapshot_dir().
+		if ( ! empty( $txn['compose'] ) && is_dir( $this->get_compose_snapshot_dir() ) ) {
+			$parts[] = sprintf( 'the previous custom docker-compose files are saved in %s', $this->get_compose_snapshot_dir() );
 		}
 		if ( 'importing' === $txn['db'] ) {
 			$parts[] = is_file( $txn['stage'] . '/db-before.sql' )
 				? sprintf( 'the previous database is in %s/db-before.sql', $txn['stage'] )
 				: 'the copy of the previous database is missing';
+		} elseif ( 'saved' === $txn['db'] && is_file( $txn['stage'] . '/db-before.sql' ) ) {
+			$parts[] = sprintf( 'the database was not changed (a copy taken before the restore is in %s/db-before.sql)', $txn['stage'] );
 		}
 		if ( empty( $parts ) ) {
-			return sprintf( 'No previous site files are staged in %s', $txn['stage'] );
+			return sprintf( 'The rollback state is kept in %s', $txn['stage'] );
 		}
+		$last = array_pop( $parts );
 
-		return ucfirst( implode( ' and ', $parts ) );
+		return ucfirst( empty( $parts ) ? $last : implode( ', ', $parts ) . ' and ' . $last );
 	}
 
 	/**
