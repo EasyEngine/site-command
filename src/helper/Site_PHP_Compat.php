@@ -998,9 +998,10 @@ class Site_PHP_Compat {
 			$code                     .= $text;
 			if ( in_array( $type, $opens, true ) ) {
 				$header = $parens;
-			} elseif ( '(' === $text ) {
+			} elseif ( null === $type && '(' === $text ) {
+				// Punctuation only: the text of a string piece (T_ENCAPSED_AND_WHITESPACE) can be `)` or `}` too.
 				$parens++;
-			} elseif ( ')' === $text ) {
+			} elseif ( null === $type && ')' === $text ) {
 				$parens--;
 				if ( $header === $parens ) {
 					$header = null;
@@ -1010,9 +1011,9 @@ class Site_PHP_Compat {
 				}
 			} elseif ( in_array( $type, $ends, true ) ) {
 				$level--;
-			} elseif ( '{' === $text || in_array( $type, [ T_CURLY_OPEN, T_DOLLAR_OPEN_CURLY_BRACES ], true ) ) {
+			} elseif ( ( null === $type && '{' === $text ) || in_array( $type, [ T_CURLY_OPEN, T_DOLLAR_OPEN_CURLY_BRACES ], true ) ) {
 				$level++;
-			} elseif ( '}' === $text ) {
+			} elseif ( null === $type && '}' === $text ) {
 				$level--;
 			}
 		}
