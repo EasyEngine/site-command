@@ -1,24 +1,24 @@
 # site-command Behat coverage
 
-Suite for `easyengine/site-command` (the `ee site` command and the html site type). 18 features, 179 scenarios (211 with outlines expanded): main lane 190, `@wp` 10, `@le` 11. Run it the CI way (`.github/workflows/behat.yml`): the files are copied into a core checkout's `features/` and core's `vendor/bin/behat` runs from the core root as root.
+Suite for `easyengine/site-command` (the `ee site` command and the html site type, plus `ee site php-compat` on php and wp sites). 19 features, 195 scenarios (235 with outlines expanded): main lane 212, `@wp` 12, `@le` 11. Run it the CI way (`.github/workflows/behat.yml`): the files are copied into a core checkout's `features/` and core's `vendor/bin/behat` runs from the core root as root.
 
 ## Tags
 
 | Tag | Scenarios | Meaning |
 |---|---|---|
-| (none of the tags below) | 171 | Local only: `*.test` sites, no public DNS, no remote storage, no global restarts. This is the default safe run. |
+| (none of the tags below) | 185 | Local only: `*.test` sites, no public DNS, no remote storage, no global restarts. This is the default safe run. The php-compat scenarios pull the scanner image from Docker Hub when it isn't present. |
 | `@known-bug` | 0 | Scenarios that expose open bugs are kept outside this suite and come back with their fixes. The CI lanes still exclude the tag. |
 | `@destructive` | 12 | Restarts the GLOBAL nginx-proxy (proxy cache) or runs `ssl-renew --all` (refuses to start when an enabled LE site that isn't the suite's exists). Every scenario leaves the proxy running. |
 | `@remote` | 10 | Uses the REAL rclone remote (`rclone-path` in config.yml). Touches only `<rclone-path>/bh-site-command-*`: the rclone path is listed first and only listed suite directories are purged (per site before a scenario, all of them after the feature). |
 | `@le` | 11 | Let's Encrypt issuance on `*.ee4-test.rt.gw`. Locally: real LE, at most 4 certificates per full run; names contain `{RUN_ID}`, so repeated runs never hit the duplicate-certificate limit. On CI all 11 run against Pebble (`.github/behat/pebble-setup.sh`: EE's hardcoded LE host is redirected to Pebble, `{LE_ISSUER}` comes from `EE_BEHAT_LE_ISSUER`). The failed-alias rollback and the ACME cleanup on delete are regression checks for EasyEngine/site-command#505. |
 | `@le-real` | 0 | Needs the public LE service itself (rate limits, the real chain); never runs on CI. None so far: every `@le` scenario works on Pebble. |
-| `@wp` | 10 | Needs the `wp` site type (site-type-wp in the core checkout) and `ee` on PATH; slow. |
+| `@wp` | 12 | Needs the `wp` site type (site-type-wp in the core checkout) and `ee` on PATH; slow. |
 
 Default safe run: `--tags='~@le&&~@remote&&~@destructive&&~@wp'`.
 
 ## Environment rules
 
-- Every site, alias, hosts entry and remote backup path contains `bh-site-command-`. `@AfterFeature` deletes only sites matching `(^|\.)bh-site-command-`, never other sites; once none is left it also removes suite-named leftovers of known bugs (proxy `certs/`, `acme-conf/certs|var/`, site dirs, volumes labelled with a suite name); `@remote` features also purge the listed `<rclone-path>/bh-site-command-*` directories. `@AfterScenario` removes hosts entries the scenario added, the scenario's `{TMP}` dir under `/var/tmp`, and `{BACKUP_DIR}/bh-site-command-*` leftovers.
+- Every site, alias, hosts entry and remote backup path contains `bh-site-command-`. `@AfterFeature` deletes only sites matching `(^|\.)bh-site-command-`, never other sites; once none is left it also removes suite-named leftovers of known bugs (proxy `certs/`, `acme-conf/certs|var/`, site dirs, volumes labelled with a suite name); `@remote` features also purge the listed `<rclone-path>/bh-site-command-*` directories. `@AfterScenario` removes hosts entries the scenario added, the scenario's `{TMP}` dir under `/var/tmp`, and `{BACKUP_DIR}/bh-site-command-*` leftovers; it also ends a background command the scenario left running and, after php-compat scans, removes `ee-php-compat-bh-site-command-*` containers and `{EE_ROOT_DIR}/tmp/php-compat/bh-site-command-*` directories.
 - The file-writing, hosts, delete and rclone steps refuse names and paths without the prefix (or outside `{TMP}`).
 - HTTP steps resolve the site name to 127.0.0.1 (whitelisted, so no HTTP auth, and no /etc/hosts entry needed); `through the public IP` goes through `hostname -I` instead; `verified` uses real DNS and full TLS verification (LE only). Redirects are never followed.
 - Waits poll (`I wait up to N seconds for URL to return CODE`, `... until the command ... succeeds`); there are no fixed sleeps, except `I wait for the next second` between back-to-back backups of one site (backup ids have one-second resolution).
@@ -29,20 +29,20 @@ Default safe run: `--tags='~@le&&~@remote&&~@destructive&&~@wp'`.
 
 ## Estimated runtime (4 CPU test host)
 
-html create about 15-20 s, delete 5-10 s, proxy-cache toggle 10-15 s (proxy restart), html backup/restore 15-40 s, WordPress create 1.5-2.5 min, LE issuance 30-60 s.
+html create about 15-20 s, php create 20-30 s, delete 5-10 s, proxy-cache toggle 10-15 s (proxy restart), html backup/restore 15-40 s, WordPress create 1.5-2.5 min, php-compat scan of the 5,000-file fixture 1-1.5 min (first run: plus the scanner image pull), LE issuance 30-60 s.
 
 | Selection | Estimate |
 |---|---|
-| Default safe run | ~40 min |
+| Default safe run | ~45 min |
 | `@destructive` | ~7 min |
 | `@remote` (html part) | ~7 min |
-| `@wp` (clone/sync + WP backup/restore) | ~16 min |
+| `@wp` (clone/sync + WP backup/restore + php-compat on WP) | ~19 min |
 | `@le` | ~6 min |
-| Everything | ~75-80 min |
+| Everything | ~85-90 min |
 
 ## Inventory and mapping
 
-Legend: covered / partial / not covered (reason). Feature files are abbreviated: site, create, delete, list, info, en-dis (enable-disable), rr (restart-reload), alias (update-alias), ussl (update-ssl-php), pcache (proxy-cache), clean, share, ssl, redirect, labels, backup (backup-restore), clone (clone-sync), le.
+Legend: covered / partial / not covered (reason). Feature files are abbreviated: site, create, delete, list, info, en-dis (enable-disable), rr (restart-reload), alias (update-alias), ussl (update-ssl-php), pcache (proxy-cache), clean, share, ssl, redirect, labels, backup (backup-restore), clone (clone-sync), le, compat (php-compat).
 
 ### Routing and global behaviour (`Site_Command::__invoke`, hooks.php)
 
@@ -218,13 +218,35 @@ Legend: covered / partial / not covered (reason). Feature files are abbreviated:
 | clone `--ssl=...`, `--wildcard`, cert copy, admin-tools/mailhog replication | not covered | same-host clone of an SSL WP site is possible but slow; LE options need the LE budget |
 | Remote clone/sync over SSH, production guard (`env: production`), non-JSON site list output, inherit-site checks on the other host | not covered | needs a second SSH-reachable EE host (or a fake ssh shim); the production guard needs a global config change |
 
+### php-compat
+
+Every scan scenario needs core's `img-versions.json` to pin `easyengine/compat-scanner` and that image locally or pullable (`Given the compat-scanner image is available`). What the scanner itself finds (scope, components, retries, the `null` verdict) is covered by the image's fixture test in `EasyEngine/dockerfiles`.
+
+| Item | Status | Scenarios |
+|---|---|---|
+| `--format=json` on a wp and a php site: one-line summary, exit 0, no findings | covered (wp part @wp) | compat: The JSON summary of a WordPress site; The JSON summary of a php site |
+| Table: verdict line first ("Not safe", "Safe"), every error with file, line and sniff, static-analysis line last | covered ("Not safe" part @wp) | compat: The table starts with the verdict line...; The table of a php site without errors says it is safe |
+| "Can't confirm" verdict line | not covered | needs a file uid 33 can't read; the scanner side is in the dockerfiles fixture test |
+| `--output`: root-owned 0600, replaces an existing file, same fields as the summary, `report`/`report_bytes` | covered | compat: --output writes a root-owned 0600 report... |
+| No finding text in ee.log | covered | compat: ee.log holds no finding text after a check with findings |
+| html site refused, bad or missing `--php` (dispatcher and command checks), flags `--cancel` doesn't take | covered | compat: An html site is refused; A bad --php value, a missing one, or a flag --cancel does not take is rejected (outline) |
+| `busy` while a scan of the same site runs (json and table) | covered | compat: A second check while one of the same site runs reports busy |
+| `--estimate` (json and table) while a scan of the same site runs | covered | compat: --estimate prints its JSON while a check of the same site runs |
+| `--timeout`: `tool_error`, exit 0, no temporary directory or container left | covered | compat: No temporary directory or container is left behind... |
+| Leftover temporary directory and stopped container of a killed run removed | covered | compat: A leftover of a killed check is removed by the next check |
+| `--cancel`: `not_running` with nothing running (json and table); `cancelled` for a running scan container, which is removed with the temporary directory, and a normal check afterwards; a stopped leftover removed; a missing site refused ("Could not find the site…") | covered | compat: --cancel with nothing running says so; --cancel stops the container of a check and removes its temporary directory; --cancel removes the stopped container and directory of a killed check; --cancel of a site that doesn't exist is refused |
+| `--cancel` racing a live `ee site php-compat` (the scan reports `cancelled`, `--cancel` waits for its cleanup) | not covered | timing-dependent on CI runners; covered by PHPUnit and the real-image docker tests |
+| Invalid `--output`/`--timeout`, `--output` or `--timeout` with `--estimate` | not covered | usage errors raised before Docker runs; not in the spec's scenario list |
+| Disabled site can be scanned | not covered | not in the spec's scenario list |
+| Image pull on first use, failed pull (`tool_error`) | not covered | needs a missing image or no route to Docker Hub |
+
 ### Not in scope
 
 DB and container migrations under `migrations/` (core upgrade flow), the AcmePhp repository classes (only through LE scenarios), macOS-only code.
 
 ## Coverage estimate
 
-Counting the rows above as items: 124 items, 91 covered, 1 partial, 32 not covered (8 of them, marked "not covered yet", are open bugs whose scenarios come back with their fixes), i.e. about 73% of the inventory. Every user-facing subcommand and option of the html type has at least one scenario except `ssl-renew --force`, `clone --ssl/--wildcard` and a live `share`.
+Counting the rows above as items: 137 items, 100 covered, 1 partial, 36 not covered (8 of them, marked "not covered yet", are open bugs whose scenarios come back with their fixes), i.e. about 73% of the inventory. Every user-facing subcommand and option of the html type has at least one scenario except `ssl-renew --force`, `clone --ssl/--wildcard` and a live `share`.
 
 ## Known bugs left out
 
