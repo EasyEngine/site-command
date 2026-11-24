@@ -3701,10 +3701,10 @@ DEALLOCATE PREPARE ee_stmt;
 			return $content;
 		}
 
-		// The lines come from the archive: no control characters to the terminal.
+		// The lines come from the archive: printable ASCII only, since an 8-bit terminal reads any byte 0x80-0x9F as a control character.
 		$lines   = array_map(
 			function ( $line ) {
-				return '`' . preg_replace( '/[\x00-\x1F\x7F]|\xC2[\x80-\x9F]/', '?', (string) $line ) . '`';
+				return '`' . preg_replace( '/[^\t\x20-\x7E]/', '?', (string) $line ) . '`';
 			},
 			array_keys( $removed )
 		);
