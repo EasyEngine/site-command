@@ -490,11 +490,7 @@ class FeatureContext implements Context
 	{
 		// A failed --output check could have replaced /dev/null with a file; never leave the runner without it.
 		clearstatcache( true, '/dev/null' );
-		$null = @lstat( '/dev/null' );
-		if ( ! $null || 0020000 !== ( $null['mode'] & 0170000 ) || 259 !== $null['rdev'] ) {
-			@unlink( '/dev/null' );
-			exec( 'mknod -m 666 /dev/null c 1 3' );
-		}
+		self::repairDevNull( @lstat( '/dev/null' ) );
 		$this->commands = [];
 		chdir($this->ee_path);
 
@@ -998,12 +994,27 @@ class FeatureContext implements Context
 	{
 		clearstatcache( true, '/dev/null' );
 		$stat = @lstat( '/dev/null' );
-		if ( $stat && 0020000 === ( $stat['mode'] & 0170000 ) && 259 === $stat['rdev'] ) {
+		// 259 is 1:3, the null device's numbers on Linux only.
+		if ( $stat && 0020000 === ( $stat['mode'] & 0170000 ) && ( 'Linux' !== PHP_OS_FAMILY || 259 === $stat['rdev'] ) ) {
+			return;
+		}
+		self::repairDevNull( $stat );
+		throw new Exception( '/dev/null was replaced: ' . var_export( $stat, true ) );
+	}
+
+	/**
+	 * Recreate /dev/null only on Linux and only when it is no character device at all (e.g. replaced by a file), so a
+	 * healthy one is never removed.
+	 *
+	 * @param array|false $stat lstat() of /dev/null.
+	 */
+	private static function repairDevNull( $stat )
+	{
+		if ( 'Linux' !== PHP_OS_FAMILY || ( $stat && 0020000 === ( $stat['mode'] & 0170000 ) ) ) {
 			return;
 		}
 		@unlink( '/dev/null' );
 		exec( 'mknod -m 666 /dev/null c 1 3' );
-		throw new Exception( '/dev/null was replaced (restored now): ' . var_export( $stat, true ) );
 	}
 
 	/**
