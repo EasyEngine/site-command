@@ -484,6 +484,11 @@ class Site_PHP_Compat {
 		if ( false !== strpbrk( $code, ',"' ) ) {
 			return $this->doc( 'tool_error', 'the site code path has a comma or a quote' );
 		}
+		// Before the lock: `ee site delete` waits only for the estimate's own time limit, not for a slow pull.
+		$pull = $this->ensure_image( $image );
+		if ( null !== $pull ) {
+			return $this->doc( 'tool_error', $pull );
+		}
 		// One estimate per site at a time; it never waits for a scan.
 		$locked = $this->lock_estimate();
 		if ( null === $locked ) {
@@ -495,10 +500,6 @@ class Site_PHP_Compat {
 		// Taken before this check, so a restore starting now sees the estimate lock (Site_Backup_Restore::hold_scan_lock()).
 		if ( $this->restore_running( $site_data->site_fs_path ) ) {
 			return $this->doc( 'tool_error', 'a restore of the site is running' );
-		}
-		$pull = $this->ensure_image( $image );
-		if ( null !== $pull ) {
-			return $this->doc( 'tool_error', $pull );
 		}
 		$mounts = $this->extra_mounts( $site_data, $code );
 		if ( is_string( $mounts ) ) {
@@ -2905,8 +2906,13 @@ class Site_PHP_Compat {
 		if ( false === $handle ) {
 			return true;
 		}
-		$until = microtime( true ) + $this->estimate_wait();
+		$until  = microtime( true ) + $this->estimate_wait();
+		$logged = false;
 		while ( ! flock( $handle, LOCK_EX | LOCK_NB, $would_block ) ) {
+			if ( $would_block && ! $logged ) {
+				EE::log( "Waiting for the running php-compat estimate of {$this->site} to finish." );
+				$logged = true;
+			}
 			if ( ! $would_block || microtime( true ) >= $until ) {
 				fclose( $handle );
 
