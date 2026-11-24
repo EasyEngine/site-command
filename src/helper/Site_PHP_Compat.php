@@ -981,15 +981,12 @@ class Site_PHP_Compat {
 	protected function index_wp_root( $code, $rel ) {
 		$index  = self::resolve_in( $code, "$rel/index.php" );
 		$source = null === $index ? null : $this->read_site_file( $code, "$rel/index.php" );
-		$php    = null === $source ? '' : self::php_code( $source );
-		if ( false === stripos( $php, 'wp-blog-header.php' ) ) {
-			return null;
+		$loads  = null === $source ? null : self::loaded_from( $source, 'wp-blog-header.php' );
+		if ( ! is_array( $loads ) ) {
+			return $loads;
 		}
-		if ( ! preg_match( '/\b(?:require|include)(?:_once)?\(?(?:(__DIR__|dirname\(__FILE__\))\.)?([\'"])([^\'"$]*?)wp-blog-header\.php\2\)?;/i', $php, $m ) ) {
-			return false;
-		}
-		$path = $m[3];
-		if ( '/' === substr( $path, 0, 1 ) && '' === $m[1] ) {
+		list( $path, $from_dir ) = $loads;
+		if ( '/' === substr( $path, 0, 1 ) && ! $from_dir ) {
 			if ( 0 !== strpos( $path, '/var/www/' ) ) {
 				return false;
 			}
@@ -1006,21 +1003,44 @@ class Site_PHP_Compat {
 	}
 
 	/**
-	 * PHP source without whitespace, comments or inline HTML, for static reads.
+	 * Where a require or include statement loads $file from, read from its tokens: the string in front of the name, with
+	 * `__DIR__ .` or `dirname( __FILE__ ) .` before it or nothing.
 	 *
 	 * @param string $source PHP source.
+	 * @param string $file   File name, e.g. wp-blog-header.php.
 	 *
-	 * @return string
+	 * @return array|false|null [ directory part, whether it is from the file's own directory ]; false when a statement
+	 *                          loads it in another form; null when none does.
 	 */
-	protected static function php_code( $source ) {
-		$code = '';
+	public static function loaded_from( $source, $file ) {
+		$tokens = [];
 		foreach ( @token_get_all( $source ) as $token ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- a broken file still tokenises.
 			if ( ! is_array( $token ) || ! in_array( $token[0], [ T_WHITESPACE, T_COMMENT, T_DOC_COMMENT, T_OPEN_TAG, T_CLOSE_TAG, T_INLINE_HTML ], true ) ) {
-				$code .= is_array( $token ) ? $token[1] : $token;
+				$tokens[] = is_array( $token ) ? $token : [ null, $token ];
 			}
 		}
+		$name = preg_quote( $file, '/' );
+		foreach ( $tokens as $i => $token ) {
+			if ( ! in_array( $token[0], [ T_REQUIRE, T_REQUIRE_ONCE, T_INCLUDE, T_INCLUDE_ONCE ], true ) ) {
+				continue;
+			}
+			$operand = '';
+			$names   = false;
+			for ( $j = $i + 1; isset( $tokens[ $j ] ) && ';' !== $tokens[ $j ][1]; $j++ ) {
+				$operand .= $tokens[ $j ][1];
+				$names    = $names || ( T_CONSTANT_ENCAPSED_STRING === $tokens[ $j ][0] && preg_match( "/(^['\"]|\\/){$name}['\"]\$/", $tokens[ $j ][1] ) );
+			}
+			if ( ! $names ) {
+				continue;
+			}
+			if ( ! preg_match( "/^\\(?(?:(__DIR__|dirname\\(__FILE__\\))\\.)?(['\"])([^'\"\$\\\\]*?){$name}\\2\\)?\$/i", $operand, $m ) ) {
+				return false;
+			}
 
-		return $code;
+			return [ $m[3], '' !== $m[1] ];
+		}
+
+		return null;
 	}
 
 	/**
@@ -1152,14 +1172,39 @@ class Site_PHP_Compat {
 		$dir        = dirname( dirname( $files[0] ) );
 		$app_config = ( '.' === $dir ? '' : "$dir/" ) . 'config/application.php';
 		// Only when the loader includes it: a stale copy WordPress never reads says nothing.
-		$loader     = self::php_code( (string) $this->read_site_file( $code, $files[0] ) );
-		if ( '.' !== dirname( $files[0] ) && null !== self::resolve_in( $code, $app_config ) && preg_match( '#\b(?:require|include)(?:_once)?[^;]*config/application\.php#i', $loader ) ) {
+		if ( '.' !== dirname( $files[0] ) && null !== self::resolve_in( $code, $app_config ) && self::includes( (string) $this->read_site_file( $code, $files[0] ), 'config/application.php' ) ) {
 			$files[] = $app_config;
 		}
 
 		return $files;
 	}
 
+	/**
+	 * Whether a require or include statement in the source names a file ending in $suffix (as a string in its operand).
+	 *
+	 * @param string $source PHP source.
+	 * @param string $suffix End of the path, e.g. config/application.php (a whole path segment).
+	 *
+	 * @return bool
+	 */
+	public static function includes( $source, $suffix ) {
+		$inside = false;
+		foreach ( @token_get_all( $source ) as $token ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- a broken file still tokenises.
+			$type = is_array( $token ) ? $token[0] : null;
+			if ( in_array( $type, [ T_REQUIRE, T_REQUIRE_ONCE, T_INCLUDE, T_INCLUDE_ONCE ], true ) ) {
+				$inside = true;
+			} elseif ( $inside && ';' === $token ) {
+				$inside = false;
+			} elseif ( $inside && T_CONSTANT_ENCAPSED_STRING === $type ) {
+				$path = substr( $token[1], 1, -1 );
+				if ( $path === $suffix || substr( $path, -strlen( $suffix ) - 1 ) === "/$suffix" ) {
+					return true;
+				}
+			}
+		}
+
+		return false;
+	}
 
 	/**
 	 * Plain defines of the directory constants in a PHP file, read without running it.
