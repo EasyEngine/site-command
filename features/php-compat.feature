@@ -253,6 +253,9 @@ Feature: Check the PHP compatibility of a site's code
     # [s] keeps pkill's own shell out of the match.
     And I run 'pkill -HUP -f "[s]ite php-compat bh-site-command-183.test --php=8.4 --format=json"'
     Then the command should succeed
+    # A lost terminal hangs up the whole job, the docker client too.
+    When I run 'pkill -HUP -f "[d]ocker run .*--name ee-php-compat-bh-site-command-183.test "'
+    Then the command should succeed
     When I wait for the next second
     Then the background command should still be running
     When I wait up to 900 seconds for the background command to finish
