@@ -826,6 +826,14 @@ function get_site_compose_files( $site_fs_path ) {
 	// `admin-tools disable` leaves docker-compose-admin.yml in place, so the DB flag decides.
 	foreach ( Site::where( 'site_fs_path', $site_fs_path ) as $site ) {
 		if ( ! empty( $site->admin_tools ) ) {
+			// A failed v4.13.2 admin-tools migration puts back the old file, which mounts the EasyEngine DB into the site.
+			$admin_compose = @file_get_contents( $site_fs_path . '/docker-compose-admin.yml' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- a missing file is skipped later.
+			if ( defined( 'DB' ) && false !== $admin_compose && false !== strpos( $admin_compose, DB ) ) {
+				EE::warning( sprintf( 'Not applying %1$s/docker-compose-admin.yml: it still mounts the EasyEngine database. Run `ee admin-tools enable %2$s --force` to bring admin-tools back.', $site_fs_path, $site->site_url ) );
+
+				return [];
+			}
+
 			return [ 'docker-compose-admin.yml' ];
 		}
 	}
