@@ -1033,6 +1033,7 @@ class Site_PHP_Compat {
 	 */
 	protected function wp_cli_path( $code, $dir ) {
 		$text = $this->read_site_file( $code, $dir . '/wp-cli.yml' );
+		$text = null === $text ? null : str_replace( [ "\r\n", "\r" ], "\n", $text );
 		if ( null === $text || ! preg_match( '/^path:[ \t]*([\'"]?)([^\'"\r\n]*?)\1[ \t]*$/m', $text, $m ) || '' === $m[2] ) {
 			return null;
 		}
@@ -1181,11 +1182,13 @@ class Site_PHP_Compat {
 		$ends   = [ T_ENDIF, T_ENDWHILE, T_ENDFOR, T_ENDFOREACH, T_ENDSWITCH, T_ENDDECLARE ];
 		$code   = '';
 		$depths = [];
+		$types  = [];
 		$level  = 0;
 		$parens = 0;
 		$header = null;
 		foreach ( $tokens as $i => list( $type, $text ) ) {
 			$depths[ strlen( $code ) ] = $level;
+			$types[ strlen( $code ) ]  = [ $type, $text ];
 			$code                     .= $text;
 			if ( in_array( $type, $opens, true ) ) {
 				$header = $parens;
@@ -1212,14 +1215,30 @@ class Site_PHP_Compat {
 		$names = implode( '|', self::DIR_CONSTANTS );
 		$spans = [];
 		$found = [];
+		// Only real tokens count: text inside a string is never a define, a check or a use.
+		$token_is = function ( $at, array $kinds ) use ( $types ) {
+			return isset( $types[ $at ] ) && in_array( $types[ $at ][0], $kinds, true );
+		};
+		// Once wp-settings.php is loaded, WordPress has set these constants: a later define never takes effect.
+		$booted = PHP_INT_MAX;
+		if ( preg_match_all( '/\b(?:require|include)(?:_once)?[^;]*wp-settings\.php/i', $code, $boots, PREG_OFFSET_CAPTURE ) ) {
+			foreach ( $boots[0] as $boot ) {
+				if ( $token_is( $boot[1], [ T_REQUIRE, T_REQUIRE_ONCE, T_INCLUDE, T_INCLUDE_ONCE ] ) ) {
+					$booted = min( $booted, $boot[1] );
+				}
+			}
+		}
 		// A top-level define, also inside its own `if ( ! defined( 'X' ) )` guard.
 		preg_match_all( "/(?:\\bif\\(!defined\\((['\"])($names)\\1\\)\\)(\\{)?)?\\bdefine\\((['\"])($names)\\4,(.*?)\\);(?(3)\\})/i", $code, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE );
 		foreach ( $matches as $match ) {
 			$name = $match[5][0];
 			$at   = $match[0][1];
+			if ( ! $token_is( $at, [ T_IF, T_STRING ] ) || ! $token_is( $match[4][1], [ T_CONSTANT_ENCAPSED_STRING ] ) ) {
+				continue;
+			}
 			// A statement of its own: after `if (…)`, `else` or `:` it may never run.
 			$own = 0 === $at || in_array( $code[ $at - 1 ], [ ';', '}' ], true );
-			if ( ! $own || ( '' !== $match[2][0] && $match[2][0] !== $name ) || ! isset( $depths[ $at ] ) || 0 !== $depths[ $at ] || isset( $found[ $name ] ) ) {
+			if ( ! $own || $at > $booted || ( '' !== $match[2][0] && $match[2][0] !== $name ) || 0 !== $depths[ $at ] || isset( $found[ $name ] ) ) {
 				return $name;
 			}
 			$found[ $name ] = $match[6][0];
@@ -1227,13 +1246,32 @@ class Site_PHP_Compat {
 		}
 		preg_match_all( "/\\bdefined\\((['\"])(?:$names)\\1\\)/i", $code, $checks, PREG_OFFSET_CAPTURE );
 		foreach ( $checks[0] as $check ) {
-			$spans[] = [ $check[1], $check[1] + strlen( $check[0] ) ];
+			if ( $token_is( $check[1], [ T_STRING ] ) ) {
+				$spans[] = [ $check[1], $check[1] + strlen( $check[0] ) ];
+			}
 		}
+		usort(
+			$spans,
+			function ( $a, $b ) {
+				return $a[0] - $b[0];
+			}
+		);
 		preg_match_all( "/\\b(?:$names)\\b/", $code, $uses, PREG_OFFSET_CAPTURE );
+		$next = 0;
 		foreach ( $uses[0] as $use ) {
+			$at = $use[1];
+			// A bare constant, or a string that is exactly its name (constant( 'X' )); other text in strings doesn't count.
+			$quoted = isset( $types[ $at - 1 ] ) && T_CONSTANT_ENCAPSED_STRING === $types[ $at - 1 ][0] && 1 === preg_match( '/^([\'"])' . $use[0] . '\1$/D', $types[ $at - 1 ][1] );
+			if ( ! $token_is( $at, [ T_STRING ] ) && ! $quoted ) {
+				continue;
+			}
+			// Uses come in order, so the spans before this one can be skipped for good.
+			while ( isset( $spans[ $next ] ) && $spans[ $next ][1] <= $at ) {
+				$next++;
+			}
 			$covered = false;
-			foreach ( $spans as $span ) {
-				$covered = $covered || ( $use[1] >= $span[0] && $use[1] < $span[1] );
+			for ( $i = $next; isset( $spans[ $i ] ) && $spans[ $i ][0] <= $at; $i++ ) {
+				$covered = $covered || $at < $spans[ $i ][1];
 			}
 			if ( ! $covered ) {
 				return $use[0];
@@ -1282,6 +1320,10 @@ class Site_PHP_Compat {
 			}
 			$base = '.' === $base ? '' : $base;
 			$path = substr( $m[2], 1, -1 );
+			// PHP joins the strings as they are: only ABSPATH ends in `/`, so `__DIR__ . '-x'` is a sibling, not a child.
+			if ( 'abspath' !== strtolower( $m[1] ) && '' !== $path && '/' !== $path[0] ) {
+				return null;
+			}
 		} else {
 			return null;
 		}
@@ -1354,7 +1396,8 @@ class Site_PHP_Compat {
 				$todo = array_merge( array_values( array_filter( explode( '/', $target ), 'strlen' ) ), $todo );
 				continue;
 			}
-			if ( ! file_exists( $path ) ) {
+			// Only a directory can be passed through, as in the kernel.
+			if ( ! file_exists( $path ) || ( $todo && ! is_dir( $path ) ) ) {
 				return null;
 			}
 			$done[] = $part;
