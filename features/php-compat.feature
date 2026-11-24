@@ -180,7 +180,10 @@ Feature: Check the PHP compatibility of a site's code
   Scenario: A WP_CONTENT_DIR the check can't follow gives no verdict
     Given the site "bh-site-command-188.test" exists, created with "--type=wp"
     And I write "<?php\n/**\n * Plugin Name: Compat Fixture\n */\neach( $a );\n" to the file "{SITES_DIR}/bh-site-command-188.test/app/htdocs/content/plugins/compat-fixture/compat-fixture.php"
-    And I append "\ndefine( 'WP_CONTENT_DIR', __DIR__ . '/htdocs/content' );\n" to the file "{SITES_DIR}/bh-site-command-188.test/app/wp-config.php"
+    # Before wp-settings.php is loaded, where WordPress reads it.
+    When I run 'sed -i "s#^require_once ABSPATH#define( \"WP_CONTENT_DIR\", __DIR__ . \"/htdocs/content\" );\nrequire_once ABSPATH#" {SITES_DIR}/bh-site-command-188.test/app/wp-config.php'
+    Then the command should succeed
+    And the file "{SITES_DIR}/bh-site-command-188.test/app/wp-config.php" should contain "/htdocs/content"
     When I run 'bin/ee site php-compat bh-site-command-188.test --php=8.4 --format=json'
     Then the command should succeed
     And the JSON field "status" in STDOUT should be "tool_error"
