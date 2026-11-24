@@ -271,6 +271,26 @@ Feature: Check the PHP compatibility of a site's code
     And the JSON field "status" in STDOUT should be "tool_error"
     And the JSON field "detail" in STDOUT should contain "user-docker-compose/mount.yml mounts code below /var/www, which this check can only see while the site runs"
 
+  @wp
+  Scenario: WordPress in its own directory is found through the index.php nginx serves
+    Given the compat-scanner image is available
+    And the site "bh-site-command-192.test" exists, created with "--type=wp"
+    # Core and wp-content in htdocs/wp, loaded by htdocs/index.php; no wp-cli.yml.
+    When I run 'cd {SITES_DIR}/bh-site-command-192.test/app/htdocs && mkdir wp && mv wp-admin wp-includes wp-content wp-*.php index.php license.txt readme.html xmlrpc.php wp/ && printf "<?php\ndefine( \"WP_USE_THEMES\", true );\nrequire __DIR__ . \"/wp/wp-blog-header.php\";\n" > index.php && chown -R 33:33 .'
+    Then the command should succeed
+    And I write "<?php\n/**\n * Plugin Name: Compat Fixture\n * Version: 1.0\n */\neach( $a );\n" to the file "{SITES_DIR}/bh-site-command-192.test/app/htdocs/wp/wp-content/plugins/compat-fixture/compat-fixture.php"
+    And I make everything under "{SITES_DIR}/bh-site-command-192.test/app/htdocs/wp/wp-content/plugins/compat-fixture" readable by everyone
+    When I run 'cd {SITES_DIR}/bh-site-command-192.test && {EE} site php-compat --php=8.4 --format=json'
+    Then the command should succeed
+    And the JSON field "status" in STDOUT should be "ok"
+    And the JSON field "safe_to_upgrade" in STDOUT should be "false"
+    # An index.php that loads WordPress from a place the check can't read gives no verdict.
+    When I run 'printf "<?php\n\$d = __DIR__ . \"/wp\";\nrequire \$d . \"/wp-blog-header.php\";\n" > {SITES_DIR}/bh-site-command-192.test/app/htdocs/index.php'
+    And I run 'bin/ee site php-compat bh-site-command-192.test --php=8.4 --format=json'
+    Then the command should succeed
+    And the JSON field "status" in STDOUT should be "tool_error"
+    And the JSON field "detail" in STDOUT should contain "can't resolve where htdocs/index.php loads WordPress (wp-blog-header.php) from"
+
   Scenario: An html site is refused
     Given the html site "bh-site-command-182.test" exists
     When I run 'bin/ee site php-compat bh-site-command-182.test --php=8.4'

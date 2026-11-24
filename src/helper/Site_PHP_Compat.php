@@ -842,6 +842,9 @@ class Site_PHP_Compat {
 
 		$this->wp_layout = true;
 		$root            = $this->wp_root( $code, $rel );
+		if ( is_string( $root ) && 0 === strpos( $root, '!' ) ) {
+			return $this->doc( 'tool_error', substr( $root, 1 ) );
+		}
 		if ( null === $root ) {
 			// No WordPress found here; a wp-config that moves its code elsewhere still rules out no_code_found.
 			$root = $rel;
@@ -927,15 +930,25 @@ class Site_PHP_Compat {
 	}
 
 	/**
-	 * WordPress root relative to app/: the served root or its current/ (as backup finds it), else wp-cli.yml's path.
+	 * WordPress root relative to app/: where the served index.php loads WordPress from, the served root or its current/ (as
+	 * backup finds it), else wp-cli.yml's path.
 	 *
 	 * @param string $code Real path of the site's app/.
 	 * @param string $rel  Served root relative to app/.
 	 *
-	 * @return string|null
+	 * @return string|null The root, null when none is found, or `!<detail>` when the served index.php loads WordPress from
+	 *                     somewhere this check can't follow.
 	 */
 	protected function wp_root( $code, $rel ) {
+		$loader     = $this->index_wp_root( $code, $rel );
 		$candidates = \EE\Site\Utils\get_wp_root_candidates( $rel );
+		if ( false === $loader ) {
+			return "!can't resolve where {$rel}/index.php loads WordPress (wp-blog-header.php) from";
+		}
+		if ( null !== $loader ) {
+			// What is actually served wins over a stale copy in the root.
+			array_unshift( $candidates, $loader );
+		}
 		foreach ( array_unique( [ $rel, 'htdocs' ] ) as $dir ) {
 			$path = $this->wp_cli_path( $code, $dir );
 			if ( null !== $path ) {
@@ -952,7 +965,62 @@ class Site_PHP_Compat {
 			}
 		}
 
-		return null;
+		return null === $loader ? null : "!{$rel}/index.php loads WordPress from {$loader}, which holds no WordPress";
+	}
+
+	/**
+	 * The directory the served index.php loads wp-blog-header.php from (WordPress in its own directory), read without
+	 * running it.
+	 *
+	 * @param string $code Real path of the site's app/.
+	 * @param string $rel  Served root relative to app/.
+	 *
+	 * @return string|false|null Relative to app/; null when index.php doesn't load WordPress, false when it does but not in
+	 *                           a form this check reads.
+	 */
+	protected function index_wp_root( $code, $rel ) {
+		$index  = self::resolve_in( $code, "$rel/index.php" );
+		$source = null === $index ? null : $this->read_site_file( $code, "$rel/index.php" );
+		$php    = null === $source ? '' : self::php_code( $source );
+		if ( false === stripos( $php, 'wp-blog-header.php' ) ) {
+			return null;
+		}
+		if ( ! preg_match( '/\b(?:require|include)(?:_once)?\(?(?:(__DIR__|dirname\(__FILE__\))\.)?([\'"])([^\'"$]*?)wp-blog-header\.php\2\)?;/i', $php, $m ) ) {
+			return false;
+		}
+		$path = $m[3];
+		if ( '/' === substr( $path, 0, 1 ) && '' === $m[1] ) {
+			if ( 0 !== strpos( $path, '/var/www/' ) ) {
+				return false;
+			}
+			$path = substr( $path, strlen( '/var/www/' ) );
+		} else {
+			// __DIR__, or a relative path, which PHP-FPM resolves from the script's own directory. That is the real one, which
+			// only matters for `..`; otherwise the served path keeps a current/ link for the scanner's release handling.
+			$base = preg_match( '#(^|/)\.\.(/|$)#', $path ) ? dirname( substr( $index, strlen( $code ) + 1 ) ) : $rel;
+			$path = $base . '/' . $path;
+		}
+		$path = trim( preg_replace( '#/+#', '/', preg_replace( '#(^|/)\.(?=/|$)#', '$1', $path ) ), '/' );
+
+		return '' === $path ? false : $path;
+	}
+
+	/**
+	 * PHP source without whitespace, comments or inline HTML, for static reads.
+	 *
+	 * @param string $source PHP source.
+	 *
+	 * @return string
+	 */
+	protected static function php_code( $source ) {
+		$code = '';
+		foreach ( @token_get_all( $source ) as $token ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- a broken file still tokenises.
+			if ( ! is_array( $token ) || ! in_array( $token[0], [ T_WHITESPACE, T_COMMENT, T_DOC_COMMENT, T_OPEN_TAG, T_CLOSE_TAG, T_INLINE_HTML ], true ) ) {
+				$code .= is_array( $token ) ? $token[1] : $token;
+			}
+		}
+
+		return $code;
 	}
 
 	/**
@@ -1091,23 +1159,6 @@ class Site_PHP_Compat {
 		return $files;
 	}
 
-	/**
-	 * PHP source without whitespace, comments or inline HTML, for static reads.
-	 *
-	 * @param string $source PHP source.
-	 *
-	 * @return string
-	 */
-	protected static function php_code( $source ) {
-		$code = '';
-		foreach ( @token_get_all( $source ) as $token ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- a broken file still tokenises.
-			if ( ! is_array( $token ) || ! in_array( $token[0], [ T_WHITESPACE, T_COMMENT, T_DOC_COMMENT, T_OPEN_TAG, T_CLOSE_TAG, T_INLINE_HTML ], true ) ) {
-				$code .= is_array( $token ) ? $token[1] : $token;
-			}
-		}
-
-		return $code;
-	}
 
 	/**
 	 * Plain defines of the directory constants in a PHP file, read without running it.
