@@ -2857,8 +2857,19 @@ class Site_PHP_Compat {
 		$this->site     = $site_data->site_url;
 		$this->dispatch = $dispatch;
 		$parent         = rtrim( $this->temp_base(), '/' ) . '/' . self::TEMP_DIR;
+		$name           = 'ee-php-compat-' . $this->site;
 		// Nothing to do, and no temp directory created, for a site never checked.
-		if ( ! file_exists( $parent ) && false === $this->container_status( 'ee-php-compat-' . $this->site ) ) {
+		if ( ! file_exists( $parent ) && ! is_link( $parent ) && false === $this->container_status( $name ) ) {
+			return null;
+		}
+		$usable = $this->temp_parent();
+		if ( null === $usable || null === $this->cancel_path( $usable ) ) {
+			// No check can run with these directories (a link, another owner): only a container can be left, and is stopped by name.
+			EE::warning( "Leaving $parent as it is: not a directory of this user with mode 0700." );
+			if ( false !== $this->container_status( $name ) && ! $this->container_gone( $name ) ) {
+				return "could not remove the container $name";
+			}
+
 			return null;
 		}
 		try {
