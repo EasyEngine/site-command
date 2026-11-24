@@ -114,6 +114,9 @@ class Site_PHP_Compat {
 	/** @var resource|null Lock on the site directory while a scan runs, or on the site's estimate lock file while an estimate runs. */
 	protected $lock;
 
+	/** @var string|null Label value of this estimate's container while cleanup() may have to remove it. */
+	protected $estimate_label;
+
 	/** @var resource|null Shared host-wide lock while this check uses the scanner image, so no other check removes its tag. */
 	protected $image_lock;
 
@@ -511,7 +514,13 @@ class Site_PHP_Compat {
 			return $this->doc( 'tool_error', $mounts );
 		}
 
-		$run = $this->docker( $this->docker_run_args( 'estimate', $image, $site_data, $code ), self::ESTIMATE_TIMEOUT + self::PROCESS_MARGIN, true );
+		// The client ignores signals (no --sig-proxy) and a timeout stops only the client: cleanup() removes the container by label.
+		$this->estimate_label = bin2hex( random_bytes( 8 ) );
+		$run                  = $this->docker( $this->docker_run_args( 'estimate', $image, $site_data, $code ), self::ESTIMATE_TIMEOUT + self::PROCESS_MARGIN, true );
+		if ( null !== $run['code'] ) {
+			// Ended on its own: --rm removed it.
+			$this->estimate_label = null;
+		}
 		if ( $run['timed_out'] ) {
 			return $this->doc( 'tool_error', 'timed out after ' . self::ESTIMATE_TIMEOUT . ' s' );
 		}
@@ -809,6 +818,9 @@ class Site_PHP_Compat {
 			'-e', 'COMPAT_SITE=' . $this->site, '-e', 'COMPAT_IMAGE=' . $image, '-e', 'COMPAT_REPORT_MAX=' . self::REPORT_MAX,
 			'--mount', "type=bind,src=$code,dst=/var/www,readonly"
 		);
+		if ( 'estimate' === $mode && null !== $this->estimate_label ) {
+			array_push( $args, '--label', 'ee-php-compat-estimate=' . $this->estimate_label );
+		}
 		if ( 'estimate' === $mode ) {
 			// The byte model misses PHPCS's per-file cost on dense many-file trees (2x short seen): more per batch, wider top end.
 			array_push( $args, '-e', 'COMPAT_SECONDS_PER_BATCH=' . self::ESTIMATE_SECONDS_PER_BATCH, '-e', 'COMPAT_HIGH_FACTOR=' . self::ESTIMATE_HIGH_FACTOR );
@@ -3000,6 +3012,14 @@ class Site_PHP_Compat {
 			if ( ! $this->container_gone( $name ) && null !== $this->temp_dir ) {
 				EE::warning( "Left {$this->temp_dir} in place: the container $name could not be removed." );
 				$this->temp_dir = null;
+			}
+		}
+		if ( null !== $this->estimate_label ) {
+			$label                = 'label=ee-php-compat-estimate=' . $this->estimate_label;
+			$this->estimate_label = null;
+			$ids                  = $this->docker( [ 'docker', 'ps', '-aq', '--filter', $label ], 60 );
+			foreach ( preg_split( '/\s+/', trim( $ids['stdout'] ), -1, PREG_SPLIT_NO_EMPTY ) as $id ) {
+				$this->docker( [ 'docker', 'rm', '-f', $id ], 60 );
 			}
 		}
 		if ( null !== $this->temp_dir ) {
