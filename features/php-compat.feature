@@ -239,14 +239,16 @@ Feature: Check the PHP compatibility of a site's code
     When I wait up to 120 seconds for the background command to finish
     Then the JSON field "status" in STDOUT should be "cancelled"
 
-  Scenario: A check started under nohup survives a hangup
+  Scenario: A hangup doesn't stop a running check
     Given the compat-scanner image is available
     And the site "bh-site-command-183.test" exists, created with "--type=php"
     And the directory "{SITES_DIR}/bh-site-command-183.test/app/htdocs/bulk" holds 5000 generated PHP files
     When I start 'nohup bin/ee site php-compat bh-site-command-183.test --php=8.4 --format=json' in the background
     And I wait up to 120 seconds until the command "docker inspect -f '{{.State.Running}}' ee-php-compat-bh-site-command-183.test | grep -qx true" succeeds
-    And I run 'pkill -HUP -f "site php-compat bh-site-command-183.test --php=8.4 --format=json"'
-    And I wait for the next second
+    # [s] keeps pkill's own shell out of the match.
+    And I run 'pkill -HUP -f "[s]ite php-compat bh-site-command-183.test --php=8.4 --format=json"'
+    Then the command should succeed
+    When I wait for the next second
     Then the background command should still be running
     When I wait up to 900 seconds for the background command to finish
     Then the command should succeed

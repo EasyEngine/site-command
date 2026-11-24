@@ -488,6 +488,13 @@ class FeatureContext implements Context
 	 */
 	public function cleanupScenario(AfterScenarioScope $scope)
 	{
+		// A failed --output check could have replaced /dev/null with a file; never leave the runner without it.
+		clearstatcache( true, '/dev/null' );
+		$null = @lstat( '/dev/null' );
+		if ( ! $null || 0020000 !== ( $null['mode'] & 0170000 ) || 259 !== $null['rdev'] ) {
+			@unlink( '/dev/null' );
+			exec( 'mknod -m 666 /dev/null c 1 3' );
+		}
 		$this->commands = [];
 		chdir($this->ee_path);
 

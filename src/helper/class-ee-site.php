@@ -102,10 +102,7 @@ abstract class EE_Site_Command {
 		// A PHP without pcntl, or with it in disable_functions (fatal on PHP 8), only loses the rollback on signals.
 		if ( function_exists( 'pcntl_signal' ) ) {
 			pcntl_signal( SIGTERM, [ $this, 'rollback' ] );
-			// Started under nohup: keep ignoring a hangup, as the user asked.
-			if ( SIG_IGN !== pcntl_signal_get_handler( SIGHUP ) ) {
-				pcntl_signal( SIGHUP, [ $this, 'rollback' ] );
-			}
+			pcntl_signal( SIGHUP, [ $this, 'rollback' ] );
 			pcntl_signal( SIGUSR1, [ $this, 'rollback' ] );
 			pcntl_signal( SIGINT, [ $this, 'rollback' ] );
 		} else {
@@ -3369,11 +3366,16 @@ abstract class EE_Site_Command {
 				\EE::warning( 'Stopping the check: removing its container and temporary files.' );
 				exit( 1 );
 			};
-			foreach ( [ SIGTERM, SIGINT, SIGUSR1, SIGHUP ] as $signal ) {
-				if ( SIGHUP !== $signal || SIG_IGN !== pcntl_signal_get_handler( SIGHUP ) ) {
-					pcntl_signal( $signal, $stop );
-				}
+			foreach ( [ SIGTERM, SIGINT, SIGUSR1 ] as $signal ) {
+				pcntl_signal( $signal, $stop );
 			}
+			// A lost terminal doesn't stop a check (PHP can't see nohup's ignore); it ends and cleans up on its own, or with --cancel.
+			pcntl_signal(
+				SIGHUP,
+				function () {
+					\EE::debug( 'Hangup received; the check goes on. Stop it with --cancel.' );
+				}
+			);
 		}
 		$this->php_compat_check->run(
 			$this->site_data,

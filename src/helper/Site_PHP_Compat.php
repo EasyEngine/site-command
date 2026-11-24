@@ -81,6 +81,12 @@ class Site_PHP_Compat {
 	/** @var string|null Status of this scan's result, so cleanup() knows whether a late --cancel can still be honoured. */
 	protected $result_status;
 
+	/** @var resource|null The site lock `ee site delete` keeps until it ends. */
+	protected $delete_lock;
+
+	/** @var resource|null An estimate lock held while `ee site delete` removes it. */
+	protected $estimate_lock;
+
 	/** @var bool Whether cleanup() took a --cancel request that arrived after the scan's last check. */
 	protected $late_cancel = false;
 
@@ -869,13 +875,21 @@ class Site_PHP_Compat {
 	protected function extra_mounts( $site_data, $code ) {
 		$this->extra_mounts = [];
 		$ps                 = $this->docker( [ 'docker', 'ps', '-q', '--no-trunc', '--filter', 'label=io.easyengine.site=' . $this->site, '--filter', 'label=com.docker.compose.service=php' ], 60 );
-		$ids                = 0 === $ps['code'] ? preg_split( '/\s+/', trim( $ps['stdout'] ), -1, PREG_SPLIT_NO_EMPTY ) : [];
+		if ( 0 !== $ps['code'] ) {
+			return 'could not list the site\'s php container: ' . self::first_line( $ps['stderr'] );
+		}
+		$ids = preg_split( '/\s+/', trim( $ps['stdout'] ), -1, PREG_SPLIT_NO_EMPTY );
 		if ( ! $ids ) {
 			// Not running (a disabled site): only its compose files say what it mounts.
 			foreach ( array_merge( [ $site_data->site_fs_path . '/docker-compose-custom.yml' ], (array) glob( $site_data->site_fs_path . '/user-docker-compose/*.yml' ), (array) glob( $site_data->site_fs_path . '/user-docker-compose/*.yaml' ) ) as $file ) {
-				$text = is_file( $file ) ? @file_get_contents( $file ) : false; // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- unreadable counts as none.
-				if ( false !== $text && false !== strpos( $text, '/var/www/' ) ) {
-					return "$file mounts code below /var/www, which this check can only see while the site runs; enable the site and run it again";
+				$targets = is_file( $file ) ? self::compose_targets( $file ) : [];
+				if ( null === $targets ) {
+					return "could not read the volumes in $file; enable the site so this check can see its mounts";
+				}
+				foreach ( $targets as $target ) {
+					if ( ! is_string( $target ) || false !== strpos( $target, '$' ) || 0 === strpos( rtrim( $target, '/' ) . '/', '/var/www/' ) ) {
+						return "$file mounts code below /var/www, which this check can only see while the site runs; enable the site and run it again";
+					}
 				}
 			}
 
@@ -896,11 +910,52 @@ class Site_PHP_Compat {
 			if ( '' === $src || false !== strpbrk( $src . $dst, ",\"\n\r" ) || ! file_exists( $src ) || null === self::resolve_in( $code, substr( $dst, strlen( '/var/www/' ) ) ) ) {
 				return 'the site\'s php container mounts ' . self::clean( $dst ) . ' from ' . self::clean( $src ) . ', which this check can\'t mount';
 			}
+			// The WordPress root and its config are read on the host before the scan: only a mount inside wp-content leaves them as read.
+			if ( $this->wp_layout && ! preg_match( '#/wp-content(/|$)#', $dst ) ) {
+				return 'the site\'s php container mounts ' . self::clean( $dst ) . ' over the WordPress files, which this check reads before it scans';
+			}
 			EE::debug( "php-compat: also mounting $src at $dst" );
 			array_push( $this->extra_mounts, '--mount', "type=bind,src=$src,dst=$dst,readonly" );
 		}
 
 		return $this->extra_mounts;
+	}
+
+	/**
+	 * Container paths the volumes of the services in a compose file mount at (short `src:dst[:mode]` or long form).
+	 *
+	 * @param string $file Compose file.
+	 *
+	 * @return array|null Targets (any value that isn't a plain path is returned as is, to be refused), or null when the
+	 *                    file can't be parsed.
+	 */
+	protected static function compose_targets( $file ) {
+		try {
+			$doc = \Symfony\Component\Yaml\Yaml::parseFile( $file );
+		} catch ( \Exception $e ) {
+			return null;
+		}
+		if ( null === $doc ) {
+			return [];
+		}
+		if ( ! is_array( $doc ) || ( isset( $doc['services'] ) && ! is_array( $doc['services'] ) ) ) {
+			return null;
+		}
+		$targets = [];
+		foreach ( isset( $doc['services'] ) ? $doc['services'] : [] as $service ) {
+			foreach ( is_array( $service ) && isset( $service['volumes'] ) ? (array) $service['volumes'] : [] as $volume ) {
+				if ( is_array( $volume ) ) {
+					$targets[] = isset( $volume['target'] ) ? $volume['target'] : null;
+				} elseif ( is_string( $volume ) ) {
+					$parts     = explode( ':', $volume );
+					$targets[] = count( $parts ) > 1 ? $parts[1] : $parts[0];
+				} else {
+					$targets[] = null;
+				}
+			}
+		}
+
+		return $targets;
 	}
 
 	/**
@@ -946,8 +1001,8 @@ class Site_PHP_Compat {
 			return "!can't resolve where {$rel}/index.php loads WordPress (wp-blog-header.php) from";
 		}
 		if ( null !== $loader ) {
-			// What is actually served wins over a stale copy in the root.
-			array_unshift( $candidates, $loader );
+			// What is actually served is the only candidate: a stale copy elsewhere must not stand in for it.
+			$candidates = [ $loader ];
 		}
 		foreach ( array_unique( [ $rel, 'htdocs' ] ) as $dir ) {
 			$path = $this->wp_cli_path( $code, $dir );
@@ -992,9 +1047,10 @@ class Site_PHP_Compat {
 			}
 			$path = substr( $path, strlen( '/var/www/' ) );
 		} else {
-			// __DIR__, or a relative path, which PHP-FPM resolves from the script's own directory. That is the real one, which
-			// only matters for `..`; otherwise the served path keeps a current/ link for the scanner's release handling.
-			$base = preg_match( '#(^|/)\.\.(/|$)#', $path ) ? dirname( substr( $index, strlen( $code ) + 1 ) ) : $rel;
+			// __DIR__, or a relative path, which PHP-FPM resolves from the script's own directory: the real one. The served
+			// path stands in for it (keeping a current/ link for the scanner) only when it is that same directory and no `..`.
+			$real = dirname( substr( $index, strlen( $code ) + 1 ) );
+			$base = ! preg_match( '#(^|/)\.\.(/|$)#', $path ) && self::resolve_in( $code, $rel ) === dirname( $index ) ? $rel : $real;
 			$path = $base . '/' . $path;
 		}
 		$path = trim( preg_replace( '#/+#', '/', preg_replace( '#(^|/)\.(?=/|$)#', '$1', $path ) ), '/' );
@@ -2005,11 +2061,15 @@ class Site_PHP_Compat {
 	 * @return bool Whether the report now fits.
 	 */
 	protected function make_room( $cost ) {
+		$free = $this->host_memory_available();
+		// Never past what the host has free, whatever PHP's limit allows.
+		if ( null !== $free && $cost > $free ) {
+			return false;
+		}
 		if ( $cost <= $this->memory_available() ) {
 			return true;
 		}
-		$free = $this->host_memory_available();
-		if ( self::bytes( ini_get( 'memory_limit' ) ) <= 0 || null === $free || $cost > $free ) {
+		if ( self::bytes( ini_get( 'memory_limit' ) ) <= 0 || null === $free ) {
 			return false;
 		}
 		ini_set( 'memory_limit', (string) ( memory_get_usage( true ) + $cost + 67108864 ) );
@@ -2671,13 +2731,22 @@ class Site_PHP_Compat {
 		}
 		try {
 			$result = $this->run_cancel( $site_data );
+			if ( 'tool_error' !== $result['doc']['status'] ) {
+				// Kept until this process ends, so no new check of the site starts while it is deleted.
+				$kept       = $this->lock;
+				$this->lock = null;
+			}
 		} finally {
 			$this->cleanup();
 		}
 		if ( 'tool_error' === $result['doc']['status'] ) {
 			return $result['doc']['detail'];
 		}
-		$parent = $this->temp_parent();
+		$this->delete_lock = $kept;
+		$parent            = $this->temp_parent();
+		if ( null !== $parent && ! $this->wait_for_estimate( $parent ) ) {
+			return 'an estimate of the site is still running';
+		}
 		if ( null !== $parent ) {
 			$files = [ "$parent/.cancel/{$this->site}", "$parent/.cancel-lock/{$this->site}", "$parent/.estimate-lock/{$this->site}" ];
 			// Names site-command v3.11.0 used.
@@ -2691,6 +2760,43 @@ class Site_PHP_Compat {
 		}
 
 		return null;
+	}
+
+	/**
+	 * Wait for a running estimate of the site to end (it holds its lock file), so its file isn't removed under it.
+	 *
+	 * @param string $parent temp_parent().
+	 *
+	 * @return bool Whether none runs now.
+	 */
+	protected function wait_for_estimate( $parent ) {
+		$handle = @fopen( "$parent/.estimate-lock/{$this->site}", 'r' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- missing: none ran.
+		if ( false === $handle ) {
+			return true;
+		}
+		$until = microtime( true ) + $this->estimate_wait();
+		while ( ! flock( $handle, LOCK_EX | LOCK_NB, $would_block ) ) {
+			if ( ! $would_block || microtime( true ) >= $until ) {
+				fclose( $handle );
+
+				return ! $would_block;
+			}
+			usleep( 100000 );
+			if ( function_exists( 'pcntl_signal_dispatch' ) ) {
+				null === $this->dispatch ? pcntl_signal_dispatch() : call_user_func( $this->dispatch );
+			}
+		}
+		// Unlinked by the caller while still locked, so a new estimate gets a new file.
+		$this->estimate_lock = $handle;
+
+		return true;
+	}
+
+	/**
+	 * @return int Seconds `ee site delete` waits for a running estimate: its whole time limit.
+	 */
+	protected function estimate_wait() {
+		return self::ESTIMATE_TIMEOUT + self::PROCESS_MARGIN;
 	}
 
 	/**
