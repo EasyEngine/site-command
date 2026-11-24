@@ -65,6 +65,11 @@ abstract class EE_Site_Command {
 	private $ssl_failure_handled_by_caller = false;
 
 	/**
+	 * @var bool $le_dns_verify_pending Whether init_le() left a manual DNS challenge for `ee site ssl-verify` to finish.
+	 */
+	private $le_dns_verify_pending = false;
+
+	/**
 	 * @var resource $ssl_lock_handle Handle of the process-wide SSL lock.
 	 *
 	 * Static because `ssl-renew --all` renews every site in one process, and flock refuses a second handle there.
@@ -85,6 +90,11 @@ abstract class EE_Site_Command {
 	 * @var bool $le_renewal_started Whether this process already started an LE renewal (`ssl-renew --all` renews every site in one process).
 	 */
 	private static $le_renewal_started = false;
+
+	/**
+	 * @var Site_PHP_Compat|null $php_compat_check The running `site php-compat`, cleaned up on a fatal error or a signal.
+	 */
+	private $php_compat_check;
 
 	public function __construct() {
 
@@ -638,7 +648,7 @@ abstract class EE_Site_Command {
 			// LE sites drop HTTPS here for the HTTP-01 challenge; the renewal below turns it back on, other SSL types keep theirs.
 			$nohttps                          = ! $is_ssl || $pending_le || ( 'le' === $this->site_data['site_ssl'] && 'dns' !== $preferred_ssl_challenge );
 			$this->dump_docker_compose_yml( [ 'nohttps' => $nohttps ] );
-			\EE_DOCKER::docker_compose_up( $this->site_data['site_fs_path'], [ 'nginx' ] );
+			\EE\Site\Utils\up_site_containers( $this->site_data['site_fs_path'], [ 'nginx' ] );
 		} catch ( \Exception $e ) {
 			if ( $pre_hook_fired ) {
 				/**
@@ -708,7 +718,7 @@ abstract class EE_Site_Command {
 
 		chdir( $this->site_data['site_fs_path'] );
 		// Required as env variables have changed.
-		\EE_DOCKER::docker_compose_up( $this->site_data['site_fs_path'], [ 'nginx' ] );
+		\EE\Site\Utils\up_site_containers( $this->site_data['site_fs_path'], [ 'nginx' ] );
 		EE::success( 'Alias domains updated on site ' . $this->site_data['site_url'] . '.' );
 
 		try {
@@ -903,14 +913,15 @@ abstract class EE_Site_Command {
 				$failed = true;
 			} else {
 				// Removing the zone together with every location that uses it keeps the config valid, so the failure is elsewhere.
-				EE::warning( "nginx config test failed after disabling proxy cache:\n" . trim( $test->stderr ) );
+				// A refused reload already printed its own test output.
+				EE::warning( 0 === $test->return_code ? 'nginx config test failed after disabling proxy cache, see the reload warning above.' : "nginx config test failed after disabling proxy cache:\n" . trim( $test->stderr ) );
 			}
 		} catch ( \Exception $e ) {
 			EE::error( $e->getMessage() );
 		}
 
 		if ( $failed ) {
-			$message = 'Could not enable proxy cache on ' . $this->site_data['site_url'] . ", nginx config test failed. The previous proxy config was restored.\n" . trim( $test->stderr );
+			$message = 'Could not enable proxy cache on ' . $this->site_data['site_url'] . ', nginx config test failed. The previous proxy config was restored.' . ( 0 === $test->return_code ? ' See the reload warning above.' : "\n" . trim( $test->stderr ) );
 			if ( $force || $call_on_create ) {
 				EE::warning( $message );
 				if ( $call_on_create ) {
@@ -1075,7 +1086,7 @@ abstract class EE_Site_Command {
 			EE::warning( "Could not restore docker-compose.yml to PHP $old_version ({$e->getMessage()}). $manual" );
 		}
 
-		if ( $rollback['stopped'] && ! \EE_DOCKER::docker_compose_up( $site_fs_path, [ 'php' ] ) ) {
+		if ( $rollback['stopped'] && ! \EE\Site\Utils\up_site_containers( $site_fs_path, [ 'php' ] ) ) {
 			EE::warning( "Could not start the php container again. $manual" );
 		}
 	}
@@ -1106,11 +1117,15 @@ abstract class EE_Site_Command {
 			self::check_config_volume_unused( $volume );
 			\EE\Site\Utils\check_plain_tree( $volume );
 		} catch ( \Exception $e ) {
-			$message = 'Could not update the php config: ' . rtrim( $e->getMessage(), '.' ) . '. Nothing was changed.';
-			if ( $running && ! EE::exec( "$compose start php" ) ) {
-				$message .= ' Could not start the php container again. Run: ee site enable ' . $this->site_data['site_url'] . ' --force';
+			$message = 'Could not update the php config: ' . rtrim( $e->getMessage(), '.' ) . '.';
+			if ( $running ) {
+				// Not `compose start`: it skips a container that a stale listing still shows as running.
+				EE::exec( 'docker start ' . escapeshellarg( $id ) );
+				if ( 'running' !== \EE_DOCKER::container_status( $id ) ) {
+					throw new \Exception( "$message The php config was not changed, but the php container could not be started again. Run: ee site enable " . $this->site_data['site_url'] . ' --force' );
+				}
 			}
-			throw new \Exception( $message );
+			throw new \Exception( "$message Nothing was changed." );
 		}
 
 		return $running;
@@ -1129,8 +1144,13 @@ abstract class EE_Site_Command {
 			return;
 		}
 		$users = EE::launch( 'docker ps -q --filter ' . escapeshellarg( 'volume=' . basename( dirname( $volume ) ) ) );
-		if ( $users->return_code || '' !== trim( $users->stdout ) ) {
-			throw new \Exception( 'The php config volume is still mounted by a running container (' . implode( ', ', preg_split( '/\s+/', trim( $users->stdout ) ) ) . '); stop it and re-run the update.' );
+		$ids   = preg_split( '/\s+/', trim( $users->stdout ), -1, PREG_SPLIT_NO_EMPTY );
+		// docker ps can still list a container stopped a moment ago; inspect waits for the engine to record the stop.
+		$ids = array_filter( $ids, function ( $id ) {
+			return 'exited' !== \EE_DOCKER::container_status( $id );
+		} );
+		if ( $users->return_code || $ids ) {
+			throw new \Exception( 'The php config volume is still mounted by a running container (' . implode( ', ', $ids ) . '); stop it and re-run the update.' );
 		}
 	}
 
@@ -1251,7 +1271,12 @@ abstract class EE_Site_Command {
 					$this->disable_ssl( 'custom' === $ssl ? [ $this->site_data['ssl_key'], $this->site_data['ssl_crt'] ] : [] );
 					$rerun = '--ssl=' . $ssl . ( $wildcard ? ' --wildcard' : '' );
 					if ( 'custom' === $ssl ) {
-						$rerun .= ' --ssl-key=' . escapeshellarg( $this->site_data['ssl_key'] ) . ' --ssl-crt=' . escapeshellarg( $this->site_data['ssl_crt'] );
+						// As passed: the stored paths are resolved, so a certs dir symlink would show as the docker volume path.
+						// Not escapeshellarg(): it drops non-ASCII bytes under a C locale on PHP 7.4, and invalid UTF-8 on every version.
+						$quote  = function ( $path ) {
+							return "'" . str_replace( "'", "'\\''", (string) $path ) . "'";
+						};
+						$rerun .= ' --ssl-key=' . $quote( get_flag_value( $assoc_args, 'ssl-key' ) ) . ' --ssl-crt=' . $quote( get_flag_value( $assoc_args, 'ssl-crt' ) );
 					}
 					throw new \Exception( sprintf( 'SSL could not be enabled on %1$s, the site stays without SSL: %2$s Fix the issue and re-run `ee site update %1$s %3$s`.', $this->site_data['site_url'], rtrim( $e->getMessage(), '.' ) . '.', $rerun ) );
 				}
@@ -1407,7 +1432,7 @@ abstract class EE_Site_Command {
 			}
 		}
 
-		if ( \EE_DOCKER::docker_compose_up( $this->site_data->site_fs_path, $containers_to_start ) ) {
+		if ( \EE\Site\Utils\up_site_containers( $this->site_data->site_fs_path, $containers_to_start ) ) {
 			$this->site_data->site_enabled = 1;
 			$this->site_data->save();
 			$success = true;
@@ -2083,7 +2108,8 @@ abstract class EE_Site_Command {
 		}
 		$api_key_absent = empty( get_config_value( 'cloudflare-api-key' ) );
 		if ( $is_solver_dns && $api_key_absent ) {
-			echo \cli\Colors::colorize( '%YIMPORTANT:%n Run `ee site ssl-verify ' . $site_url . '` once the DNS changes have propagated to complete the certification generation and installation.', null ) . PHP_EOL;
+			echo \cli\Colors::colorize( '%YIMPORTANT:%n Run `' . $this->ssl_verify_command( $site_url, $force ) . '` once the DNS changes have propagated to complete the certification generation and installation.', null ) . PHP_EOL;
+			$this->le_dns_verify_pending = true;
 		} else {
 			if ( ! $api_key_absent && $is_solver_dns ) {
 				EE::log( 'Waiting for DNS entry propagation.' );
@@ -2587,8 +2613,29 @@ abstract class EE_Site_Command {
 				}
 				EE::error( $e->getMessage() . $kept );
 			}
+			// Without a Cloudflare API key the DNS challenge is manual, so no certificate was issued yet.
+			if ( $this->le_dns_verify_pending ) {
+				// `ssl-renew --force` on a site still waiting for its first certificate has none to keep.
+				$still_kept = \EE\Site\Utils\is_le_ssl_pending( $this->site_data['site_url'], 'le' ) ? '' : ' The current certificate is kept until then.';
+				EE::warning( sprintf( 'SSL renewal of %1$s is pending: no new certificate was issued yet. Run `%3$s` once the DNS TXT records have propagated.%2$s', $this->site_data['site_url'], $still_kept, $this->ssl_verify_command( $this->site_data['site_url'], $force ) ) );
+
+				return;
+			}
 		}
 		EE::success( 'SSL renewal completed.' );
+	}
+
+	/**
+	 * The `ee site ssl-verify` command that finishes a manual DNS challenge.
+	 *
+	 * @param string $site_url Name of the site.
+	 * @param bool   $force    Whether the challenge was started by a forced renewal.
+	 *
+	 * @return string
+	 */
+	private function ssl_verify_command( $site_url, $force ) {
+		// Without --force, ssl-verify keeps a certificate valid for 35 more days and never finalizes the new order.
+		return 'ee site ssl-verify ' . $site_url . ( $force ? ' --force' : '' );
 	}
 
 	/**
@@ -2897,6 +2944,14 @@ abstract class EE_Site_Command {
 
 		if ( null === $error ) {
 			$error = error_get_last();
+		}
+		// rollback() below and the signal handlers exit, so later shutdown functions, like the check's own, wouldn't run.
+		if ( null !== $this->php_compat_check ) {
+			if ( isset( $error['type'] ) && E_ERROR === $error['type'] ) {
+				// After running out of memory, cleanup() needs some to stop the container.
+				@ini_set( 'memory_limit', '-1' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged
+			}
+			$this->php_compat_check->cleanup();
 		}
 		$logger = \EE::get_file_logger()->withName( 'site-command' );
 
@@ -3223,6 +3278,87 @@ abstract class EE_Site_Command {
 
 			EE::error( $e->getMessage() );
 		}
+	}
+
+	/**
+	 * Checks a site's PHP code for compatibility with a PHP version.
+	 *
+	 * Runs PHPCompatibility in a throwaway container with no network against a read-only mount of the site's code: plugins, themes, mu-plugins, drop-ins and other code under wp-content for WordPress sites (not WordPress core), everything under htdocs for PHP sites. It ends with a verdict: safe to upgrade (every file checked, no errors), not safe (at least one error), or can't confirm (some files couldn't be checked). Warnings never change the verdict. The verdict comes from static analysis, which can't see breakage that only shows at runtime.
+	 *
+	 * The command exits 0 whenever it printed a result, including when a check of the site is already running (`busy`), was stopped with --cancel (`cancelled`) or couldn't run (`tool_error`).
+	 *
+	 * ## OPTIONS
+	 *
+	 * [<site-name>]
+	 * : Name of the website.
+	 *
+	 * [--php=<php-version>]
+	 * : PHP version to check the code against. Required, except with --cancel.
+	 * ---
+	 * options:
+	 *  - 5.6
+	 *  - 7.0
+	 *  - 7.2
+	 *  - 7.3
+	 *  - 7.4
+	 *  - 8.0
+	 *  - 8.1
+	 *  - 8.2
+	 *  - 8.3
+	 *  - 8.4
+	 *  - 8.5
+	 *  - 8.6
+	 * ---
+	 *
+	 * [--estimate]
+	 * : Print how long a check of this site should take on this server, without checking anything.
+	 *
+	 * [--format=<format>]
+	 * : Render output in a particular format. json prints the verdict and the counts, never the findings.
+	 * ---
+	 * default: table
+	 * options:
+	 *   - table
+	 *   - json
+	 * ---
+	 *
+	 * [--output=<path>]
+	 * : Also write the full report, with every error and warning, as JSON to this absolute path. The file is owned by root with mode 0600 and replaces an existing one. It is written only when the check finishes with a result (status ok); otherwise an existing file is left as it was. Its directory and every parent must be owned by root and not writable by other users (a sticky directory such as /tmp is fine). Not with --estimate.
+	 *
+	 * [--timeout=<seconds>]
+	 * : Time limit for the scan itself, in seconds. A scan that hits it reports tool_error and no verdict. Pulling the scanner image on first use isn't counted. Default: 7200. Not with --estimate.
+	 *
+	 * [--cancel]
+	 * : Stop the site's running check and remove what it left behind, then exit. Prints cancelled when a check was stopped (that check then reports cancelled, with no verdict and no --output file) and not_running when none was running. Waits up to 60 seconds for the stopped check to clean up. An estimate isn't stopped. Not with --php, --estimate, --output or --timeout.
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     # Check whether a site's code works on PHP 8.4
+	 *     $ ee site php-compat example.com --php=8.4
+	 *
+	 *     # See how long the check will take first
+	 *     $ ee site php-compat example.com --php=8.4 --estimate
+	 *
+	 *     # Print the summary as JSON and write the full report to a file
+	 *     $ ee site php-compat example.com --php=8.4 --format=json --output=/root/example.com-php84.json
+	 *
+	 *     # Stop a running check
+	 *     $ ee site php-compat example.com --cancel
+	 *
+	 * @subcommand php-compat
+	 */
+	public function php_compat( $args, $assoc_args ) {
+		$args                   = auto_site_name( $args, 'site', 'php-compat' );
+		$this->site_data        = get_site_info( $args, false, true, false );
+		$this->php_compat_check = new Site_PHP_Compat();
+		// Dispatched from this class's scope: the SIGTERM/SIGINT handlers are the site type's protected rollback().
+		$this->php_compat_check->run(
+			$this->site_data,
+			$assoc_args,
+			function () {
+				pcntl_signal_dispatch();
+			}
+		);
 	}
 
 	/**
