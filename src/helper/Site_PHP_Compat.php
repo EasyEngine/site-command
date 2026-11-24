@@ -25,6 +25,8 @@ class Site_PHP_Compat {
 	const PULL_TIMEOUT   = 1800;
 	// How long --cancel waits for the stopped scan to clean up and release the site lock.
 	const CANCEL_WAIT = 60;
+	// A live scan takes the request within about 0.2 s; one that hasn't after this can't act on it.
+	const CANCEL_GRACE = 3;
 	const STDOUT_MAX     = 1048576;
 	const STDERR_MAX     = 65536;
 	const REPORT_MAX     = 134217728;
@@ -455,7 +457,14 @@ class Site_PHP_Compat {
 			if ( null === $token ) {
 				return $this->doc( 'tool_error', 'could not write the cancel request' );
 			}
-			if ( ! $this->wait_for_site_lock( $site_data->site_fs_path ) ) {
+			$grace  = min( self::CANCEL_GRACE, $this->cancel_wait() );
+			$locked = $this->wait_for_site_lock( $site_data->site_fs_path, $grace );
+			// Request not taken: the lock is held by a killed scan's docker client (it inherited the lock) or a frozen scan. A scan
+			// started since can't have passed its pre-run check while this request is there, so the container is the target.
+			if ( ! $locked && $token === $this->read_cancel( $marker ) && 'running' === $this->container_status( $name ) ) {
+				$stopped = $this->container_gone( $name );
+			}
+			if ( ! $locked && ! $this->wait_for_site_lock( $site_data->site_fs_path, $this->cancel_wait() - $grace ) ) {
 				// The request stays: the scan still reports cancelled when it gets to it.
 				return $this->doc( 'tool_error', 'the running check did not stop within ' . $this->cancel_wait() . ' s' );
 			}
@@ -596,11 +605,12 @@ class Site_PHP_Compat {
 
 	/**
 	 * @param string $site_fs_path Site directory.
+	 * @param int    $seconds      How long to try.
 	 *
-	 * @return bool Whether this run got the site lock within cancel_wait() seconds.
+	 * @return bool Whether this run got the site lock in time.
 	 */
-	protected function wait_for_site_lock( $site_fs_path ) {
-		$until = microtime( true ) + $this->cancel_wait();
+	protected function wait_for_site_lock( $site_fs_path, $seconds ) {
+		$until = microtime( true ) + $seconds;
 		do {
 			usleep( 100000 );
 			if ( function_exists( 'pcntl_signal_dispatch' ) ) {
