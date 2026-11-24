@@ -875,6 +875,23 @@ class FeatureContext implements Context
 		}
 	}
 
+	/**
+	 * Simulates a site record that disagrees with what nginx serves.
+	 *
+	 * @When /^I set the "([a-z_]+)" field of site "([^"]*)" in the database to "(.*)"$/
+	 */
+	public function iSetTheFieldOfSite( $field, $site, $value )
+	{
+		$site = $this->v( $site );
+		$this->assert_own_name( $site );
+		$row = $this->get_site_row( $site );
+		if ( false === $row || ! array_key_exists( $field, $row ) ) {
+			throw new Exception( "No $field for site $site in the EasyEngine database." );
+		}
+		$stmt = self::db()->prepare( "UPDATE sites SET $field = ? WHERE site_url = ?" );
+		$stmt->execute( [ $this->v( $value ), $site ] );
+	}
+
 	/* ----- files ----- */
 
 	/**
@@ -948,6 +965,38 @@ class FeatureContext implements Context
 		if ( false === file_put_contents( $path, $content, 'append' === $mode ? FILE_APPEND : 0 ) ) {
 			throw new Exception( "Could not write to $path" );
 		}
+	}
+
+	/**
+	 * @When /^I link "([^"]*)" to "([^"]*)"$/
+	 */
+	public function iLinkTo( $path, $target )
+	{
+		$path = $this->v( $path );
+		$this->assert_writable_path( $path );
+		if ( ! is_dir( dirname( $path ) ) ) {
+			mkdir( dirname( $path ), 0755, true );
+		}
+		if ( ! symlink( $this->v( $target ), $path ) ) {
+			throw new Exception( "Could not link $path" );
+		}
+	}
+
+	/**
+	 * Puts /dev/null back before failing, so a regression can't break the rest of the run.
+	 *
+	 * @Then /^\/dev\/null should still be the null device$/
+	 */
+	public function devNullShouldStillBeTheNullDevice()
+	{
+		clearstatcache( true, '/dev/null' );
+		$stat = @lstat( '/dev/null' );
+		if ( $stat && 0020000 === ( $stat['mode'] & 0170000 ) && 259 === $stat['rdev'] ) {
+			return;
+		}
+		@unlink( '/dev/null' );
+		exec( 'mknod -m 666 /dev/null c 1 3' );
+		throw new Exception( '/dev/null was replaced (restored now): ' . var_export( $stat, true ) );
 	}
 
 	/**

@@ -763,7 +763,7 @@ DEALLOCATE PREPARE ee_stmt;
 		$rel     = trim( str_replace( '/var/www/', '', $this->site_data['site_container_fs_path'] ), '/' );
 		$app_dir = $this->get_site_app_dir();
 
-		foreach ( [ $rel, $rel . '/current' ] as $candidate ) {
+		foreach ( \EE\Site\Utils\get_wp_root_candidates( $rel ) as $candidate ) {
 			if ( ! $this->fs->exists( $app_dir . '/' . $candidate . '/wp-content' ) ) {
 				continue;
 			}

@@ -46,6 +46,14 @@ class Site_PHP_Compat {
 	const JSON_UTF8 = JSON_INVALID_UTF8_SUBSTITUTE; // phpcs:ignore PHPCompatibility.PHP.NewConstants.json_invalid_utf8_substituteFound -- PHP 7.2+; EE needs 7.4.
 	// C1 controls, bidi and zero-width characters: a terminal acts on them or they disguise text.
 	const UNSAFE_CHARS = '\x{80}-\x{9F}\x{061C}\x{200B}-\x{200F}\x{2028}-\x{202E}\x{2060}-\x{2069}\x{FEFF}';
+	// The site's nginx config, whose root is what the site serves.
+	const NGINX_CONF = '/config/nginx/conf.d/main.conf';
+	// A public directory as EE stores it (the pattern Cloner checks site_container_fs_path with).
+	const ROOT_PATTERN = '#^/var/www/htdocs(?:/[A-Za-z0-9_-][A-Za-z0-9_.-]*)*$#D';
+	// Size cap for the site files read on the host (main.conf, wp-cli.yml, wp-config.php).
+	const CONFIG_MAX = 1048576;
+	// Constants that move the code WordPress loads away from <root>/wp-content.
+	const DIR_CONSTANTS = [ 'WP_CONTENT_DIR', 'WP_PLUGIN_DIR', 'WPMU_PLUGIN_DIR' ];
 
 	/** @var string Site name. */
 	protected $site = '';
@@ -58,6 +66,18 @@ class Site_PHP_Compat {
 
 	/** @var bool Whether this run is --cancel. */
 	protected $cancel = false;
+
+	/** @var string|null Path argument for the scanner (under /var/www), set by resolve_layout(). */
+	protected $scan_path;
+
+	/** @var string|null Host directory the scan looked in, for the no_code_found text; null when app/ is missing. */
+	protected $looked_in;
+
+	/** @var string|null The site's nginx config path, for the no_code_found text; null when app/ is missing. */
+	protected $nginx_conf;
+
+	/** @var bool Whether the scan looks at WordPress code (wp-content) rather than all of htdocs. */
+	protected $wp_layout = false;
 
 	/** @var string|null Cancel request file a scan watches once it holds the site lock. */
 	protected $cancel_marker;
@@ -223,6 +243,9 @@ class Site_PHP_Compat {
 		if ( '' === $output || '/' !== $output[0] ) {
 			EE::error( '--output must be an absolute path.' );
 		}
+		if ( ! preg_match( '//u', $output ) || preg_match( '/[\x00-\x1F\x7F' . self::UNSAFE_CHARS . ']/u', $output ) ) {
+			EE::error( '--output must not contain control characters.' );
+		}
 		$name = basename( $output );
 		if ( '/' === substr( $output, -1 ) || '' === $name || '.' === $name || '..' === $name ) {
 			EE::error( '--output must name a file.' );
@@ -237,6 +260,15 @@ class Site_PHP_Compat {
 		}
 		if ( is_dir( $output ) && ! is_link( $output ) ) {
 			EE::error( "--output is a directory: $output" );
+		}
+		// The rename would replace a device node such as /dev/null with the report.
+		foreach ( [ '/dev', '/proc', '/sys', '/run' ] as $system ) {
+			if ( $dir === $system || 0 === strpos( $dir, "$system/" ) ) {
+				EE::error( "--output can't be in $system: $output" );
+			}
+		}
+		if ( ! self::replaceable( $output ) ) {
+			EE::error( "--output is not a regular file: $output" );
 		}
 		// tempnam() falls back to the system temp dir when $dir isn't writable (read-only mount, not root).
 		$probe    = @tempnam( $dir, '.ee-php-compat-' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- checked below.
@@ -272,7 +304,12 @@ class Site_PHP_Compat {
 		}
 		$code = $this->code_dir( $site_data->site_fs_path );
 		if ( null === $code ) {
+			$this->looked_in = $site_data->site_fs_path . '/app';
 			return $this->doc( 'no_code_found' );
+		}
+		$layout = $this->resolve_layout( $site_data, $code );
+		if ( null !== $layout ) {
+			return $layout;
 		}
 		if ( false !== strpbrk( $code, ',"' ) ) {
 			return $this->doc( 'tool_error', 'the site code path has a comma or a quote' );
@@ -397,7 +434,12 @@ class Site_PHP_Compat {
 		}
 		$code = $this->code_dir( $site_data->site_fs_path );
 		if ( null === $code ) {
+			$this->looked_in = $site_data->site_fs_path . '/app';
 			return $this->doc( 'no_code_found' );
+		}
+		$layout = $this->resolve_layout( $site_data, $code );
+		if ( null !== $layout ) {
+			return $layout;
 		}
 		if ( false !== strpbrk( $code, ',"' ) ) {
 			return $this->doc( 'tool_error', 'the site code path has a comma or a quote' );
@@ -673,7 +715,7 @@ class Site_PHP_Compat {
 		if ( 'scan' === $mode ) {
 			array_push( $args, '--mount', "type=bind,src=$out,dst=/out" );
 		}
-		array_push( $args, $image, $mode, $site_data->site_type, $site_data->site_container_fs_path, $this->target );
+		array_push( $args, $image, $mode, $site_data->site_type, null !== $this->scan_path ? $this->scan_path : $site_data->site_container_fs_path, $this->target );
 		if ( 'scan' === $mode ) {
 			$args[] = (string) $timeout;
 		}
@@ -701,6 +743,550 @@ class Site_PHP_Compat {
 		$real = realpath( $site_fs_path . '/app' );
 
 		return ( false !== $real && is_dir( $real ) ) ? $real : null;
+	}
+
+	/**
+	 * Picks the scanner's path argument from the root nginx serves, and refuses a WordPress layout the scanner can't check.
+	 *
+	 * @param object $site_data Site record.
+	 * @param string $code      Real path of the site's app/.
+	 *
+	 * @return array|null tool_error result, or null with $this->scan_path set.
+	 */
+	protected function resolve_layout( $site_data, $code ) {
+		$this->nginx_conf = $site_data->site_fs_path . self::NGINX_CONF;
+		$served           = $this->served_root( $site_data );
+		$rel              = ltrim( substr( $served, strlen( '/var/www' ) ), '/' );
+		$app              = $site_data->site_fs_path . '/app/';
+
+		$this->scan_path = $served;
+		if ( 'wp' !== $site_data->site_type ) {
+			// The scanner checks all of htdocs for php sites, whatever the root.
+			$this->looked_in = $app . 'htdocs';
+			return null;
+		}
+
+		$this->wp_layout = true;
+		$root            = $this->wp_root( $code, $rel );
+		if ( null === $root ) {
+			// No WordPress found here; a wp-config that moves its code elsewhere still rules out no_code_found.
+			$root = $rel;
+		}
+		$this->scan_path = '/var/www/' . $root;
+		$this->looked_in = $app . $root . '/wp-content';
+		EE::debug( "php-compat: WordPress root $root (nginx root $served)" );
+
+		$detail = $this->check_wp_dirs( $code, $root, $app );
+		return null === $detail ? null : $this->doc( 'tool_error', $detail );
+	}
+
+	/**
+	 * The root nginx serves (main.conf), or the public directory in EE's record when that can't be read.
+	 *
+	 * @param object $site_data Site record.
+	 *
+	 * @return string Path under /var/www/htdocs.
+	 */
+	protected function served_root( $site_data ) {
+		$db   = rtrim( (string) $site_data->site_container_fs_path, '/' );
+		$db   = '' === $db ? '/var/www/htdocs' : $db;
+		$conf = $this->nginx_conf;
+		$text = is_file( $conf ) && filesize( $conf ) <= self::CONFIG_MAX ? @file_get_contents( $conf ) : false; // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is handled.
+		// Exactly one root, as EE writes it; anything else is a config this check doesn't guess at.
+		$root = ( false !== $text && 1 === preg_match_all( '/^\s*root\s+([^\s;]+)\s*;/m', $text, $m ) ) ? rtrim( $m[1][0], '/' ) : null;
+		if ( null === $root || ! preg_match( self::ROOT_PATTERN, $root ) ) {
+			EE::debug( "php-compat: no usable root in $conf; using the public directory $db" );
+			return $db;
+		}
+		if ( $root !== $db ) {
+			EE::warning( sprintf( "EE's record of %s has %s as its public directory, but nginx serves %s (root in %s). Checking what nginx serves.", $this->site, $db, $root, $conf ) );
+		}
+
+		return $root;
+	}
+
+	/**
+	 * WordPress root relative to app/: the served root or its current/ (as backup finds it), else wp-cli.yml's path.
+	 *
+	 * @param string $code Real path of the site's app/.
+	 * @param string $rel  Served root relative to app/.
+	 *
+	 * @return string|null
+	 */
+	protected function wp_root( $code, $rel ) {
+		$candidates = \EE\Site\Utils\get_wp_root_candidates( $rel );
+		foreach ( array_unique( [ $rel, 'htdocs' ] ) as $dir ) {
+			$path = $this->wp_cli_path( $code, $dir );
+			if ( null !== $path ) {
+				$candidates[] = $path;
+			}
+		}
+		$candidates = array_values( array_unique( $candidates ) );
+		// In order; a WordPress directory without wp-content may still load code from elsewhere (WP_CONTENT_DIR).
+		foreach ( $candidates as $candidate ) {
+			foreach ( [ 'wp-content', 'wp-settings.php' ] as $marker ) {
+				if ( null !== self::resolve_in( $code, $candidate . '/' . $marker ) ) {
+					return $candidate;
+				}
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * `path:` of <dir>/wp-cli.yml, relative to app/.
+	 *
+	 * @param string $code Real path of the site's app/.
+	 * @param string $dir  Directory relative to app/.
+	 *
+	 * @return string|null
+	 */
+	protected function wp_cli_path( $code, $dir ) {
+		$text = $this->read_site_file( $code, $dir . '/wp-cli.yml' );
+		$text = null === $text ? null : str_replace( [ "\r\n", "\r" ], "\n", $text );
+		if ( null === $text || ! preg_match( '/^path:[ \t]*([\'"]?)([^\'"\r\n]*?)\1[ \t]*$/m', $text, $m ) || '' === $m[2] ) {
+			return null;
+		}
+		$path = $m[2];
+		if ( '/' === $path[0] ) {
+			if ( 0 !== strpos( $path . '/', '/var/www/' ) ) {
+				return null;
+			}
+			$path = substr( $path, strlen( '/var/www/' ) );
+		} else {
+			$path = $dir . '/' . $path;
+		}
+		$path = trim( preg_replace( '#/+#', '/', preg_replace( '#(^|/)\.(?=/|$)#', '$1', $path ) ), '/' );
+
+		return preg_match( '#^htdocs(?:/[A-Za-z0-9_-][A-Za-z0-9_.-]*)*$#D', $path ) ? $path : null;
+	}
+
+	/**
+	 * Refuses a verdict when wp-config moves the code WordPress loads where the scanner doesn't look.
+	 *
+	 * The scanner checks <path>/wp-content with plugins/ and mu-plugins/ in it, so only a content directory named
+	 * wp-content can be followed (by scanning its parent).
+	 *
+	 * @param string $code Real path of the site's app/.
+	 * @param string $root WordPress root relative to app/.
+	 * @param string $app  The site's app/ path with a trailing slash, for messages.
+	 *
+	 * @return string|null tool_error detail, or null when the scan covers what WordPress loads.
+	 */
+	protected function check_wp_dirs( $code, $root, $app ) {
+		$abspath = self::resolve_in( $code, $root );
+		$values  = [];
+		foreach ( $this->wp_config_files( $code, $root, $abspath ) as $file ) {
+			$source = $this->read_site_file( $code, $file );
+			if ( null === $source ) {
+				return "can't read $app$file, so this check can't tell which plugins and themes WordPress loads";
+			}
+			$found = self::dir_defines( $source );
+			if ( is_string( $found ) ) {
+				return "can't resolve $found in $app$file, so this check can't tell which plugins and themes WordPress loads. It follows only define( '$found', <__DIR__, dirname( __FILE__ ), dirname( __DIR__ ), ABSPATH or WP_CONTENT_DIR> . '<path>' ) or a /var/www path";
+			}
+			foreach ( $found as $name => $expr ) {
+				if ( isset( $values[ $name ] ) ) {
+					return "can't resolve $name in $app$file: it is defined more than once";
+				}
+				$values[ $name ] = [ $expr, $file ];
+			}
+		}
+
+		$content = $root . '/wp-content';
+		foreach ( self::DIR_CONSTANTS as $name ) {
+			if ( ! isset( $values[ $name ] ) ) {
+				continue;
+			}
+			list( $expr, $file ) = $values[ $name ];
+			$dir = $this->dir_value( $code, $expr, $file, $abspath, $content );
+			if ( null === $dir ) {
+				return "can't resolve $name in $app$file";
+			}
+			$real = self::resolve_in( $code, $dir );
+			if ( null === $real ) {
+				return "$name in $app$file points to $app$dir, which doesn't exist";
+			}
+			$default = 'WP_CONTENT_DIR' === $name ? $content : $content . ( 'WP_PLUGIN_DIR' === $name ? '/plugins' : '/mu-plugins' );
+			if ( self::resolve_in( $code, $default ) === $real ) {
+				continue;
+			}
+			if ( 'WP_CONTENT_DIR' === $name && 'wp-content' === basename( $real ) ) {
+				// The scanner checks <path>/wp-content: point it at the parent of this one.
+				$content         = substr( $real, strlen( $code ) + 1 );
+				$this->scan_path = '/var/www/' . dirname( $content );
+				$this->looked_in = $app . $content;
+				continue;
+			}
+			$what = 'WP_CONTENT_DIR' === $name ? 'plugins and themes' : ( 'WP_PLUGIN_DIR' === $name ? 'plugins' : 'must-use plugins' );
+			return "WordPress loads $what from $app$dir ($name in $app$file); this check can't scan that layout yet";
+		}
+
+		return null;
+	}
+
+	/**
+	 * The wp-config.php WordPress loads (in its directory, else the parent without wp-settings.php), and Bedrock's
+	 * config/application.php beside that parent when there is one. Paths relative to app/.
+	 *
+	 * @param string      $code    Real path of the site's app/.
+	 * @param string      $root    WordPress root relative to app/.
+	 * @param string|null $abspath Real WordPress root.
+	 *
+	 * @return string[]
+	 */
+	protected function wp_config_files( $code, $root, $abspath ) {
+		if ( null === $abspath ) {
+			return [];
+		}
+		$real_root = substr( $abspath, strlen( $code ) + 1 );
+		$config    = null;
+		if ( null !== self::resolve_in( $code, $real_root . '/wp-config.php' ) ) {
+			$config = $real_root . '/wp-config.php';
+		} else {
+			// EE's own sites keep it in app/, above htdocs.
+			foreach ( array_unique( [ dirname( $real_root ), dirname( $root ) ] ) as $parent ) {
+				$parent = '.' === $parent ? '' : "$parent/";
+				if ( null !== self::resolve_in( $code, "{$parent}wp-config.php" ) && null === self::resolve_in( $code, "{$parent}wp-settings.php" ) ) {
+					$config = "{$parent}wp-config.php";
+					break;
+				}
+			}
+		}
+		if ( null === $config ) {
+			return [];
+		}
+		$real  = self::resolve_in( $code, $config );
+		$files = [ substr( $real, strlen( $code ) + 1 ) ];
+		// Bedrock: config/ beside the loader's directory; app/wp-config.php has no such parent.
+		$dir        = dirname( dirname( $files[0] ) );
+		$app_config = ( '.' === $dir ? '' : "$dir/" ) . 'config/application.php';
+		// Only when the loader includes it: a stale copy WordPress never reads says nothing.
+		if ( '.' !== dirname( $files[0] ) && null !== self::resolve_in( $code, $app_config ) && self::includes( (string) $this->read_site_file( $code, $files[0] ), 'config/application.php' ) ) {
+			$files[] = $app_config;
+		}
+
+		return $files;
+	}
+
+	/**
+	 * Whether a require or include in the source names a file ending in $suffix (a string in its operand).
+	 *
+	 * @param string $source PHP source.
+	 * @param string $suffix End of the path, e.g. config/application.php (a whole path segment).
+	 *
+	 * @return bool
+	 */
+	public static function includes( $source, $suffix ) {
+		foreach ( self::include_operands( $source ) as $operand ) {
+			foreach ( $operand as $token ) {
+				if ( T_CONSTANT_ENCAPSED_STRING !== $token[0] ) {
+					continue;
+				}
+				$path = substr( $token[1], 1, -1 );
+				if ( $path === $suffix || substr( $path, -strlen( $suffix ) - 1 ) === "/$suffix" ) {
+					return true;
+				}
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * The operand tokens of every require and include, each ending where PHP ends that expression: at `;`, `,`, `=>`, `?>`
+	 * or a `:` that closes no `?` of the operand, or at a bracket that closes one opened before it.
+	 *
+	 * @param string $source PHP source.
+	 *
+	 * @return array[] Lists of [ type, text ] tokens, without whitespace and comments.
+	 */
+	public static function include_operands( $source ) {
+		$tokens = [];
+		foreach ( @token_get_all( $source ) as $token ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- a broken file still tokenises.
+			if ( ! is_array( $token ) || ! in_array( $token[0], [ T_WHITESPACE, T_COMMENT, T_DOC_COMMENT ], true ) ) {
+				$tokens[] = is_array( $token ) ? [ $token[0], $token[1] ] : [ null, $token ];
+			}
+		}
+		$operands = [];
+		foreach ( $tokens as $i => $token ) {
+			if ( ! in_array( $token[0], [ T_REQUIRE, T_REQUIRE_ONCE, T_INCLUDE, T_INCLUDE_ONCE ], true ) ) {
+				continue;
+			}
+			$operand = [];
+			$depth   = 0;
+			$ternary = 0;
+			for ( $j = $i + 1; isset( $tokens[ $j ] ); $j++ ) {
+				list( $type, $text ) = $tokens[ $j ];
+				$open                = null === $type && in_array( $text, [ '(', '[', '{' ], true ) || in_array( $type, [ T_CURLY_OPEN, T_DOLLAR_OPEN_CURLY_BRACES ], true );
+				$close               = null === $type && in_array( $text, [ ')', ']', '}' ], true );
+				if ( $close && 0 === $depth ) {
+					break;
+				}
+				if ( 0 === $depth && ( in_array( $type, [ T_CLOSE_TAG, T_INLINE_HTML, T_DOUBLE_ARROW ], true ) || ( null === $type && in_array( $text, [ ';', ',' ], true ) ) ) ) {
+					break;
+				}
+				if ( 0 === $depth && null === $type && ':' === $text ) {
+					if ( 0 === $ternary ) {
+						break;
+					}
+					$ternary--;
+				} elseif ( 0 === $depth && null === $type && '?' === $text ) {
+					$ternary++;
+				}
+				$depth     += $open ? 1 : ( $close ? -1 : 0 );
+				$operand[] = $tokens[ $j ];
+			}
+			$operands[] = $operand;
+		}
+
+		return $operands;
+	}
+
+	/**
+	 * Plain defines of the directory constants in a PHP file, read without running it.
+	 *
+	 * @param string $source PHP source.
+	 *
+	 * @return array|string Constant => value expression (whitespace and comments removed), or the name of a constant
+	 *                      the file sets or uses in any other way.
+	 */
+	public static function dir_defines( $source ) {
+		$skip   = [ T_WHITESPACE, T_COMMENT, T_DOC_COMMENT, T_OPEN_TAG, T_CLOSE_TAG, T_INLINE_HTML ];
+		$tokens = [];
+		foreach ( @token_get_all( $source ) as $token ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- a broken file still tokenises.
+			if ( ! is_array( $token ) || ! in_array( $token[0], $skip, true ) ) {
+				$tokens[] = is_array( $token ) ? $token : [ null, $token ];
+			}
+		}
+		// Block depth at each token: braces, and the `if (…): … endif;` forms (a define in any block may never run).
+		$opens  = [ T_IF, T_WHILE, T_FOR, T_FOREACH, T_SWITCH, T_DECLARE ];
+		$ends   = [ T_ENDIF, T_ENDWHILE, T_ENDFOR, T_ENDFOREACH, T_ENDSWITCH, T_ENDDECLARE ];
+		$code   = '';
+		$depths = [];
+		$types  = [];
+		$level  = 0;
+		$parens = 0;
+		$header = null;
+		foreach ( $tokens as $i => list( $type, $text ) ) {
+			$depths[ strlen( $code ) ] = $level;
+			$types[ strlen( $code ) ]  = [ $type, $text ];
+			$code                     .= $text;
+			if ( in_array( $type, $opens, true ) ) {
+				$header = $parens;
+			} elseif ( null === $type && '(' === $text ) {
+				// Punctuation only: the text of a string piece (T_ENCAPSED_AND_WHITESPACE) can be `)` or `}` too.
+				$parens++;
+			} elseif ( null === $type && ')' === $text ) {
+				$parens--;
+				if ( $header === $parens ) {
+					$header = null;
+					if ( isset( $tokens[ $i + 1 ] ) && ':' === $tokens[ $i + 1 ][1] ) {
+						$level++;
+					}
+				}
+			} elseif ( in_array( $type, $ends, true ) ) {
+				$level--;
+			} elseif ( ( null === $type && '{' === $text ) || in_array( $type, [ T_CURLY_OPEN, T_DOLLAR_OPEN_CURLY_BRACES ], true ) ) {
+				$level++;
+			} elseif ( null === $type && '}' === $text ) {
+				$level--;
+			}
+		}
+
+		$names = implode( '|', self::DIR_CONSTANTS );
+		$spans = [];
+		$found = [];
+		// Only real tokens count: text inside a string is never a define, a check or a use.
+		$token_is = function ( $at, array $kinds ) use ( $types ) {
+			return isset( $types[ $at ] ) && in_array( $types[ $at ][0], $kinds, true );
+		};
+		// Once wp-settings.php is loaded, WordPress has set these constants: a later define never takes effect.
+		$booted = PHP_INT_MAX;
+		if ( preg_match_all( '/\b(?:require|include)(?:_once)?[^;]*wp-settings\.php/i', $code, $boots, PREG_OFFSET_CAPTURE ) ) {
+			foreach ( $boots[0] as $boot ) {
+				if ( $token_is( $boot[1], [ T_REQUIRE, T_REQUIRE_ONCE, T_INCLUDE, T_INCLUDE_ONCE ] ) ) {
+					$booted = min( $booted, $boot[1] );
+				}
+			}
+		}
+		// A top-level define, also inside its own `if ( ! defined( 'X' ) )` guard.
+		preg_match_all( "/(?:\\bif\\(!defined\\((['\"])($names)\\1\\)\\)(\\{)?)?\\bdefine\\((['\"])($names)\\4,(.*?)\\);(?(3)\\})/i", $code, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE );
+		foreach ( $matches as $match ) {
+			$name = $match[5][0];
+			$at   = $match[0][1];
+			if ( ! $token_is( $at, [ T_IF, T_STRING ] ) || ! $token_is( $match[4][1], [ T_CONSTANT_ENCAPSED_STRING ] ) ) {
+				continue;
+			}
+			// A statement of its own: after `if (…)`, `else` or `:` it may never run.
+			$own = 0 === $at || in_array( $code[ $at - 1 ], [ ';', '}' ], true );
+			if ( ! $own || $at > $booted || ( '' !== $match[2][0] && $match[2][0] !== $name ) || 0 !== $depths[ $at ] || isset( $found[ $name ] ) ) {
+				return $name;
+			}
+			$found[ $name ] = $match[6][0];
+			$spans[]        = [ $at, $at + strlen( $match[0][0] ) ];
+		}
+		preg_match_all( "/\\bdefined\\((['\"])(?:$names)\\1\\)/i", $code, $checks, PREG_OFFSET_CAPTURE );
+		foreach ( $checks[0] as $check ) {
+			if ( $token_is( $check[1], [ T_STRING ] ) ) {
+				$spans[] = [ $check[1], $check[1] + strlen( $check[0] ) ];
+			}
+		}
+		usort(
+			$spans,
+			function ( $a, $b ) {
+				return $a[0] - $b[0];
+			}
+		);
+		preg_match_all( "/\\b(?:$names)\\b/", $code, $uses, PREG_OFFSET_CAPTURE );
+		$next = 0;
+		foreach ( $uses[0] as $use ) {
+			$at = $use[1];
+			// A bare constant, or a string that is exactly its name (constant( 'X' )); other text in strings doesn't count.
+			$quoted = isset( $types[ $at - 1 ] ) && T_CONSTANT_ENCAPSED_STRING === $types[ $at - 1 ][0] && 1 === preg_match( '/^([\'"])' . $use[0] . '\1$/D', $types[ $at - 1 ][1] );
+			if ( ! $token_is( $at, [ T_STRING ] ) && ! $quoted ) {
+				continue;
+			}
+			// Uses come in order, so the spans before this one can be skipped for good.
+			while ( isset( $spans[ $next ] ) && $spans[ $next ][1] <= $at ) {
+				$next++;
+			}
+			$covered = false;
+			for ( $i = $next; isset( $spans[ $i ] ) && $spans[ $i ][0] <= $at; $i++ ) {
+				$covered = $covered || $at < $spans[ $i ][1];
+			}
+			if ( ! $covered ) {
+				return $use[0];
+			}
+		}
+
+		return $found;
+	}
+
+	/**
+	 * A directory constant's value relative to app/, from the plain forms dir_defines() returns.
+	 *
+	 * @param string      $code    Real path of the site's app/.
+	 * @param string      $expr    Value expression.
+	 * @param string      $file    File it is defined in, relative to app/ (real).
+	 * @param string|null $abspath Real WordPress root.
+	 * @param string      $content WP_CONTENT_DIR relative to app/.
+	 *
+	 * @return string|null
+	 */
+	protected function dir_value( $code, $expr, $file, $abspath, $content ) {
+		$string = '\'[^\'\\\\]*\'|"[^"\\\\$]*"';
+		if ( preg_match( "/^($string)$/", $expr, $m ) ) {
+			$path = substr( $m[1], 1, -1 );
+			if ( 0 !== strpos( $path . '/', '/var/www/' ) ) {
+				return null;
+			}
+			$base = '';
+			$path = substr( $path, strlen( '/var/www/' ) );
+		} elseif ( preg_match( "/^(__DIR__|dirname\\(__FILE__\\)|dirname\\(__DIR__\\)|dirname\\(dirname\\(__FILE__\\)\\)|ABSPATH|WP_CONTENT_DIR)\\.($string)$/i", $expr, $m ) ) {
+			$dir = dirname( $file );
+			// dirname() of app/ itself is outside the site.
+			if ( '.' === $dir && 0 === stripos( $m[1], 'dirname(' ) && 0 !== strcasecmp( $m[1], 'dirname(__FILE__)' ) ) {
+				return null;
+			}
+			$base = [
+				'__dir__'                     => $dir,
+				'dirname(__file__)'           => $dir,
+				'dirname(__dir__)'            => dirname( $dir ),
+				'dirname(dirname(__file__))'  => dirname( $dir ),
+				'abspath'                     => null === $abspath ? null : substr( $abspath, strlen( $code ) + 1 ),
+				'wp_content_dir'              => $content,
+			][ strtolower( $m[1] ) ];
+			if ( null === $base ) {
+				return null;
+			}
+			$base = '.' === $base ? '' : $base;
+			$path = substr( $m[2], 1, -1 );
+			// PHP joins the strings as they are: only ABSPATH ends in `/`, so `__DIR__ . '-x'` is a sibling, not a child.
+			if ( 'abspath' !== strtolower( $m[1] ) && '' !== $path && '/' !== $path[0] ) {
+				return null;
+			}
+		} else {
+			return null;
+		}
+		// `..` stays for resolve_in(), which takes it after the links before it, as the kernel does.
+		$parts = array_filter(
+			explode( '/', $base . '/' . $path ),
+			function ( $part ) {
+				return '' !== $part && '.' !== $part;
+			}
+		);
+
+		return $parts ? implode( '/', $parts ) : null;
+	}
+
+	/**
+	 * A file under app/, read the way the scanner container sees it, never from outside app/.
+	 *
+	 * @param string $code Real path of the site's app/.
+	 * @param string $rel  Path relative to app/.
+	 *
+	 * @return string|null
+	 */
+	protected function read_site_file( $code, $rel ) {
+		$path = self::resolve_in( $code, $rel );
+		if ( null === $path || ! is_file( $path ) || filesize( $path ) > self::CONFIG_MAX ) {
+			return null;
+		}
+		$text = @file_get_contents( $path ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is handled.
+
+		return false === $text ? null : $text;
+	}
+
+	/**
+	 * Resolves a path under app/ as the container sees it: a link to /var/www/... points into app/.
+	 *
+	 * @param string $code Real path of the site's app/.
+	 * @param string $rel  Path relative to app/.
+	 *
+	 * @return string|null Real host path inside app/, or null when it doesn't exist or leaves app/.
+	 */
+	public static function resolve_in( $code, $rel ) {
+		$todo = array_values( array_filter( explode( '/', $rel ), 'strlen' ) );
+		$done = [];
+		$hops = 0;
+		while ( $todo ) {
+			$part = array_shift( $todo );
+			if ( '.' === $part ) {
+				continue;
+			}
+			if ( '..' === $part ) {
+				if ( ! $done ) {
+					return null;
+				}
+				array_pop( $done );
+				continue;
+			}
+			$path = $code . '/' . implode( '/', array_merge( $done, [ $part ] ) );
+			if ( is_link( $path ) ) {
+				$target = readlink( $path );
+				if ( false === $target || ++$hops > 40 ) {
+					return null;
+				}
+				if ( '/' === substr( $target, 0, 1 ) ) {
+					if ( 0 !== strpos( $target . '/', '/var/www/' ) ) {
+						return null;
+					}
+					$done   = [];
+					$target = substr( $target, strlen( '/var/www' ) );
+				}
+				$todo = array_merge( array_values( array_filter( explode( '/', $target ), 'strlen' ) ), $todo );
+				continue;
+			}
+			// Only a directory can be passed through, as in the kernel.
+			if ( ! file_exists( $path ) || ( $todo && ! is_dir( $path ) ) ) {
+				return null;
+			}
+			$done[] = $part;
+		}
+
+		return rtrim( $code . '/' . implode( '/', $done ), '/' );
 	}
 
 	/**
@@ -1260,7 +1846,7 @@ class Site_PHP_Compat {
 		$file   = fstat( $handle );
 		$target = $dir . '/' . basename( $path );
 		// lchown/lchgrp never follow a link (a setgid directory gives the file its group); the directory is checked again right before the rename.
-		$ok = $ok && ( 0 !== self::euid() || ( @lchown( $tmp, 0 ) && @lchgrp( $tmp, 0 ) ) ) && $this->output_dir_unchanged( $path ) && @rename( $tmp, $target ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- reported as tool_error.
+		$ok = $ok && ( 0 !== self::euid() || ( @lchown( $tmp, 0 ) && @lchgrp( $tmp, 0 ) ) ) && $this->output_dir_unchanged( $path ) && self::replaceable( $target ) && @rename( $tmp, $target ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- reported as tool_error.
 		if ( ! $ok ) {
 			@unlink( $tmp ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged
 		}
@@ -1274,6 +1860,26 @@ class Site_PHP_Compat {
 		fclose( $handle );
 
 		return $ok;
+	}
+
+	/**
+	 * @param string $path --output.
+	 *
+	 * @return bool Whether the report may replace what is there: nothing, a regular file, or a link to one or to nothing.
+	 */
+	protected static function replaceable( $path ) {
+		clearstatcache( true, $path );
+		$entry = @lstat( $path ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- checked below.
+		if ( ! $entry ) {
+			return true;
+		}
+		$type = $entry['mode'] & 0170000;
+		if ( 0120000 === $type ) {
+			$target = @stat( $path ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- a dangling link is fine.
+			return ! $target || 0100000 === ( $target['mode'] & 0170000 );
+		}
+
+		return 0100000 === $type;
 	}
 
 	/**
@@ -1473,7 +2079,7 @@ class Site_PHP_Compat {
 				yield "A check of $site is already running.";
 				return;
 			case 'no_code_found':
-				yield "No PHP code found to check in $site.";
+				yield $this->no_code_text();
 				return;
 			case 'cancelled':
 				yield "The check of $site for PHP $target was cancelled.";
@@ -1550,6 +2156,27 @@ class Site_PHP_Compat {
 	}
 
 	/**
+	 * Where the check looked, so a wrong root doesn't read as an empty site.
+	 *
+	 * @return string
+	 */
+	protected function no_code_text() {
+		$text = "No PHP code found to check in {$this->site}.";
+		if ( null === $this->looked_in ) {
+			return $text;
+		}
+		$dir = self::clean( $this->looked_in );
+		if ( null === $this->nginx_conf ) {
+			return "$text $dir doesn't exist.";
+		}
+		if ( ! $this->wp_layout ) {
+			return "$text Looked for PHP files in $dir.";
+		}
+
+		return "$text Looked for plugins, themes and other WordPress code in $dir. The check follows the directory nginx serves (root in {$this->nginx_conf}), its current/ and wp-cli.yml's path:.";
+	}
+
+	/**
 	 * @param array $doc Estimate document.
 	 *
 	 * @return string
@@ -1561,7 +2188,7 @@ class Site_PHP_Compat {
 			case 'busy':
 				return "An estimate for $site is already running.\n";
 			case 'no_code_found':
-				return "No PHP code found to check in $site.\n";
+				return $this->no_code_text() . "\n";
 			case 'tool_error':
 				return "Couldn't estimate a check of $site for PHP $target: " . self::clean( $doc['detail'] ) . "\n";
 		}
