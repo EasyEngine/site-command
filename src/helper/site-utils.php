@@ -809,9 +809,46 @@ function start_site_containers( $site_fs_path, $containers = [] ) {
 
 	chdir( $site_fs_path );
 	EE::log( 'Starting site\'s services.' );
-	if ( ! \EE_DOCKER::docker_compose_up( $site_fs_path, $containers ) ) {
+	if ( ! up_site_containers( $site_fs_path, $containers ) ) {
 		throw new \Exception( 'There was some error in docker-compose up.' );
 	}
+}
+
+/**
+ * Compose files, besides docker-compose.yml and the custom ones, that the site's containers are created from.
+ *
+ * @param string $site_fs_path Root directory of the site.
+ *
+ * @return string[] File names relative to the site root.
+ */
+function get_site_compose_files( $site_fs_path ) {
+
+	// `admin-tools disable` leaves docker-compose-admin.yml in place, so the DB flag decides.
+	foreach ( Site::where( 'site_fs_path', $site_fs_path ) as $site ) {
+		if ( ! empty( $site->admin_tools ) ) {
+			return [ 'docker-compose-admin.yml' ];
+		}
+	}
+
+	return [];
+}
+
+/**
+ * Like EE_DOCKER::docker_compose_up(), but with the site's own compose files, so a recreated container keeps admin-tools' mounts.
+ *
+ * @param string $site_fs_path Root directory of the site.
+ * @param array  $containers   Services to bring up. Empty brings up all.
+ *
+ * @return bool success.
+ */
+function up_site_containers( $site_fs_path, $containers = [] ) {
+
+	if ( ! chdir( $site_fs_path ) ) {
+		return false;
+	}
+	$services = empty( $containers ) ? '' : ' ' . implode( ' ', $containers );
+
+	return EE::exec( \EE_DOCKER::docker_compose_with_custom( get_site_compose_files( $site_fs_path ) ) . ' up -d' . $services );
 }
 
 /**
