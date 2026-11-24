@@ -243,6 +243,9 @@ class Site_PHP_Compat {
 		if ( '' === $output || '/' !== $output[0] ) {
 			EE::error( '--output must be an absolute path.' );
 		}
+		if ( ! preg_match( '//u', $output ) || preg_match( '/[\x00-\x1F\x7F' . self::UNSAFE_CHARS . ']/u', $output ) ) {
+			EE::error( '--output must not contain control characters.' );
+		}
 		$name = basename( $output );
 		if ( '/' === substr( $output, -1 ) || '' === $name || '.' === $name || '..' === $name ) {
 			EE::error( '--output must name a file.' );
@@ -257,6 +260,15 @@ class Site_PHP_Compat {
 		}
 		if ( is_dir( $output ) && ! is_link( $output ) ) {
 			EE::error( "--output is a directory: $output" );
+		}
+		// The rename would replace a device node such as /dev/null with the report.
+		foreach ( [ '/dev', '/proc', '/sys', '/run' ] as $system ) {
+			if ( $dir === $system || 0 === strpos( $dir, "$system/" ) ) {
+				EE::error( "--output can't be in $system: $output" );
+			}
+		}
+		if ( ! self::replaceable( $output ) ) {
+			EE::error( "--output is not a regular file: $output" );
 		}
 		// tempnam() falls back to the system temp dir when $dir isn't writable (read-only mount, not root).
 		$probe    = @tempnam( $dir, '.ee-php-compat-' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- checked below.
@@ -1692,7 +1704,7 @@ class Site_PHP_Compat {
 		$file   = fstat( $handle );
 		$target = $dir . '/' . basename( $path );
 		// lchown/lchgrp never follow a link (a setgid directory gives the file its group); the directory is checked again right before the rename.
-		$ok = $ok && ( 0 !== self::euid() || ( @lchown( $tmp, 0 ) && @lchgrp( $tmp, 0 ) ) ) && $this->output_dir_unchanged( $path ) && @rename( $tmp, $target ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- reported as tool_error.
+		$ok = $ok && ( 0 !== self::euid() || ( @lchown( $tmp, 0 ) && @lchgrp( $tmp, 0 ) ) ) && $this->output_dir_unchanged( $path ) && self::replaceable( $target ) && @rename( $tmp, $target ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- reported as tool_error.
 		if ( ! $ok ) {
 			@unlink( $tmp ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged
 		}
@@ -1706,6 +1718,26 @@ class Site_PHP_Compat {
 		fclose( $handle );
 
 		return $ok;
+	}
+
+	/**
+	 * @param string $path --output.
+	 *
+	 * @return bool Whether the report may replace what is there: nothing, a regular file, or a link to one or to nothing.
+	 */
+	protected static function replaceable( $path ) {
+		clearstatcache( true, $path );
+		$entry = @lstat( $path ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- checked below.
+		if ( ! $entry ) {
+			return true;
+		}
+		$type = $entry['mode'] & 0170000;
+		if ( 0120000 === $type ) {
+			$target = @stat( $path ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- a dangling link is fine.
+			return ! $target || 0100000 === ( $target['mode'] & 0170000 );
+		}
+
+		return 0100000 === $type;
 	}
 
 	/**

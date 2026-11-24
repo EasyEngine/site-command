@@ -983,6 +983,23 @@ class FeatureContext implements Context
 	}
 
 	/**
+	 * Puts /dev/null back before failing, so a regression can't break the rest of the run.
+	 *
+	 * @Then /^\/dev\/null should still be the null device$/
+	 */
+	public function devNullShouldStillBeTheNullDevice()
+	{
+		clearstatcache( true, '/dev/null' );
+		$stat = @lstat( '/dev/null' );
+		if ( $stat && 0020000 === ( $stat['mode'] & 0170000 ) && 259 === $stat['rdev'] ) {
+			return;
+		}
+		@unlink( '/dev/null' );
+		exec( 'mknod -m 666 /dev/null c 1 3' );
+		throw new Exception( '/dev/null was replaced (restored now): ' . var_export( $stat, true ) );
+	}
+
+	/**
 	 * @When /^I remove the (?:file|directory) "([^"]*)"$/
 	 */
 	public function iRemoveThePath( $path )

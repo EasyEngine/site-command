@@ -110,6 +110,23 @@ Feature: Check the PHP compatibility of a site's code
     And what was appended to the file "{EE_ROOT_DIR}/logs/ee.log" since its size was noted should not contain "RemovedFunctions"
     And what was appended to the file "{EE_ROOT_DIR}/logs/ee.log" since its size was noted should not contain "legacy.php"
 
+  Scenario: --output refuses /dev/null and other paths that aren't regular files, before anything runs
+    Given the site "bh-site-command-181.test" exists, created with "--type=php"
+    And I link "{TMP}/null-link" to "/dev/null"
+    When I run 'bin/ee site php-compat bh-site-command-181.test --php=8.4 --output=/dev/null'
+    Then the command should fail
+    And STDERR should contain "--output can't be in /dev: /dev/null"
+    And /dev/null should still be the null device
+    When I run 'bin/ee site php-compat bh-site-command-181.test --php=8.4 --output=/dev/stdout'
+    Then the command should fail
+    And STDERR should contain "--output can't be in /dev: /dev/stdout"
+    When I run 'bin/ee site php-compat bh-site-command-181.test --php=8.4 --output={TMP}/null-link'
+    Then the command should fail
+    And STDERR should contain "--output is not a regular file: {TMP}/null-link"
+    And /dev/null should still be the null device
+    And the symlink "{TMP}/null-link" should exist
+    And the docker container "ee-php-compat-bh-site-command-181.test" should not exist
+
   @wp
   Scenario: A --public-dir site whose record lost its public dir is checked where nginx serves it, from inside the site directory
     Given the compat-scanner image is available
