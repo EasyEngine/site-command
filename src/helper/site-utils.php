@@ -1172,6 +1172,17 @@ function get_public_dir( $assoc_args ) {
 }
 
 /**
+ * Where a WordPress site's root can be, relative to app/: its public directory, then current/ in it (CI/CD releases).
+ *
+ * @param string $public_rel Public directory relative to app/, e.g. htdocs or htdocs/current.
+ *
+ * @return string[]
+ */
+function get_wp_root_candidates( $public_rel ) {
+	return [ $public_rel, $public_rel . '/current' ];
+}
+
+/**
  * Get final source directory for site webroot.
  *
  * @param string $original_src_dir  source directory.

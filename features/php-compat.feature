@@ -110,6 +110,88 @@ Feature: Check the PHP compatibility of a site's code
     And what was appended to the file "{EE_ROOT_DIR}/logs/ee.log" since its size was noted should not contain "RemovedFunctions"
     And what was appended to the file "{EE_ROOT_DIR}/logs/ee.log" since its size was noted should not contain "legacy.php"
 
+  @wp
+  Scenario: A --public-dir site whose record lost its public dir is checked where nginx serves it, from inside the site directory
+    Given the compat-scanner image is available
+    And the site "bh-site-command-185.test" exists, created with "--type=wp --public-dir=current"
+    And I write "<?php\n/**\n * Plugin Name: Compat Fixture\n * Version: 1.0\n */\n$f = create_function( '', 'return 1;' );\n" to the file "{SITES_DIR}/bh-site-command-185.test/app/htdocs/current/wp-content/plugins/compat-fixture/compat-fixture.php"
+    And I make everything under "{SITES_DIR}/bh-site-command-185.test/app/htdocs/current/wp-content/plugins/compat-fixture" readable by everyone
+    # The record a user's server had: nginx still serves htdocs/current.
+    And I set the "site_container_fs_path" field of site "bh-site-command-185.test" in the database to "/var/www/htdocs"
+    When I run 'cd {SITES_DIR}/bh-site-command-185.test && {EE} site php-compat --php=8.4 --format=json'
+    Then the command should succeed
+    And STDOUT should match "/^\{.*\}\n?$/"
+    And the JSON field "status" in STDOUT should be "ok"
+    And the JSON field "site" in STDOUT should be "bh-site-command-185.test"
+    And the JSON field "safe_to_upgrade" in STDOUT should be "false"
+    And STDERR should contain "EE's record of bh-site-command-185.test has /var/www/htdocs as its public directory, but nginx serves /var/www/htdocs/current"
+    When I run 'cd {SITES_DIR}/bh-site-command-185.test/app/htdocs && {EE} site php-compat --php=8.4 --estimate --format=json'
+    Then the command should succeed
+    And the JSON field "status" in STDOUT should be "ok"
+    And STDOUT should match "/"php_files":[1-9]/"
+    When I run 'cd {SITES_DIR}/bh-site-command-185.test && {EE} site php-compat --php=8.4'
+    Then the command should succeed
+    And STDOUT should match "/^Not safe to upgrade bh-site-command-185\.test to PHP 8\.4: /"
+    And STDOUT should contain "Compat Fixture 1.0 (plugin compat-fixture): 1 error"
+
+  @wp
+  Scenario: A nested --public-dir is checked from a directory inside the site
+    Given the compat-scanner image is available
+    And the site "bh-site-command-186.test" exists, created with "--type=wp --public-dir=/current/public/"
+    And I write "<?php\n/**\n * Plugin Name: Compat Fixture\n * Version: 1.0\n */\neach( $a );\n" to the file "{SITES_DIR}/bh-site-command-186.test/app/htdocs/current/public/wp-content/plugins/compat-fixture/compat-fixture.php"
+    And I make everything under "{SITES_DIR}/bh-site-command-186.test/app/htdocs/current/public/wp-content/plugins/compat-fixture" readable by everyone
+    Then the "site_container_fs_path" field of site "bh-site-command-186.test" in the database should be "/var/www/htdocs/current/public"
+    When I run 'cd {SITES_DIR}/bh-site-command-186.test/app/htdocs/current/public/wp-content && {EE} site php-compat --php=8.4 --format=json'
+    Then the command should succeed
+    And the JSON field "status" in STDOUT should be "ok"
+    And the JSON field "safe_to_upgrade" in STDOUT should be "false"
+    And STDERR should not contain "nginx serves"
+
+  Scenario: A php site whose record lost its public dir is checked with a warning
+    Given the compat-scanner image is available
+    And the site "bh-site-command-187.test" exists, created with "--type=php --public-dir=public"
+    And I write "<?php\n$f = create_function( '', 'return 1;' );\neach( $a );\n" to the file "{SITES_DIR}/bh-site-command-187.test/app/htdocs/public/legacy.php"
+    And I make everything under "{SITES_DIR}/bh-site-command-187.test/app/htdocs/public" readable by everyone
+    And I set the "site_container_fs_path" field of site "bh-site-command-187.test" in the database to "/var/www/htdocs"
+    When I run 'cd {SITES_DIR}/bh-site-command-187.test && {EE} site php-compat --php=8.4 --format=json'
+    Then the command should succeed
+    And the JSON field "status" in STDOUT should be "ok"
+    And the JSON field "errors" in STDOUT should be "2"
+    And STDERR should contain "but nginx serves /var/www/htdocs/public"
+
+  @wp
+  Scenario: A WP_CONTENT_DIR the check can't follow gives no verdict
+    Given the site "bh-site-command-188.test" exists, created with "--type=wp"
+    And I write "<?php\n/**\n * Plugin Name: Compat Fixture\n */\neach( $a );\n" to the file "{SITES_DIR}/bh-site-command-188.test/app/htdocs/content/plugins/compat-fixture/compat-fixture.php"
+    And I append "\ndefine( 'WP_CONTENT_DIR', __DIR__ . '/htdocs/content' );\n" to the file "{SITES_DIR}/bh-site-command-188.test/app/wp-config.php"
+    When I run 'bin/ee site php-compat bh-site-command-188.test --php=8.4 --format=json'
+    Then the command should succeed
+    And the JSON field "status" in STDOUT should be "tool_error"
+    And the JSON field "safe_to_upgrade" in STDOUT should be null
+    And the JSON field "detail" in STDOUT should contain "WordPress loads plugins and themes from {SITES_DIR}/bh-site-command-188.test/app/htdocs/content (WP_CONTENT_DIR in {SITES_DIR}/bh-site-command-188.test/app/wp-config.php); this check can't scan that layout yet"
+    And the docker container "ee-php-compat-bh-site-command-188.test" should not exist
+    When I run 'bin/ee site php-compat bh-site-command-188.test --php=8.4'
+    Then the command should succeed
+    And STDOUT should match "/^The check of bh-site-command-188\.test for PHP 8\.4 didn't finish: WordPress loads plugins and themes from /"
+    And STDOUT should not contain "Safe to upgrade"
+
+  @wp
+  Scenario: Without wp-content the message names the directory checked, and a release layout under htdocs is found
+    Given the compat-scanner image is available
+    And the site "bh-site-command-189.test" exists, created with "--type=wp"
+    When I run 'mv {SITES_DIR}/bh-site-command-189.test/app/htdocs/wp-content {SITES_DIR}/bh-site-command-189.test/app/htdocs/wp-content-off'
+    And I run 'cd {SITES_DIR}/bh-site-command-189.test && {EE} site php-compat --php=8.4'
+    Then the command should succeed
+    And STDOUT should contain "No PHP code found to check in bh-site-command-189.test. Looked for plugins, themes and other WordPress code in {SITES_DIR}/bh-site-command-189.test/app/htdocs/wp-content. The check follows the directory nginx serves (root in {SITES_DIR}/bh-site-command-189.test/config/nginx/conf.d/main.conf)"
+    # A CI/CD deploy: WordPress in releases/1, current links to it, wp-cli.yml points there, the record still says htdocs.
+    When I run 'cd {SITES_DIR}/bh-site-command-189.test/app/htdocs && mkdir -p releases/1 && mv wp-content-off releases/1/wp-content && mv wp-admin wp-includes index.php wp-settings.php releases/1/ && ln -s /var/www/htdocs/releases/1 current && printf "path: current/\n" > wp-cli.yml'
+    And I write "<?php\n/**\n * Plugin Name: Compat Fixture\n */\neach( $a );\n" to the file "{SITES_DIR}/bh-site-command-189.test/app/htdocs/releases/1/wp-content/plugins/compat-fixture/compat-fixture.php"
+    And I make everything under "{SITES_DIR}/bh-site-command-189.test/app/htdocs/releases" readable by everyone
+    And I run 'cd {SITES_DIR}/bh-site-command-189.test && {EE} site php-compat --php=8.4 --format=json'
+    Then the command should succeed
+    And the JSON field "status" in STDOUT should be "ok"
+    And the JSON field "safe_to_upgrade" in STDOUT should be "false"
+
   Scenario: An html site is refused
     Given the html site "bh-site-command-182.test" exists
     When I run 'bin/ee site php-compat bh-site-command-182.test --php=8.4'

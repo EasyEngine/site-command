@@ -875,6 +875,23 @@ class FeatureContext implements Context
 		}
 	}
 
+	/**
+	 * Simulates a site record that disagrees with what nginx serves.
+	 *
+	 * @When /^I set the "([a-z_]+)" field of site "([^"]*)" in the database to "(.*)"$/
+	 */
+	public function iSetTheFieldOfSite( $field, $site, $value )
+	{
+		$site = $this->v( $site );
+		$this->assert_own_name( $site );
+		$row = $this->get_site_row( $site );
+		if ( false === $row || ! array_key_exists( $field, $row ) ) {
+			throw new Exception( "No $field for site $site in the EasyEngine database." );
+		}
+		$stmt = self::db()->prepare( "UPDATE sites SET $field = ? WHERE site_url = ?" );
+		$stmt->execute( [ $this->v( $value ), $site ] );
+	}
+
 	/* ----- files ----- */
 
 	/**
@@ -947,6 +964,21 @@ class FeatureContext implements Context
 		$content = str_replace( '\n', "\n", $this->v( $content ) );
 		if ( false === file_put_contents( $path, $content, 'append' === $mode ? FILE_APPEND : 0 ) ) {
 			throw new Exception( "Could not write to $path" );
+		}
+	}
+
+	/**
+	 * @When /^I link "([^"]*)" to "([^"]*)"$/
+	 */
+	public function iLinkTo( $path, $target )
+	{
+		$path = $this->v( $path );
+		$this->assert_writable_path( $path );
+		if ( ! is_dir( dirname( $path ) ) ) {
+			mkdir( dirname( $path ), 0755, true );
+		}
+		if ( ! symlink( $this->v( $target ), $path ) ) {
+			throw new Exception( "Could not link $path" );
 		}
 	}
 
