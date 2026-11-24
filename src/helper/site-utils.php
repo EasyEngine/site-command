@@ -829,7 +829,7 @@ function get_site_compose_files( $site_fs_path ) {
 			// A failed v4.13.2 admin-tools migration puts back the old file, which mounts the EasyEngine DB into the site.
 			$admin_compose = @file_get_contents( $site_fs_path . '/docker-compose-admin.yml' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- a missing file is skipped later.
 			// Comment lines don't count; any other mention of the DB path does, as a mount can be written in several forms.
-			if ( defined( 'DB' ) && false !== $admin_compose && preg_match( '/^[ \t]*+[^#\s].*' . preg_quote( DB, '/' ) . '/m', $admin_compose ) ) {
+			if ( defined( 'DB' ) && false !== $admin_compose && preg_match( '/^(?![ \t]*#).*' . preg_quote( DB, '/' ) . '/m', $admin_compose ) ) {
 				EE::warning( sprintf( 'Not applying %1$s/docker-compose-admin.yml: it still mounts the EasyEngine database. Run `ee admin-tools enable %2$s --force` to bring admin-tools back.', $site_fs_path, $site->site_url ) );
 
 				return [];

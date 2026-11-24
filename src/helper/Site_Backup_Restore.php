@@ -2189,8 +2189,11 @@ DEALLOCATE PREPARE ee_stmt;
 		if ( is_link( $root ) || is_link( $site_dir ) || is_link( $file ) ) {
 			return;
 		}
-		if ( is_file( $file ) ) {
-			unlink( $file );
+		// The rollback itself is done, so a copy that can't be removed is reported instead of keeping the journal for a retry.
+		if ( is_file( $file ) && ! @unlink( $file ) ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- reported below.
+			EE::warning( sprintf( 'Could not remove %s, the php.ini copy saved by the restore that was rolled back; remove it by hand.', $file ) );
+
+			return;
 		}
 		// rmdir() refuses a dir that holds other sites' copies.
 		@rmdir( $site_dir ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- best effort.
