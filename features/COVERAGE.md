@@ -1,12 +1,12 @@
 # site-command Behat coverage
 
-Suite for `easyengine/site-command` (the `ee site` command and the html site type, plus `ee site php-compat` on php and wp sites). 19 features, 191 scenarios (227 with outlines expanded): main lane 204, `@wp` 12, `@le` 11. Run it the CI way (`.github/workflows/behat.yml`): the files are copied into a core checkout's `features/` and core's `vendor/bin/behat` runs from the core root as root.
+Suite for `easyengine/site-command` (the `ee site` command and the html site type, plus `ee site php-compat` on php and wp sites). 19 features, 195 scenarios (235 with outlines expanded): main lane 212, `@wp` 12, `@le` 11. Run it the CI way (`.github/workflows/behat.yml`): the files are copied into a core checkout's `features/` and core's `vendor/bin/behat` runs from the core root as root.
 
 ## Tags
 
 | Tag | Scenarios | Meaning |
 |---|---|---|
-| (none of the tags below) | 181 | Local only: `*.test` sites, no public DNS, no remote storage, no global restarts. This is the default safe run. The php-compat scenarios pull the scanner image from Docker Hub when it isn't present. |
+| (none of the tags below) | 185 | Local only: `*.test` sites, no public DNS, no remote storage, no global restarts. This is the default safe run. The php-compat scenarios pull the scanner image from Docker Hub when it isn't present. |
 | `@known-bug` | 0 | Scenarios that expose open bugs are kept outside this suite and come back with their fixes. The CI lanes still exclude the tag. |
 | `@destructive` | 12 | Restarts the GLOBAL nginx-proxy (proxy cache) or runs `ssl-renew --all` (refuses to start when an enabled LE site that isn't the suite's exists). Every scenario leaves the proxy running. |
 | `@remote` | 10 | Uses the REAL rclone remote (`rclone-path` in config.yml). Touches only `<rclone-path>/bh-site-command-*`: the rclone path is listed first and only listed suite directories are purged (per site before a scenario, all of them after the feature). |
@@ -229,11 +229,13 @@ Every scan scenario needs core's `img-versions.json` to pin `easyengine/compat-s
 | "Can't confirm" verdict line | not covered | needs a file uid 33 can't read; the scanner side is in the dockerfiles fixture test |
 | `--output`: root-owned 0600, replaces an existing file, same fields as the summary, `report`/`report_bytes` | covered | compat: --output writes a root-owned 0600 report... |
 | No finding text in ee.log | covered | compat: ee.log holds no finding text after a check with findings |
-| html site refused, bad or missing `--php` (dispatcher and command checks) | covered | compat: An html site is refused; A bad --php value is rejected (outline) |
+| html site refused, bad or missing `--php` (dispatcher and command checks), flags `--cancel` doesn't take | covered | compat: An html site is refused; A bad --php value, a missing one, or a flag --cancel does not take is rejected (outline) |
 | `busy` while a scan of the same site runs (json and table) | covered | compat: A second check while one of the same site runs reports busy |
 | `--estimate` (json and table) while a scan of the same site runs | covered | compat: --estimate prints its JSON while a check of the same site runs |
 | `--timeout`: `tool_error`, exit 0, no temporary directory or container left | covered | compat: No temporary directory or container is left behind... |
 | Leftover temporary directory and stopped container of a killed run removed | covered | compat: A leftover of a killed check is removed by the next check |
+| `--cancel`: `not_running` with nothing running (json and table); `cancelled` for a running scan container, which is removed with the temporary directory, and a normal check afterwards; a stopped leftover removed; a missing site refused ("Could not find the site…") | covered | compat: --cancel with nothing running says so; --cancel stops the container of a check and removes its temporary directory; --cancel removes the stopped container and directory of a killed check; --cancel of a site that doesn't exist is refused |
+| `--cancel` racing a live `ee site php-compat` (the scan reports `cancelled`, `--cancel` waits for its cleanup) | not covered | timing-dependent on CI runners; covered by PHPUnit and the real-image docker tests |
 | Invalid `--output`/`--timeout`, `--output` or `--timeout` with `--estimate` | not covered | usage errors raised before Docker runs; not in the spec's scenario list |
 | Disabled site can be scanned | not covered | not in the spec's scenario list |
 | Image pull on first use, failed pull (`tool_error`) | not covered | needs a missing image or no route to Docker Hub |

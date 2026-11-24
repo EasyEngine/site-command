@@ -1648,11 +1648,11 @@ class FeatureContext implements Context
 	}
 
 	/**
-	 * What a php-compat scan killed before its cleanup leaves: its temporary directory and a stopped container with its name.
+	 * What a php-compat scan killed before its cleanup leaves: its temporary directory and a container with its name, stopped or (an orphaned scan) still running.
 	 *
-	 * @Given /^a killed php-compat scan of site "([^"]*)" left its temporary directory and container behind$/
+	 * @Given /^a killed php-compat scan of site "([^"]*)" left its temporary directory and (a running )?container behind$/
 	 */
-	public function aKilledPhpCompatScanLeftovers( $site )
+	public function aKilledPhpCompatScanLeftovers( $site, $running = '' )
 	{
 		$site = $this->v( $site );
 		$this->assert_own_name( $site );
@@ -1667,7 +1667,11 @@ class FeatureContext implements Context
 		EE::launch( 'chown -R 33:33 ' . escapeshellarg( $dir ), false, true );
 
 		EE::launch( 'docker rm -f ' . escapeshellarg( $name ), false, true );
-		$create = EE::launch( 'docker create --name ' . escapeshellarg( $name ) . ' --entrypoint true ' . escapeshellarg( $this->compat_image() ), false, true );
+		if ( $running ) {
+			$create = EE::launch( 'docker run -d --init --network none --name ' . escapeshellarg( $name ) . ' --entrypoint sleep ' . escapeshellarg( $this->compat_image() ) . ' 600', false, true );
+		} else {
+			$create = EE::launch( 'docker create --name ' . escapeshellarg( $name ) . ' --entrypoint true ' . escapeshellarg( $this->compat_image() ), false, true );
+		}
 		if ( 0 !== $create->return_code ) {
 			throw new Exception( "Could not create the leftover container $name.\n" . $this->describe( $create ) );
 		}

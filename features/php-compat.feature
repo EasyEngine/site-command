@@ -119,7 +119,7 @@ Feature: Check the PHP compatibility of a site's code
     And the docker container "ee-php-compat-bh-site-command-182.test" should not exist
 
   # 9.9 fails in the dispatcher; 8 passes its loose comparison (8 == 8.0) and is caught by the command. PHP 7.4 also passes 8.4- through loosely.
-  Scenario Outline: A bad --php value is rejected
+  Scenario Outline: A bad --php value, a missing one, or a flag --cancel does not take is rejected
     Given the site "bh-site-command-181.test" exists, created with "--type=php"
     When I run 'bin/ee site php-compat bh-site-command-181.test <flags>'
     Then the command should fail
@@ -127,12 +127,16 @@ Feature: Check the PHP compatibility of a site's code
     And the docker container "ee-php-compat-bh-site-command-181.test" should not exist
 
     Examples:
-      | flags      | message                                   |
-      | --php=9.9  | Invalid value specified for 'php'         |
-      | --php=8    | Invalid --php value. Use one of: 5.6, 7.0 |
-      | --php=8.4- | Invalid                                   |
-      | --php=abc  | Invalid value specified for 'php'         |
-      |            | missing --php parameter                   |
+      | flags                | message                                   |
+      | --php=9.9            | Invalid value specified for 'php'         |
+      | --php=8              | Invalid --php value. Use one of: 5.6, 7.0 |
+      | --php=8.4-           | Invalid                                   |
+      | --php=abc            | Invalid value specified for 'php'         |
+      |                      | missing --php parameter                   |
+      | --estimate           | missing --php parameter                   |
+      | --cancel --php=8.4   | --php doesn't apply to --cancel.          |
+      | --cancel --estimate  | --estimate doesn't apply to --cancel.     |
+      | --cancel --timeout=5 | --timeout doesn't apply to --cancel.      |
 
   # The 5,000 generated files (about 30 MB) keep the first scan running for tens of seconds, well past the second command.
   Scenario: A second check while one of the same site runs reports busy
@@ -210,3 +214,66 @@ Feature: Check the PHP compatibility of a site's code
     And the JSON field "safe_to_upgrade" in STDOUT should be "true"
     And the directory "{EE_ROOT_DIR}/tmp/php-compat/bh-site-command-184.test" should not exist
     And the docker container "ee-php-compat-bh-site-command-184.test" should not exist
+
+  # Deterministic: a scan killed before its cleanup stands in for a running one (the race with a live scan is unit- and live-tested).
+  Scenario: --cancel with nothing running says so
+    Given the site "bh-site-command-184.test" exists, created with "--type=php"
+    When I run 'bin/ee site php-compat bh-site-command-184.test --cancel --format=json'
+    Then the command should succeed
+    And STDOUT should be exactly:
+      """
+      {"v":1,"status":"not_running","cancel":true,"site":"bh-site-command-184.test"}
+      """
+    When I run 'bin/ee site php-compat bh-site-command-184.test --cancel'
+    Then the command should succeed
+    And STDOUT should be exactly:
+      """
+      No check of bh-site-command-184.test is running.
+      """
+    And the docker container "ee-php-compat-bh-site-command-184.test" should not exist
+
+  Scenario: --cancel stops the container of a check and removes its temporary directory
+    Given the compat-scanner image is available
+    And the site "bh-site-command-184.test" exists, created with "--type=php"
+    And I write "<?php\nfunction bh_compat_ok() { return 1; }\n" to the file "{SITES_DIR}/bh-site-command-184.test/app/htdocs/clean/ok.php"
+    And I make everything under "{SITES_DIR}/bh-site-command-184.test/app/htdocs/clean" readable by everyone
+    And a killed php-compat scan of site "bh-site-command-184.test" left its temporary directory and a running container behind
+    And the docker container "ee-php-compat-bh-site-command-184.test" should be running
+    When I run 'bin/ee site php-compat bh-site-command-184.test --cancel --format=json'
+    Then the command should succeed
+    And STDOUT should be exactly:
+      """
+      {"v":1,"status":"cancelled","cancel":true,"site":"bh-site-command-184.test"}
+      """
+    And the docker container "ee-php-compat-bh-site-command-184.test" should not exist
+    And the directory "{EE_ROOT_DIR}/tmp/php-compat/bh-site-command-184.test" should not exist
+    And the file "{EE_ROOT_DIR}/tmp/php-compat/.cancel-bh-site-command-184.test" should not exist
+    When I run 'bin/ee site php-compat bh-site-command-184.test --cancel'
+    Then the command should succeed
+    And STDOUT should be exactly:
+      """
+      No check of bh-site-command-184.test is running.
+      """
+    # The next check runs normally: no cancel request is left behind.
+    When I run 'bin/ee site php-compat bh-site-command-184.test --php=8.4 --format=json'
+    Then the command should succeed
+    And the JSON field "status" in STDOUT should be "ok"
+    And the JSON field "safe_to_upgrade" in STDOUT should be "true"
+
+  Scenario: --cancel removes the stopped container and directory of a killed check
+    Given the compat-scanner image is available
+    And the site "bh-site-command-184.test" exists, created with "--type=php"
+    And a killed php-compat scan of site "bh-site-command-184.test" left its temporary directory and container behind
+    When I run 'bin/ee site php-compat bh-site-command-184.test --cancel'
+    Then the command should succeed
+    And STDOUT should be exactly:
+      """
+      No check of bh-site-command-184.test is running.
+      """
+    And the docker container "ee-php-compat-bh-site-command-184.test" should not exist
+    And the directory "{EE_ROOT_DIR}/tmp/php-compat/bh-site-command-184.test" should not exist
+
+  Scenario: --cancel of a site that doesn't exist is refused
+    When I run 'bin/ee site php-compat bh-site-command-missing.test --cancel'
+    Then the command should fail
+    And STDERR should contain "Could not find the site you wish to run site php-compat command on."
