@@ -1246,7 +1246,11 @@ abstract class EE_Site_Command {
 					$rerun = '--ssl=' . $ssl . ( $wildcard ? ' --wildcard' : '' );
 					if ( 'custom' === $ssl ) {
 						// As passed: the stored paths are resolved, so a certs dir symlink would show as the docker volume path.
-						$rerun .= ' --ssl-key=' . escapeshellarg( get_flag_value( $assoc_args, 'ssl-key' ) ) . ' --ssl-crt=' . escapeshellarg( get_flag_value( $assoc_args, 'ssl-crt' ) );
+						// Not escapeshellarg(): it drops non-ASCII bytes under a C locale on PHP 7.4, and invalid UTF-8 on every version.
+						$quote  = function ( $path ) {
+							return "'" . str_replace( "'", "'\\''", (string) $path ) . "'";
+						};
+						$rerun .= ' --ssl-key=' . $quote( get_flag_value( $assoc_args, 'ssl-key' ) ) . ' --ssl-crt=' . $quote( get_flag_value( $assoc_args, 'ssl-crt' ) );
 					}
 					throw new \Exception( sprintf( 'SSL could not be enabled on %1$s, the site stays without SSL: %2$s Fix the issue and re-run `ee site update %1$s %3$s`.', $this->site_data['site_url'], rtrim( $e->getMessage(), '.' ) . '.', $rerun ) );
 				}
