@@ -1083,11 +1083,30 @@ class Site_PHP_Compat {
 		$dir        = dirname( dirname( $files[0] ) );
 		$app_config = ( '.' === $dir ? '' : "$dir/" ) . 'config/application.php';
 		// Only when the loader includes it: a stale copy WordPress never reads says nothing.
-		if ( '.' !== dirname( $files[0] ) && null !== self::resolve_in( $code, $app_config ) && false !== strpos( (string) $this->read_site_file( $code, $files[0] ), 'config/application.php' ) ) {
+		$loader     = self::php_code( (string) $this->read_site_file( $code, $files[0] ) );
+		if ( '.' !== dirname( $files[0] ) && null !== self::resolve_in( $code, $app_config ) && preg_match( '#\b(?:require|include)(?:_once)?[^;]*config/application\.php#i', $loader ) ) {
 			$files[] = $app_config;
 		}
 
 		return $files;
+	}
+
+	/**
+	 * PHP source without whitespace, comments or inline HTML, for static reads.
+	 *
+	 * @param string $source PHP source.
+	 *
+	 * @return string
+	 */
+	protected static function php_code( $source ) {
+		$code = '';
+		foreach ( @token_get_all( $source ) as $token ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- a broken file still tokenises.
+			if ( ! is_array( $token ) || ! in_array( $token[0], [ T_WHITESPACE, T_COMMENT, T_DOC_COMMENT, T_OPEN_TAG, T_CLOSE_TAG, T_INLINE_HTML ], true ) ) {
+				$code .= is_array( $token ) ? $token[1] : $token;
+			}
+		}
+
+		return $code;
 	}
 
 	/**
