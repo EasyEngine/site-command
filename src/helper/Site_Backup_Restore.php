@@ -3751,10 +3751,14 @@ DEALLOCATE PREPARE ee_stmt;
 			// Next to the migration's copies (`ee site backup` and `ee site restore` empty EE_BACKUP_DIR/<site>/), but never in the same dir, even within the same second.
 			$root = EE_BACKUP_DIR . '/session-sid-settings-' . date( 'Ymd-His' ) . '-restore-' . getmypid();
 			$file = '/' . $this->site_data['site_url'] . '/php.ini';
+			// Journaled before the copy exists, so a rollback finds it even after a kill right after the write.
+			$this->restore_txn['sid_copy'] = $root . $file;
 			try {
+				$this->write_restore_journal();
 				$this->fs->mkdir( dirname( $root . $file ), 0700 );
 				$this->fs->dumpFile( $root . $file, $content );
 			} catch ( \Exception $e ) {
+				unset( $this->restore_txn['sid_copy'] );
 				// rmdir() refuses a dir that holds other sites' copies.
 				@rmdir( dirname( $root . $file ) ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- best effort.
 				@rmdir( $root ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- best effort.
@@ -3765,10 +3769,6 @@ DEALLOCATE PREPARE ee_stmt;
 
 			return $content;
 		}
-		// Journaled so a rollback, also the next restore's after a kill, removes it; a failed write fails the restore.
-		$this->restore_txn['sid_copy'] = $root . $file;
-		$this->write_restore_journal();
-
 		// The lines come from the archive: printable ASCII only, since an 8-bit terminal reads any byte 0x80-0x9F as a control character.
 		$lines   = array_map(
 			function ( $line ) {
