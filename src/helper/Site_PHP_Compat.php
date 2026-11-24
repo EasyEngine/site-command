@@ -472,7 +472,7 @@ class Site_PHP_Compat {
 				// The scan finished without seeing the request.
 				@unlink( $marker ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged
 			} else {
-				// The scan removed it when it stopped (or another cancel replaced it).
+				// The scan removed it when it stopped.
 				$stopped = true;
 			}
 		} elseif ( null !== $this->lock ) {
@@ -517,7 +517,8 @@ class Site_PHP_Compat {
 	}
 
 	/**
-	 * Held shared from before --cancel writes its request until it ends, so no scan clears that request as stale.
+	 * Held from before --cancel writes its request until it ends, so no scan clears that request as stale. Exclusive: a second
+	 * --cancel waits for the first, so it never replaces a request the first still waits on.
 	 *
 	 * @param string $marker cancel_path().
 	 */
@@ -526,10 +527,16 @@ class Site_PHP_Compat {
 		if ( false === $guard ) {
 			return;
 		}
-		// Blocks only while a scan clears a stale request.
-		if ( ! flock( $guard, LOCK_SH ) ) {
-			fclose( $guard );
-			return;
+		// Polled, so signals still reach the handlers; the holder ends within cancel_wait() and its sweep.
+		while ( ! flock( $guard, LOCK_EX | LOCK_NB, $would_block ) ) {
+			if ( ! $would_block ) {
+				fclose( $guard );
+				return;
+			}
+			usleep( 100000 );
+			if ( function_exists( 'pcntl_signal_dispatch' ) ) {
+				null === $this->dispatch ? pcntl_signal_dispatch() : call_user_func( $this->dispatch );
+			}
 		}
 		$this->cancel_guard = $guard;
 	}
