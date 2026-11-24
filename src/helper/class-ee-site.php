@@ -65,6 +65,11 @@ abstract class EE_Site_Command {
 	private $ssl_failure_handled_by_caller = false;
 
 	/**
+	 * @var bool $le_dns_verify_pending Whether init_le() left a manual DNS challenge for `ee site ssl-verify` to finish.
+	 */
+	private $le_dns_verify_pending = false;
+
+	/**
 	 * @var resource $ssl_lock_handle Handle of the process-wide SSL lock.
 	 *
 	 * Static because `ssl-renew --all` renews every site in one process, and flock refuses a second handle there.
@@ -643,7 +648,7 @@ abstract class EE_Site_Command {
 			// LE sites drop HTTPS here for the HTTP-01 challenge; the renewal below turns it back on, other SSL types keep theirs.
 			$nohttps                          = ! $is_ssl || $pending_le || ( 'le' === $this->site_data['site_ssl'] && 'dns' !== $preferred_ssl_challenge );
 			$this->dump_docker_compose_yml( [ 'nohttps' => $nohttps ] );
-			\EE_DOCKER::docker_compose_up( $this->site_data['site_fs_path'], [ 'nginx' ] );
+			\EE\Site\Utils\up_site_containers( $this->site_data['site_fs_path'], [ 'nginx' ] );
 		} catch ( \Exception $e ) {
 			if ( $pre_hook_fired ) {
 				/**
@@ -713,7 +718,7 @@ abstract class EE_Site_Command {
 
 		chdir( $this->site_data['site_fs_path'] );
 		// Required as env variables have changed.
-		\EE_DOCKER::docker_compose_up( $this->site_data['site_fs_path'], [ 'nginx' ] );
+		\EE\Site\Utils\up_site_containers( $this->site_data['site_fs_path'], [ 'nginx' ] );
 		EE::success( 'Alias domains updated on site ' . $this->site_data['site_url'] . '.' );
 
 		try {
@@ -908,14 +913,15 @@ abstract class EE_Site_Command {
 				$failed = true;
 			} else {
 				// Removing the zone together with every location that uses it keeps the config valid, so the failure is elsewhere.
-				EE::warning( "nginx config test failed after disabling proxy cache:\n" . trim( $test->stderr ) );
+				// A refused reload already printed its own test output.
+				EE::warning( 0 === $test->return_code ? 'nginx config test failed after disabling proxy cache, see the reload warning above.' : "nginx config test failed after disabling proxy cache:\n" . trim( $test->stderr ) );
 			}
 		} catch ( \Exception $e ) {
 			EE::error( $e->getMessage() );
 		}
 
 		if ( $failed ) {
-			$message = 'Could not enable proxy cache on ' . $this->site_data['site_url'] . ", nginx config test failed. The previous proxy config was restored.\n" . trim( $test->stderr );
+			$message = 'Could not enable proxy cache on ' . $this->site_data['site_url'] . ', nginx config test failed. The previous proxy config was restored.' . ( 0 === $test->return_code ? ' See the reload warning above.' : "\n" . trim( $test->stderr ) );
 			if ( $force || $call_on_create ) {
 				EE::warning( $message );
 				if ( $call_on_create ) {
@@ -1080,7 +1086,7 @@ abstract class EE_Site_Command {
 			EE::warning( "Could not restore docker-compose.yml to PHP $old_version ({$e->getMessage()}). $manual" );
 		}
 
-		if ( $rollback['stopped'] && ! \EE_DOCKER::docker_compose_up( $site_fs_path, [ 'php' ] ) ) {
+		if ( $rollback['stopped'] && ! \EE\Site\Utils\up_site_containers( $site_fs_path, [ 'php' ] ) ) {
 			EE::warning( "Could not start the php container again. $manual" );
 		}
 	}
@@ -1265,7 +1271,12 @@ abstract class EE_Site_Command {
 					$this->disable_ssl( 'custom' === $ssl ? [ $this->site_data['ssl_key'], $this->site_data['ssl_crt'] ] : [] );
 					$rerun = '--ssl=' . $ssl . ( $wildcard ? ' --wildcard' : '' );
 					if ( 'custom' === $ssl ) {
-						$rerun .= ' --ssl-key=' . escapeshellarg( $this->site_data['ssl_key'] ) . ' --ssl-crt=' . escapeshellarg( $this->site_data['ssl_crt'] );
+						// As passed: the stored paths are resolved, so a certs dir symlink would show as the docker volume path.
+						// Not escapeshellarg(): it drops non-ASCII bytes under a C locale on PHP 7.4, and invalid UTF-8 on every version.
+						$quote  = function ( $path ) {
+							return "'" . str_replace( "'", "'\\''", (string) $path ) . "'";
+						};
+						$rerun .= ' --ssl-key=' . $quote( get_flag_value( $assoc_args, 'ssl-key' ) ) . ' --ssl-crt=' . $quote( get_flag_value( $assoc_args, 'ssl-crt' ) );
 					}
 					throw new \Exception( sprintf( 'SSL could not be enabled on %1$s, the site stays without SSL: %2$s Fix the issue and re-run `ee site update %1$s %3$s`.', $this->site_data['site_url'], rtrim( $e->getMessage(), '.' ) . '.', $rerun ) );
 				}
@@ -1421,7 +1432,7 @@ abstract class EE_Site_Command {
 			}
 		}
 
-		if ( \EE_DOCKER::docker_compose_up( $this->site_data->site_fs_path, $containers_to_start ) ) {
+		if ( \EE\Site\Utils\up_site_containers( $this->site_data->site_fs_path, $containers_to_start ) ) {
 			$this->site_data->site_enabled = 1;
 			$this->site_data->save();
 			$success = true;
@@ -2097,7 +2108,8 @@ abstract class EE_Site_Command {
 		}
 		$api_key_absent = empty( get_config_value( 'cloudflare-api-key' ) );
 		if ( $is_solver_dns && $api_key_absent ) {
-			echo \cli\Colors::colorize( '%YIMPORTANT:%n Run `ee site ssl-verify ' . $site_url . '` once the DNS changes have propagated to complete the certification generation and installation.', null ) . PHP_EOL;
+			echo \cli\Colors::colorize( '%YIMPORTANT:%n Run `' . $this->ssl_verify_command( $site_url, $force ) . '` once the DNS changes have propagated to complete the certification generation and installation.', null ) . PHP_EOL;
+			$this->le_dns_verify_pending = true;
 		} else {
 			if ( ! $api_key_absent && $is_solver_dns ) {
 				EE::log( 'Waiting for DNS entry propagation.' );
@@ -2601,8 +2613,29 @@ abstract class EE_Site_Command {
 				}
 				EE::error( $e->getMessage() . $kept );
 			}
+			// Without a Cloudflare API key the DNS challenge is manual, so no certificate was issued yet.
+			if ( $this->le_dns_verify_pending ) {
+				// `ssl-renew --force` on a site still waiting for its first certificate has none to keep.
+				$still_kept = \EE\Site\Utils\is_le_ssl_pending( $this->site_data['site_url'], 'le' ) ? '' : ' The current certificate is kept until then.';
+				EE::warning( sprintf( 'SSL renewal of %1$s is pending: no new certificate was issued yet. Run `%3$s` once the DNS TXT records have propagated.%2$s', $this->site_data['site_url'], $still_kept, $this->ssl_verify_command( $this->site_data['site_url'], $force ) ) );
+
+				return;
+			}
 		}
 		EE::success( 'SSL renewal completed.' );
+	}
+
+	/**
+	 * The `ee site ssl-verify` command that finishes a manual DNS challenge.
+	 *
+	 * @param string $site_url Name of the site.
+	 * @param bool   $force    Whether the challenge was started by a forced renewal.
+	 *
+	 * @return string
+	 */
+	private function ssl_verify_command( $site_url, $force ) {
+		// Without --force, ssl-verify keeps a certificate valid for 35 more days and never finalizes the new order.
+		return 'ee site ssl-verify ' . $site_url . ( $force ? ' --force' : '' );
 	}
 
 	/**
