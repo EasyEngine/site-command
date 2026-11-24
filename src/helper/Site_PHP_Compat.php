@@ -98,7 +98,7 @@ class Site_PHP_Compat {
 	/** @var string|null The site's nginx config path, for the no_code_found text; null when app/ is missing. */
 	protected $nginx_conf;
 
-	/** @var bool Whether the scan looks at WordPress code (wp-content) rather than all of htdocs. */
+	/** @var bool Whether this is a WordPress scan (its WordPress directory, core left out) rather than all of htdocs. */
 	protected $wp_layout = false;
 
 	/** @var string|null Cancel request file a scan watches once it holds the site lock. */
@@ -926,6 +926,11 @@ class Site_PHP_Compat {
 			if ( null !== $outside ) {
 				return $this->doc( 'tool_error', "nginx serves $app$rel, which holds PHP outside the WordPress directory $app$root (" . self::clean( $outside ) . "); this check can't scan that layout yet" );
 			}
+			// The served index.php isn't scanned there: it may only load WordPress.
+			$index = $this->read_site_file( $code, "$rel/index.php", self::PHP_SOURCE_MAX );
+			if ( null !== $index && ! self::only_loads_wordpress( $index ) ) {
+				return $this->doc( 'tool_error', "$app$rel/index.php does more than load WordPress, and it is outside the scanned directory $app$root; this check can't scan that layout yet" );
+			}
 		}
 
 		$detail = $this->check_wp_dirs( $code, $root, $app, $rel );
@@ -1179,7 +1184,7 @@ class Site_PHP_Compat {
 			}
 		}
 		$candidates = array_values( array_unique( $candidates ) );
-		// In order; a WordPress directory without wp-content may still load code from elsewhere (WP_CONTENT_DIR).
+		// In order; a WordPress directory may have no wp-content when WP_CONTENT_DIR moves it (refused later).
 		foreach ( $candidates as $candidate ) {
 			foreach ( [ 'wp-content', 'wp-settings.php' ] as $marker ) {
 				if ( null !== self::resolve_in( $code, $candidate . '/' . $marker ) ) {
@@ -1318,8 +1323,9 @@ class Site_PHP_Compat {
 		if ( null !== $index ) {
 			$queue[] = [ substr( $index, strlen( $code ) + 1 ), false, false ];
 		}
-		$values = [];
-		$seen   = [];
+		$values   = [];
+		$seen     = [];
+		$included = [];
 		while ( $queue ) {
 			list( $file, $conditional, $follow ) = array_shift( $queue );
 			if ( isset( $seen[ $file ] ) ) {
@@ -1357,8 +1363,17 @@ class Site_PHP_Compat {
 				$real = self::resolve_in( $code, $target );
 				if ( null !== $real && is_file( $real ) ) {
 					// A missing file only warns (include) or stops the site (require): either way it defines nothing.
-					$queue[] = [ substr( $real, strlen( $code ) + 1 ), $conditional || ! $include['alone'], true ];
+					$queue[]    = [ substr( $real, strlen( $code ) + 1 ), $conditional || ! $include['alone'], true ];
+					$included[] = $real;
 				}
+			}
+		}
+
+		// What the config includes is code the site runs: only what the scanner reads (its directory, minus what it skips) is covered.
+		foreach ( array_unique( $included ) as $real ) {
+			if ( ! self::scanned_by_wp_scan( $real, $abspath ) ) {
+				$file = substr( $real, strlen( $code ) + 1 );
+				return "WordPress's config loads $app$file, which is outside the scanned directory $app$root (or in a part the scan skips); this check can't scan that layout yet";
 			}
 		}
 
@@ -1384,6 +1399,58 @@ class Site_PHP_Compat {
 		}
 
 		return null;
+	}
+
+	/**
+	 * Whether a wp scan of the WordPress directory reads this file: inside it, outside core and the directories the scanner
+	 * skips by name (uploads, cache, upgrade, languages, upgrade-temp-backup at a content root's top; node_modules, .git).
+	 *
+	 * @param string      $real    Real host path of the file.
+	 * @param string|null $abspath Real WordPress root.
+	 *
+	 * @return bool
+	 */
+	protected static function scanned_by_wp_scan( $real, $abspath ) {
+		if ( null === $abspath || 0 !== strpos( $real, $abspath . '/' ) ) {
+			return false;
+		}
+		$parts = explode( '/', substr( $real, strlen( $abspath ) + 1 ) );
+		if ( in_array( $parts[0], [ 'wp-admin', 'wp-includes' ], true ) || array_intersect( $parts, [ 'node_modules', '.git' ] ) ) {
+			return false;
+		}
+		// A content root's top-level skips: wp-content/uploads/…, and the same under any other directory's first level.
+		return ! ( count( $parts ) > 2 && in_array( $parts[1], [ 'uploads', 'cache', 'upgrade', 'languages', 'upgrade-temp-backup' ], true ) );
+	}
+
+	/**
+	 * Whether a served index.php does nothing but load WordPress: literal defines and one require/include of
+	 * wp-blog-header.php or wp-load.php.
+	 *
+	 * @param string $source PHP source.
+	 *
+	 * @return bool
+	 */
+	public static function only_loads_wordpress( $source ) {
+		$code = '';
+		foreach ( @token_get_all( $source ) as $token ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- a broken file still tokenises.
+			if ( is_array( $token ) && in_array( $token[0], [ T_WHITESPACE, T_COMMENT, T_DOC_COMMENT, T_OPEN_TAG ], true ) ) {
+				continue;
+			}
+			if ( is_array( $token ) && in_array( $token[0], [ T_CLOSE_TAG, T_INLINE_HTML ], true ) ) {
+				// Only trailing whitespace may follow the code.
+				if ( '' !== trim( $token[1], " \t\r\n?>" ) ) {
+					return false;
+				}
+				continue;
+			}
+			$code .= ( '' !== $code && is_array( $token ) && T_STRING === $token[0] && preg_match( '/\w$/', $code ) ) ? ' ' . $token[1] : ( is_array( $token ) ? $token[1] : $token );
+		}
+		$quoted  = "(?:'[^'\\\\]*'|\"[^\"\\\\\$]*\")";
+		$literal = "(?:true|false|null|-?\\d+|$quoted)";
+		$define  = "@?\\\\?define\\((?:'[A-Za-z0-9_]+'|\"[A-Za-z0-9_]+\"),$literal\\);";
+		$load    = "(?:require|include)(?:_once)?\\(?(?:(?:__DIR__|dirname\\(__FILE__\\))\\.)?(?:'[^'\\\\\$]*wp-(?:blog-header|load)\\.php'|\"[^\"\\\\\$]*wp-(?:blog-header|load)\\.php\")\\)?;";
+
+		return 1 === preg_match( "/^(?:$define)*$load(?:$define)*\$/i", $code );
 	}
 
 	/**
@@ -2935,7 +3002,7 @@ class Site_PHP_Compat {
 			return "$text Looked for PHP files in $dir.";
 		}
 
-		return "$text Looked in $dir: everything there except WordPress core, wp-content included. The check follows the directory nginx serves (root in {$this->nginx_conf}), its current/ and wp-cli.yml's path:.";
+		return "$text Looked in $dir: its PHP code except WordPress core, uploads, caches and other skipped directories. The check follows the directory nginx serves (root in {$this->nginx_conf}), its current/ and wp-cli.yml's path:.";
 	}
 
 	/**

@@ -196,14 +196,14 @@ Feature: Check the PHP compatibility of a site's code
     And STDOUT should not contain "Safe to upgrade"
 
   @wp
-  Scenario: Without wp-content the message names the directory checked, and a release layout under htdocs is found
+  Scenario: With nothing to check the message names the directory checked, and a release layout under htdocs is found
     Given the compat-scanner image is available
     And the site "bh-site-command-189.test" exists, created with "--type=wp"
     # Nothing at all to check: WordPress moved out of htdocs, and no wp-config.php.
     When I run 'mkdir {SITES_DIR}/bh-site-command-189.test/app/off && mv {SITES_DIR}/bh-site-command-189.test/app/htdocs/* {SITES_DIR}/bh-site-command-189.test/app/wp-config.php {SITES_DIR}/bh-site-command-189.test/app/off/'
     And I run 'cd {SITES_DIR}/bh-site-command-189.test && {EE} site php-compat --php=8.4'
     Then the command should succeed
-    And STDOUT should contain "No PHP code found to check in bh-site-command-189.test. Looked in {SITES_DIR}/bh-site-command-189.test/app/htdocs: everything there except WordPress core, wp-content included. The check follows the directory nginx serves (root in {SITES_DIR}/bh-site-command-189.test/config/nginx/conf.d/main.conf)"
+    And STDOUT should contain "No PHP code found to check in bh-site-command-189.test. Looked in {SITES_DIR}/bh-site-command-189.test/app/htdocs: its PHP code except WordPress core, uploads, caches and other skipped directories. The check follows the directory nginx serves (root in {SITES_DIR}/bh-site-command-189.test/config/nginx/conf.d/main.conf)"
     When I run 'mv {SITES_DIR}/bh-site-command-189.test/app/off/wp-config.php {SITES_DIR}/bh-site-command-189.test/app/ && mv {SITES_DIR}/bh-site-command-189.test/app/off/* {SITES_DIR}/bh-site-command-189.test/app/htdocs/ && mv {SITES_DIR}/bh-site-command-189.test/app/htdocs/wp-content {SITES_DIR}/bh-site-command-189.test/app/htdocs/wp-content-off'
     # A CI/CD deploy: WordPress in releases/1, current links to it, wp-cli.yml points there, the record still says htdocs.
     When I run 'cd {SITES_DIR}/bh-site-command-189.test/app/htdocs && mkdir -p releases/1 && for f in *; do [ "$f" = releases ] || mv "$f" releases/1/; done && mv releases/1/wp-content-off releases/1/wp-content && ln -s /var/www/htdocs/releases/1 current && printf "path: current/\n" > wp-cli.yml'
@@ -299,7 +299,7 @@ Feature: Check the PHP compatibility of a site's code
     And I run 'bin/ee site php-compat bh-site-command-192.test --php=8.4 --format=json'
     Then the command should succeed
     And the JSON field "status" in STDOUT should be "tool_error"
-    And the JSON field "detail" in STDOUT should contain "can't resolve where htdocs/index.php loads WordPress (wp-blog-header.php) from"
+    And the JSON field "detail" in STDOUT should contain "can't resolve where htdocs/index.php loads WordPress from"
 
   Scenario: An html site is refused
     Given the html site "bh-site-command-182.test" exists

@@ -3309,7 +3309,7 @@ abstract class EE_Site_Command {
 	/**
 	 * Checks a site's PHP code for compatibility with a PHP version.
 	 *
-	 * Runs PHPCompatibility in a throwaway container with no network against a read-only mount of the site's code: plugins, themes, mu-plugins, drop-ins and other code under wp-content for WordPress sites (not WordPress core), everything under htdocs for PHP sites. It ends with a verdict: safe to upgrade (every file checked, no errors), not safe (at least one error), or can't confirm (some files couldn't be checked). Warnings never change the verdict. The verdict comes from static analysis, which can't see breakage that only shows at runtime.
+	 * Runs PHPCompatibility in a throwaway container with no network against a read-only mount of the site's code: for WordPress sites, the WordPress directory nginx serves (plugins, themes, mu-plugins, drop-ins and its other PHP, not WordPress core) with wp-config.php and the files it includes; for PHP sites, everything under htdocs. A layout it can't read with certainty (a moved wp-content, code mounted or included from elsewhere) gets no verdict. It ends with a verdict: safe to upgrade (every file checked, no errors), not safe (at least one error), or can't confirm (some files couldn't be checked). Warnings never change the verdict. The verdict comes from static analysis, which can't see breakage that only shows at runtime.
 	 *
 	 * The command exits 0 whenever it printed a result, including when a check of the site is already running (`busy`), was stopped with --cancel (`cancelled`) or couldn't run (`tool_error`).
 	 *
