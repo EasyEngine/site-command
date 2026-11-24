@@ -2097,6 +2097,8 @@ DEALLOCATE PREPARE ee_stmt;
 		$ok         = true;
 		$config_dir = EE_ROOT_DIR . '/sites/' . $this->site_data['site_url'] . '/config';
 
+		$this->sid_settings_notice = null;
+
 		// First: the php config and DB steps below reach the containers through these files.
 		if ( ! empty( $txn['compose'] ) ) {
 			$ok = $this->rollback_custom_compose() && $ok;
@@ -2163,12 +2165,44 @@ DEALLOCATE PREPARE ee_stmt;
 		}
 
 		if ( $ok ) {
+			// Before the journal goes: a kill in between leaves it to retry. Kept on a failed rollback, as php.ini may still be the stripped one.
+			$this->remove_sid_settings_copy( $txn );
 			$this->restore_txn = null;
 			$this->remove_scratch_dir();
 			$this->fs->remove( [ $this->get_restore_journal_file(), $txn['stage'], $this->get_compose_snapshot_dir() ] );
 		}
 
 		return $ok;
+	}
+
+	/**
+	 * Remove the copy of the backup's php.ini that drop_deprecated_session_sid_settings() saved for a restore that was rolled back.
+	 *
+	 * @param array $txn Restore transaction.
+	 */
+	private function remove_sid_settings_copy( array $txn ) {
+		$file = $txn['sid_copy'] ?? null;
+		// The journal may be the stage's copy, which the site can write when the stage is inside app/: only the exact path the restore writes.
+		$shape = '#^' . preg_quote( EE_BACKUP_DIR . '/', '#' ) . 'session-sid-settings-[0-9]+-[0-9]+-restore-[0-9]+/' . preg_quote( (string) $this->site_data['site_url'], '#' ) . '/php\.ini\z#';
+		if ( ! is_string( $file ) || false !== strpos( $file, '..' ) || ! preg_match( $shape, $file ) ) {
+			return;
+		}
+
+		$site_dir = dirname( $file );
+		$root     = dirname( $site_dir );
+		clearstatcache( true );
+		if ( is_link( $root ) || is_link( $site_dir ) || is_link( $file ) ) {
+			return;
+		}
+		// The rollback itself is done, so a copy that can't be removed is reported instead of keeping the journal for a retry.
+		if ( is_file( $file ) && ! @unlink( $file ) ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- reported below.
+			EE::warning( sprintf( 'Could not remove %s, the php.ini copy saved by the restore that was rolled back; remove it by hand.', $file ) );
+
+			return;
+		}
+		// rmdir() refuses a dir that holds other sites' copies.
+		@rmdir( $site_dir ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- best effort.
+		@rmdir( $root ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- best effort.
 	}
 
 	/**
@@ -2218,24 +2252,34 @@ DEALLOCATE PREPARE ee_stmt;
 	/**
 	 * @param array $txn Restore transaction.
 	 *
-	 * @return string Where an unfinished rollback left the previous site files, and the previous DB once its import had started.
+	 * @return string Where an unfinished rollback left the previous site files, configuration and DB.
 	 */
 	private function describe_rollback_leftovers( array $txn ) {
 		// Describe what is on disk now: the swap may not have started, and the dump may be gone.
 		$parts = [];
 		if ( ! empty( $this->list_dir( $txn['stage'] . '/old' ) ) ) {
-			$parts[] = sprintf( 'The previous site files still staged are in %s/old', $txn['stage'] );
+			$parts[] = sprintf( 'the previous site files still staged are in %s/old', $txn['stage'] );
+		}
+		if ( ( ! empty( $txn['conf'] ) || ! empty( $txn['php_conf'] ) ) && is_dir( $txn['stage'] . '/config-before' ) ) {
+			$parts[] = sprintf( 'the previous site configuration is saved in %s/config-before', $txn['stage'] );
+		}
+		// Not in the stage, see get_compose_snapshot_dir().
+		if ( ! empty( $txn['compose'] ) && is_dir( $this->get_compose_snapshot_dir() ) ) {
+			$parts[] = sprintf( 'the previous custom docker-compose files are saved in %s', $this->get_compose_snapshot_dir() );
 		}
 		if ( 'importing' === $txn['db'] ) {
 			$parts[] = is_file( $txn['stage'] . '/db-before.sql' )
 				? sprintf( 'the previous database is in %s/db-before.sql', $txn['stage'] )
 				: 'the copy of the previous database is missing';
+		} elseif ( 'saved' === $txn['db'] && is_file( $txn['stage'] . '/db-before.sql' ) ) {
+			$parts[] = sprintf( 'the database was not changed (a copy taken before the restore is in %s/db-before.sql)', $txn['stage'] );
 		}
 		if ( empty( $parts ) ) {
-			return sprintf( 'No previous site files are staged in %s', $txn['stage'] );
+			return sprintf( 'The rollback state is kept in %s', $txn['stage'] );
 		}
+		$last = array_pop( $parts );
 
-		return ucfirst( implode( ' and ', $parts ) );
+		return ucfirst( empty( $parts ) ? $last : implode( ', ', $parts ) . ' and ' . $last );
 	}
 
 	/**
@@ -3737,10 +3781,14 @@ DEALLOCATE PREPARE ee_stmt;
 			// Next to the migration's copies (`ee site backup` and `ee site restore` empty EE_BACKUP_DIR/<site>/), but never in the same dir, even within the same second.
 			$root = EE_BACKUP_DIR . '/session-sid-settings-' . date( 'Ymd-His' ) . '-restore-' . getmypid();
 			$file = '/' . $this->site_data['site_url'] . '/php.ini';
+			// Journaled before the copy exists, so a rollback finds it even after a kill right after the write.
+			$this->restore_txn['sid_copy'] = $root . $file;
 			try {
+				$this->write_restore_journal();
 				$this->fs->mkdir( dirname( $root . $file ), 0700 );
 				$this->fs->dumpFile( $root . $file, $content );
 			} catch ( \Exception $e ) {
+				unset( $this->restore_txn['sid_copy'] );
 				// rmdir() refuses a dir that holds other sites' copies.
 				@rmdir( dirname( $root . $file ) ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- best effort.
 				@rmdir( $root ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- best effort.
@@ -3751,7 +3799,6 @@ DEALLOCATE PREPARE ee_stmt;
 
 			return $content;
 		}
-
 		// The lines come from the archive: printable ASCII only, since an 8-bit terminal reads any byte 0x80-0x9F as a control character.
 		$lines   = array_map(
 			function ( $line ) {

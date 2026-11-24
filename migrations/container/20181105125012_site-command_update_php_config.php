@@ -131,11 +131,7 @@ class UpdatePhpConfig extends Base {
 				$old_img_backup   = EE_BACKUP_DIR . '/img-version-old.json';
 				$this->fs->dumpFile( $old_img_backup, json_encode( $current_versions ) );
 
-				foreach ( $img_versions as $img => $version ) {
-					if ( $current_versions[ $img ] !== $version ) {
-						$updated_images[] = $img;
-					}
-				}
+				$updated_images  = self::get_updated_images( $img_versions, $current_versions );
 				$first_execution = false;
 			}
 
@@ -233,6 +229,24 @@ class UpdatePhpConfig extends Base {
 			EE\Model\Option::update( [ [ 'key', 'easyengine/php' ] ], [ 'value' => $img_versions['easyengine/php'] ] );
 		}
 
+	}
+
+	/**
+	 * @param array $img_versions     Image => tag the release pins.
+	 * @param array $current_versions Image => tag in the options table.
+	 *
+	 * @return string[] Images whose tag changes.
+	 */
+	private static function get_updated_images( array $img_versions, array $current_versions ) {
+		$updated_images = [];
+		foreach ( $img_versions as $img => $version ) {
+			// An image with no options row counts as changed, as before; without isset() PHP reports the missing key.
+			if ( ! isset( $current_versions[ $img ] ) || $current_versions[ $img ] !== $version ) {
+				$updated_images[] = $img;
+			}
+		}
+
+		return $updated_images;
 	}
 
 	/**
