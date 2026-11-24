@@ -3386,13 +3386,9 @@ abstract class EE_Site_Command {
 			foreach ( [ SIGTERM, SIGINT, SIGUSR1 ] as $signal ) {
 				pcntl_signal( $signal, $stop );
 			}
-			// A lost terminal doesn't stop a check (PHP can't see nohup's ignore); it ends and cleans up on its own, or with --cancel.
-			pcntl_signal(
-				SIGHUP,
-				function () {
-					\EE::debug( 'Hangup received; the check goes on. Stop it with --cancel.' );
-				}
-			);
+			// A lost terminal doesn't stop a check; it ends and cleans up on its own, or with --cancel. Ignored rather than
+			// handled, so the docker client inherits the ignore (a handled signal is reset to the default on exec).
+			pcntl_signal( SIGHUP, SIG_IGN );
 		}
 		$this->php_compat_check->run(
 			$this->site_data,

@@ -227,6 +227,8 @@ class Site_PHP_Compat {
 			$result = $this->doc( 'cancelled' );
 		}
 
+		// Before printing: PHP stops at an echo to a terminal that is gone.
+		$this->log_result( $result['doc'], microtime( true ) - $started );
 		if ( 'json' === $format ) {
 			echo self::encode( $result['doc'] ) . "\n";
 		} elseif ( $this->cancel ) {
@@ -240,7 +242,6 @@ class Site_PHP_Compat {
 			}
 		}
 
-		$this->log_result( $result['doc'], microtime( true ) - $started );
 		delem_log( 'site php-compat end' );
 	}
 
@@ -762,7 +763,8 @@ class Site_PHP_Compat {
 	 * @return string[]
 	 */
 	public function docker_run_args( $mode, $image, $site_data, $code, $out = null, $timeout = null ) {
-		$args = [ 'docker', 'run', '--rm', '--init' ];
+		// No --sig-proxy: the client would pass a terminal's SIGHUP on to the scanner.
+		$args = [ 'docker', 'run', '--rm', '--init', '--sig-proxy=false' ];
 		if ( 'scan' === $mode ) {
 			array_push( $args, '--name', 'ee-php-compat-' . $this->site );
 		}
