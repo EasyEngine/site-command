@@ -2080,8 +2080,11 @@ function strip_session_sid_settings( string $content ) {
 		';   Production Value: 5',
 	];
 
+	// PHP skips a UTF-8 BOM, so a directive on the first line must still match; the BOM stays in the result.
+	$bom  = 0 === strncmp( $content, "\xEF\xBB\xBF", 3 ) ? "\xEF\xBB\xBF" : '';
+	$body = substr( $content, strlen( $bom ) );
 	// After every LF, and after a CR not followed by LF, so a CR-only file isn't read as one line.
-	$lines = preg_split( '/(?<=\n)|(?<=\r)(?!\n)/', $content, -1, PREG_SPLIT_NO_EMPTY );
+	$lines = preg_split( '/(?<=\n)|(?<=\r)(?!\n)/', $body, -1, PREG_SPLIT_NO_EMPTY );
 	$norm  = array_map(
 		function ( $line ) {
 			return rtrim( $line, " \t\r\n" );
@@ -2122,7 +2125,7 @@ function strip_session_sid_settings( string $content ) {
 		}
 	}
 
-	$new_content = implode( '', array_diff_key( $lines, $drop ) );
+	$new_content = $bom . implode( '', array_diff_key( $lines, $drop ) );
 
 	// A quoted value can span lines, so PHP must read the result as the original minus the two directives.
 	if ( $new_content !== $content ) {
@@ -2150,8 +2153,20 @@ function strip_session_sid_settings( string $content ) {
 			$edges[ $i ]     = true;
 			$edges[ $i + 1 ] = true;
 		}
+		$offsets = [ 0 ];
+		foreach ( $lines as $i => $line ) {
+			$offsets[ $i + 1 ] = $offsets[ $i ] + strlen( $line );
+		}
+		// Each edge parses the file up to it; a shipped php.ini needs under 2 MiB in all, thousands of removed lines would need GiBs.
+		$probe_bytes = 0;
 		foreach ( array_keys( $edges ) as $edge ) {
-			if ( ! is_array( @parse_ini_string( implode( '', array_slice( $lines, 0, $edge ) ), false, INI_SCANNER_NORMAL ) ) ) {
+			$probe_bytes += $offsets[ $edge ];
+		}
+		if ( $probe_bytes > 64 * 1048576 ) {
+			throw new \Exception( sprintf( 'there are too many of them to check (%d lines to remove), so the file was left as it is; remove session.sid_length and session.sid_bits_per_character by hand.', count( $drop ) ) );
+		}
+		foreach ( array_keys( $edges ) as $edge ) {
+			if ( ! is_array( @parse_ini_string( substr( $body, 0, $offsets[ $edge ] ), false, INI_SCANNER_NORMAL ) ) ) {
 				throw new \Exception( 'the file does not parse, or removing them line by line would change other settings (a quoted value spanning lines), so it was left as it is; remove session.sid_length and session.sid_bits_per_character by hand.' );
 			}
 		}

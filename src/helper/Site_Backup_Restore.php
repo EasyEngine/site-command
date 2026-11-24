@@ -3605,7 +3605,7 @@ DEALLOCATE PREPARE ee_stmt;
 				}
 				// Not when it is skipped below.
 				if ( 'php/php.ini' === $path && ! $is_dir && ( $current || 'Darwin' !== PHP_OS_FAMILY ) ) {
-					$content = $this->drop_deprecated_session_sid_settings( $content, $source, $entries );
+					$content = $this->drop_deprecated_session_sid_settings( $content, $source, $entries, $site_dir );
 				}
 				if ( ! $current ) {
 					// On macOS config/php isn't mounted (only custom.ini is), so an entry missing there has no effect, as before.
@@ -3652,10 +3652,11 @@ DEALLOCATE PREPARE ee_stmt;
 	 * @param string $content php.ini from the backup.
 	 * @param string $source  Extracted `php` directory of the backup.
 	 * @param array  $entries Path => lstat() from list_php_conf_backup().
+	 * @param string $site_dir Site root.
 	 *
 	 * @return string The content to restore.
 	 */
-	private function drop_deprecated_session_sid_settings( $content, $source, array $entries ) {
+	private function drop_deprecated_session_sid_settings( $content, $source, array $entries, $site_dir ) {
 		$php_version = (string) ( $this->site_data['php_version'] ?? '' );
 		if ( ! \EE\Site\Utils\php_deprecates_session_sid_settings( $php_version ) ) {
 			return $content;
@@ -3668,18 +3669,23 @@ DEALLOCATE PREPARE ee_stmt;
 			if ( ! $removed ) {
 				return $content;
 			}
-			// PHP reads conf.d/custom.ini after php.ini and resolves its ${...} from there.
-			if ( isset( $entries[ $custom ] ) && 0100000 === ( $entries[ $custom ]['mode'] & 0170000 )
-				&& \EE\Site\Utils\references_session_sid_settings( \EE\Site\Utils\get_container_file_contents( "$source/$custom", realpath( $source ) . '/php/conf.d' ) ) ) {
-				throw new \Exception( 'the restored custom.ini refers to them as ${...}, which PHP would then read as empty or as its fallback, so the file was left as it is; remove session.sid_length and session.sid_bits_per_character by hand.' );
+			// PHP reads conf.d/custom.ini after php.ini and resolves its ${...} from there: the backup's, or the site's own when the backup has none.
+			if ( isset( $entries[ $custom ] ) ) {
+				if ( 0100000 === ( $entries[ $custom ]['mode'] & 0170000 )
+					&& \EE\Site\Utils\references_session_sid_settings( \EE\Site\Utils\get_container_file_contents( "$source/$custom", realpath( $source ) . '/php/conf.d' ) ) ) {
+					throw new \Exception( 'the restored custom.ini refers to them as ${...}, which PHP would then read as empty or as its fallback, so the file was left as it is; remove session.sid_length and session.sid_bits_per_character by hand.' );
+				}
+			} else {
+				$conf_d = realpath( \EE\Site\Utils\site_php_conf_dir( $site_dir ) );
+				if ( false !== $conf_d && ( file_exists( "$conf_d/custom.ini" ) || is_link( "$conf_d/custom.ini" ) )
+					&& \EE\Site\Utils\references_session_sid_settings( \EE\Site\Utils\get_container_file_contents( "$conf_d/custom.ini", $conf_d ) ) ) {
+					throw new \Exception( 'the site\'s custom.ini, which the backup doesn\'t replace, refers to them as ${...}, which PHP would then read as empty or as its fallback, so the file was left as it is; remove session.sid_length and session.sid_bits_per_character by hand.' );
+				}
 			}
 
-			// Next to the migration's copies: `ee site backup` and `ee site restore` empty EE_BACKUP_DIR/<site>/.
-			$root = EE_BACKUP_DIR . '/session-sid-settings-' . date( 'Ymd-His' );
+			// Next to the migration's copies (`ee site backup` and `ee site restore` empty EE_BACKUP_DIR/<site>/), but never in the same dir, even within the same second.
+			$root = EE_BACKUP_DIR . '/session-sid-settings-' . date( 'Ymd-His' ) . '-restore-' . getmypid();
 			$file = '/' . $this->site_data['site_url'] . '/php.ini';
-			if ( file_exists( $root . $file ) ) {
-				$root .= '-' . getmypid();
-			}
 			try {
 				$this->fs->mkdir( dirname( $root . $file ), 0700 );
 				$this->fs->dumpFile( $root . $file, $content );
@@ -3695,9 +3701,10 @@ DEALLOCATE PREPARE ee_stmt;
 			return $content;
 		}
 
+		// The lines come from the archive: no control characters to the terminal.
 		$lines   = array_map(
 			function ( $line ) {
-				return "`$line`";
+				return '`' . preg_replace( '/[\x00-\x1F\x7F]|\xC2[\x80-\x9F]/', '?', (string) $line ) . '`';
 			},
 			array_keys( $removed )
 		);
