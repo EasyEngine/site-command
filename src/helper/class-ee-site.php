@@ -3243,15 +3243,15 @@ abstract class EE_Site_Command {
 	 *
 	 * Runs PHPCompatibility in a throwaway container with no network against a read-only mount of the site's code: plugins, themes, mu-plugins, drop-ins and other code under wp-content for WordPress sites (not WordPress core), everything under htdocs for PHP sites. It ends with a verdict: safe to upgrade (every file checked, no errors), not safe (at least one error), or can't confirm (some files couldn't be checked). Warnings never change the verdict. The verdict comes from static analysis, which can't see breakage that only shows at runtime.
 	 *
-	 * The command exits 0 whenever it printed a result, including when a check of the site is already running (`busy`) or the check couldn't run (`tool_error`).
+	 * The command exits 0 whenever it printed a result, including when a check of the site is already running (`busy`), was stopped with --cancel (`cancelled`) or couldn't run (`tool_error`).
 	 *
 	 * ## OPTIONS
 	 *
 	 * [<site-name>]
 	 * : Name of the website.
 	 *
-	 * --php=<php-version>
-	 * : PHP version to check the code against.
+	 * [--php=<php-version>]
+	 * : PHP version to check the code against. Required, except with --cancel.
 	 * ---
 	 * options:
 	 *  - 5.6
@@ -3286,6 +3286,9 @@ abstract class EE_Site_Command {
 	 * [--timeout=<seconds>]
 	 * : Time limit for the scan itself, in seconds. A scan that hits it reports tool_error and no verdict. Pulling the scanner image on first use isn't counted. Default: 7200. Not with --estimate.
 	 *
+	 * [--cancel]
+	 * : Stop the site's running check and remove what it left behind, then exit. Prints cancelled when a check was stopped (that check then reports cancelled, with no verdict and no --output file) and not_running when none was running. Waits up to 60 seconds for the stopped check to clean up. An estimate isn't stopped. Not with --php, --estimate, --output or --timeout.
+	 *
 	 * ## EXAMPLES
 	 *
 	 *     # Check whether a site's code works on PHP 8.4
@@ -3296,6 +3299,9 @@ abstract class EE_Site_Command {
 	 *
 	 *     # Print the summary as JSON and write the full report to a file
 	 *     $ ee site php-compat example.com --php=8.4 --format=json --output=/root/example.com-php84.json
+	 *
+	 *     # Stop a running check
+	 *     $ ee site php-compat example.com --cancel
 	 *
 	 * @subcommand php-compat
 	 */
