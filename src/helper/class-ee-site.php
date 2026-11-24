@@ -92,7 +92,7 @@ abstract class EE_Site_Command {
 	private static $le_renewal_started = false;
 
 	/**
-	 * @var Site_PHP_Compat|null $php_compat_check The running `site php-compat`, cleaned up on a fatal error or a signal.
+	 * @var Site_PHP_Compat|null $php_compat_check The running `site php-compat` (or the one `site delete` keeps the lock with), cleaned up on a fatal error or a signal.
 	 */
 	private $php_compat_check;
 
@@ -246,9 +246,14 @@ abstract class EE_Site_Command {
 		\EE::confirm( sprintf( 'Are you sure you want to delete %s?', $this->site_data['site_url'] ), $assoc_args );
 
 		// A running php-compat check mounts the site's code: stop it first, and drop what php-compat keeps for the site.
-		$compat = ( new Site_PHP_Compat() )->stop_for_delete(
+		// Kept on $this: the site lock it holds must last until this process ends.
+		$this->php_compat_check = new Site_PHP_Compat();
+		$compat                 = $this->php_compat_check->stop_for_delete(
 			(object) $this->site_data,
-			function_exists( 'pcntl_signal_dispatch' ) ? 'pcntl_signal_dispatch' : null
+			// Dispatched in this class's scope, where the protected rollback() handlers can be called.
+			function () {
+				pcntl_signal_dispatch();
+			}
 		);
 		if ( null !== $compat ) {
 			\EE::error( sprintf( 'Could not stop the php-compat check of %s (%s). Nothing was deleted.', $this->site_data['site_url'], $compat ) );
