@@ -1111,11 +1111,15 @@ abstract class EE_Site_Command {
 			self::check_config_volume_unused( $volume );
 			\EE\Site\Utils\check_plain_tree( $volume );
 		} catch ( \Exception $e ) {
-			$message = 'Could not update the php config: ' . rtrim( $e->getMessage(), '.' ) . '. Nothing was changed.';
-			if ( $running && ! EE::exec( "$compose start php" ) ) {
-				$message .= ' Could not start the php container again. Run: ee site enable ' . $this->site_data['site_url'] . ' --force';
+			$message = 'Could not update the php config: ' . rtrim( $e->getMessage(), '.' ) . '.';
+			if ( $running ) {
+				// Not `compose start`: it skips a container that a stale listing still shows as running.
+				EE::exec( 'docker start ' . escapeshellarg( $id ) );
+				if ( 'running' !== \EE_DOCKER::container_status( $id ) ) {
+					throw new \Exception( "$message The php config was not changed, but the php container could not be started again. Run: ee site enable " . $this->site_data['site_url'] . ' --force' );
+				}
 			}
-			throw new \Exception( $message );
+			throw new \Exception( "$message Nothing was changed." );
 		}
 
 		return $running;
@@ -1134,8 +1138,13 @@ abstract class EE_Site_Command {
 			return;
 		}
 		$users = EE::launch( 'docker ps -q --filter ' . escapeshellarg( 'volume=' . basename( dirname( $volume ) ) ) );
-		if ( $users->return_code || '' !== trim( $users->stdout ) ) {
-			throw new \Exception( 'The php config volume is still mounted by a running container (' . implode( ', ', preg_split( '/\s+/', trim( $users->stdout ) ) ) . '); stop it and re-run the update.' );
+		$ids   = preg_split( '/\s+/', trim( $users->stdout ), -1, PREG_SPLIT_NO_EMPTY );
+		// docker ps can still list a container stopped a moment ago; inspect waits for the engine to record the stop.
+		$ids = array_filter( $ids, function ( $id ) {
+			return 'exited' !== \EE_DOCKER::container_status( $id );
+		} );
+		if ( $users->return_code || $ids ) {
+			throw new \Exception( 'The php config volume is still mounted by a running container (' . implode( ', ', $ids ) . '); stop it and re-run the update.' );
 		}
 	}
 
