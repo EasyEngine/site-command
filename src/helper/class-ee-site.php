@@ -102,7 +102,10 @@ abstract class EE_Site_Command {
 		// A PHP without pcntl, or with it in disable_functions (fatal on PHP 8), only loses the rollback on signals.
 		if ( function_exists( 'pcntl_signal' ) ) {
 			pcntl_signal( SIGTERM, [ $this, 'rollback' ] );
-			pcntl_signal( SIGHUP, [ $this, 'rollback' ] );
+			// Started under nohup: keep ignoring a hangup, as the user asked.
+			if ( SIG_IGN !== pcntl_signal_get_handler( SIGHUP ) ) {
+				pcntl_signal( SIGHUP, [ $this, 'rollback' ] );
+			}
 			pcntl_signal( SIGUSR1, [ $this, 'rollback' ] );
 			pcntl_signal( SIGINT, [ $this, 'rollback' ] );
 		} else {
@@ -244,6 +247,15 @@ abstract class EE_Site_Command {
 		}
 
 		\EE::confirm( sprintf( 'Are you sure you want to delete %s?', $this->site_data['site_url'] ), $assoc_args );
+
+		// A running php-compat check mounts the site's code: stop it first, and drop what php-compat keeps for the site.
+		$compat = ( new Site_PHP_Compat() )->stop_for_delete(
+			(object) $this->site_data,
+			function_exists( 'pcntl_signal_dispatch' ) ? 'pcntl_signal_dispatch' : null
+		);
+		if ( null !== $compat ) {
+			\EE::error( sprintf( 'Could not stop the php-compat check of %s (%s). Nothing was deleted.', $this->site_data['site_url'], $compat ) );
+		}
 
 		if ( $this->site_data['site_ssl'] ) {
 			$all_domains = array_unique( array_merge(
@@ -3351,7 +3363,18 @@ abstract class EE_Site_Command {
 		$args                   = auto_site_name( $args, 'site', 'php-compat' );
 		$this->site_data        = get_site_info( $args, false, true, false );
 		$this->php_compat_check = new Site_PHP_Compat();
-		// Dispatched from this class's scope: the SIGTERM/SIGINT handlers are the site type's protected rollback().
+		// A check changes nothing to roll back: on a signal, say what happens and exit; the shutdown handler stops the check.
+		if ( function_exists( 'pcntl_signal' ) ) {
+			$stop = function () {
+				\EE::warning( 'Stopping the check: removing its container and temporary files.' );
+				exit( 1 );
+			};
+			foreach ( [ SIGTERM, SIGINT, SIGUSR1, SIGHUP ] as $signal ) {
+				if ( SIGHUP !== $signal || SIG_IGN !== pcntl_signal_get_handler( SIGHUP ) ) {
+					pcntl_signal( $signal, $stop );
+				}
+			}
+		}
 		$this->php_compat_check->run(
 			$this->site_data,
 			$assoc_args,

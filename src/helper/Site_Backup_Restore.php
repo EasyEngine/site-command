@@ -120,6 +120,11 @@ DEALLOCATE PREPARE ee_stmt;
 	// WordPress root the running backup excludes core from ('' = core is archived).
 	private $backup_wp_root = null;
 
+	/**
+	 * @var resource|null The site directory's lock while a restore runs, so no php-compat scan reads app/ meanwhile.
+	 */
+	private $scan_lock;
+
 	// stderr of the last failed `rclone lsf`.
 	private $rclone_error = '';
 
@@ -2531,9 +2536,30 @@ DEALLOCATE PREPARE ee_stmt;
 		}
 	}
 
+	/**
+	 * Take the site directory's lock, which `ee site php-compat` holds while it scans app/, for the rest of the restore, which
+	 * replaces app/; the lock goes with the process.
+	 */
+	private function hold_scan_lock() {
+		$handle = @fopen( $this->site_data['site_fs_path'], 'r' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- without it the scanner's container name still shows a check.
+		if ( false === $handle ) {
+			return;
+		}
+		if ( ! flock( $handle, LOCK_EX | LOCK_NB, $would_block ) ) {
+			fclose( $handle );
+			if ( $would_block ) {
+				EE::error( sprintf( 'A php-compat check of %1$s is running and reads the files a restore replaces. Wait for it to finish or stop it with `ee site php-compat %1$s --cancel`, then run the restore again.', $this->site_data['site_url'] ) );
+			}
+
+			return;
+		}
+		$this->scan_lock = $handle;
+	}
+
 	private function pre_restore_check() {
 
 		$this->pre_backup_restore_checks();
+		$this->hold_scan_lock();
 		// Only with the lock held: a restore refused by another run's lock must leave that run's download dir alone.
 		$this->restore_in_progress = true;
 
