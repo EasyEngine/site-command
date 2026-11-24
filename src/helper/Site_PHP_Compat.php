@@ -1069,27 +1069,19 @@ class Site_PHP_Compat {
 	 *                          loads it in another form; null when none does.
 	 */
 	public static function loaded_from( $source, $file ) {
-		$tokens = [];
-		foreach ( @token_get_all( $source ) as $token ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- a broken file still tokenises.
-			if ( ! is_array( $token ) || ! in_array( $token[0], [ T_WHITESPACE, T_COMMENT, T_DOC_COMMENT, T_OPEN_TAG, T_CLOSE_TAG, T_INLINE_HTML ], true ) ) {
-				$tokens[] = is_array( $token ) ? $token : [ null, $token ];
-			}
-		}
 		$name = preg_quote( $file, '/' );
-		foreach ( $tokens as $i => $token ) {
-			if ( ! in_array( $token[0], [ T_REQUIRE, T_REQUIRE_ONCE, T_INCLUDE, T_INCLUDE_ONCE ], true ) ) {
-				continue;
-			}
-			$operand = '';
-			$names   = false;
-			for ( $j = $i + 1; isset( $tokens[ $j ] ) && ';' !== $tokens[ $j ][1]; $j++ ) {
-				$operand .= $tokens[ $j ][1];
-				$names    = $names || ( T_CONSTANT_ENCAPSED_STRING === $tokens[ $j ][0] && preg_match( "/(^['\"]|\\/){$name}['\"]\$/", $tokens[ $j ][1] ) );
+		foreach ( self::include_operands( $source, $alone ) as $k => $operand ) {
+			$text  = '';
+			$names = false;
+			foreach ( $operand as $token ) {
+				$text .= $token[1];
+				$names = $names || ( T_CONSTANT_ENCAPSED_STRING === $token[0] && preg_match( "/(^['\"]|\\/){$name}['\"]\$/", $token[1] ) );
 			}
 			if ( ! $names ) {
 				continue;
 			}
-			if ( ! preg_match( "/^\\(?(?:(__DIR__|dirname\\(__FILE__\\))\\.)?(['\"])([^'\"\$\\\\]*?){$name}\\2\\)?\$/i", $operand, $m ) ) {
+			// Only a statement of its own, outside any block, says where WordPress always comes from.
+			if ( ! $alone[ $k ] || ! preg_match( "/^\\(?(?:(__DIR__|dirname\\(__FILE__\\))\\.)?(['\"])([^'\"\$\\\\]*?){$name}\\2\\)?\$/i", $text, $m ) ) {
 				return false;
 			}
 
@@ -1267,7 +1259,7 @@ class Site_PHP_Compat {
 	 *
 	 * @return array[] Lists of [ type, text ] tokens, without whitespace and comments.
 	 */
-	public static function include_operands( $source ) {
+	public static function include_operands( $source, &$alone = null ) {
 		$tokens = [];
 		foreach ( @token_get_all( $source ) as $token ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- a broken file still tokenises.
 			if ( ! is_array( $token ) || ! in_array( $token[0], [ T_WHITESPACE, T_COMMENT, T_DOC_COMMENT ], true ) ) {
@@ -1275,10 +1267,23 @@ class Site_PHP_Compat {
 			}
 		}
 		$operands = [];
+		$alone    = [];
+		$blocks   = 0;
+		$alt      = false;
 		foreach ( $tokens as $i => $token ) {
+			if ( null === $token[0] && '{' === $token[1] || in_array( $token[0], [ T_CURLY_OPEN, T_DOLLAR_OPEN_CURLY_BRACES ], true ) ) {
+				$blocks++;
+			} elseif ( null === $token[0] && '}' === $token[1] ) {
+				$blocks--;
+			} elseif ( in_array( $token[0], [ T_ENDIF, T_ENDWHILE, T_ENDFOR, T_ENDFOREACH, T_ENDSWITCH, T_ENDDECLARE ], true ) ) {
+				// Alternative-syntax blocks before it: whether it runs isn't read here.
+				$alt = true;
+			}
 			if ( ! in_array( $token[0], [ T_REQUIRE, T_REQUIRE_ONCE, T_INCLUDE, T_INCLUDE_ONCE ], true ) ) {
 				continue;
 			}
+			$before  = $i > 0 ? $tokens[ $i - 1 ] : [ T_OPEN_TAG, '' ];
+			$alone[] = ! $alt && 0 === $blocks && ( in_array( $before[0], [ T_OPEN_TAG, T_INLINE_HTML ], true ) || ( null === $before[0] && in_array( $before[1], [ ';', '}' ], true ) ) );
 			$operand = [];
 			$depth   = 0;
 			$ternary = 0;
