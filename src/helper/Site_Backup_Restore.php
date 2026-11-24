@@ -411,6 +411,9 @@ DEALLOCATE PREPARE ee_stmt;
 			$this->rclone_config_path = $this->resolve_restore_path( $backup_id );
 		}
 
+		// Before the download dir: a restore refused here leaves nothing behind.
+		$this->hold_scan_lock();
+
 		// Only once the id is valid: a refused --id left an empty download dir behind (BKP-22).
 		if ( ! $this->fs->exists( $backup_dir ) ) {
 			$this->fs->mkdir( $backup_dir );
@@ -2582,13 +2585,17 @@ DEALLOCATE PREPARE ee_stmt;
 
 	/**
 	 * Take the site directory's lock, which `ee site php-compat` holds while it scans app/, for the rest of the restore, which
-	 * replaces app/; the lock goes with the process.
+	 * replaces app/; the lock goes with the process. Shared: php-compat holds it exclusive, so it can tell a restore from a check.
 	 */
 	private function hold_scan_lock() {
 		$message = sprintf( 'A php-compat check of %1$s is running and reads the files a restore replaces. Wait for it to finish or stop it with `ee site php-compat %1$s --cancel`, then run the restore again.', $this->site_data['site_url'] );
-		$handle  = @fopen( $this->site_data['site_fs_path'], 'r' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- handled below.
-		if ( false !== $handle && flock( $handle, LOCK_EX | LOCK_NB, $would_block ) ) {
+		$handle  = @fopen( $this->site_data['site_fs_path'], 're' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- handled below.
+		if ( false !== $handle && flock( $handle, LOCK_SH | LOCK_NB, $would_block ) ) {
 			$this->scan_lock = $handle;
+			// After taking the lock: an estimate takes its own first, then looks for a restore.
+			if ( Site_PHP_Compat::estimate_running( $this->site_data['site_url'] ) ) {
+				EE::error( sprintf( 'A php-compat estimate of %s is running and reads the files a restore replaces. Wait for it to finish (about two minutes at most), then run the restore again.', $this->site_data['site_url'] ) );
+			}
 
 			return;
 		}
@@ -2604,7 +2611,6 @@ DEALLOCATE PREPARE ee_stmt;
 	private function pre_restore_check() {
 
 		$this->pre_backup_restore_checks();
-		$this->hold_scan_lock();
 		// Only with the lock held: a restore refused by another run's lock must leave that run's download dir alone.
 		$this->restore_in_progress = true;
 

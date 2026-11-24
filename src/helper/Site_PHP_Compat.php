@@ -116,6 +116,12 @@ class Site_PHP_Compat {
 	/** @var resource|null Lock on the site directory while a scan runs, or on the site's estimate lock file while an estimate runs. */
 	protected $lock;
 
+	/** @var string|null Label value of this estimate's container while cleanup() may have to remove it. */
+	protected $estimate_label;
+
+	/** @var resource|null Shared host-wide lock while this check uses the scanner image, so no other check removes its tag. */
+	protected $image_lock;
+
 	/** @var array|null --output directory as validated: path, dev, ino. */
 	protected $output_dir;
 
@@ -229,6 +235,8 @@ class Site_PHP_Compat {
 			$result = $this->doc( 'cancelled' );
 		}
 
+		// Before printing: PHP stops at an echo to a terminal that is gone.
+		$this->log_result( $result['doc'], microtime( true ) - $started );
 		if ( 'json' === $format ) {
 			echo self::encode( $result['doc'] ) . "\n";
 		} elseif ( $this->cancel ) {
@@ -242,7 +250,6 @@ class Site_PHP_Compat {
 			}
 		}
 
-		$this->log_result( $result['doc'], microtime( true ) - $started );
 		delem_log( 'site php-compat end' );
 	}
 
@@ -353,7 +360,7 @@ class Site_PHP_Compat {
 
 		// Two EE runs can't both pass the container check below and then clear each other's directory as a leftover.
 		if ( ! $this->lock_site( $site_data->site_fs_path ) ) {
-			return $this->doc( 'busy' );
+			return $this->restore_running( $site_data->site_fs_path ) ? $this->doc( 'tool_error', 'a restore of the site is running' ) : $this->doc( 'busy' );
 		}
 		$parent = $this->temp_parent();
 		if ( null !== $parent ) {
@@ -365,6 +372,9 @@ class Site_PHP_Compat {
 		if ( 'running' === $status ) {
 			return $this->doc( 'busy' );
 		}
+		if ( 'unknown' === $status ) {
+			return $this->doc( 'tool_error', "could not check the container $name" );
+		}
 		if ( 'exited' === $status ) {
 			EE::debug( "Removing the leftover container $name." );
 			// Known limit: a container whose --rm is still in progress can't be removed again, which reads as this tool_error.
@@ -373,6 +383,7 @@ class Site_PHP_Compat {
 			}
 		}
 
+		$this->hold_image();
 		$pull = $this->ensure_image( $image );
 		if ( null !== $pull ) {
 			return $this->doc( 'tool_error', $pull );
@@ -488,6 +499,12 @@ class Site_PHP_Compat {
 		if ( false !== strpbrk( $code, ',"' ) ) {
 			return $this->doc( 'tool_error', 'the site code path has a comma or a quote' );
 		}
+		// Before the lock: `ee site delete` waits only for the estimate's own time limit, not for a slow pull.
+		$this->hold_image();
+		$pull = $this->ensure_image( $image );
+		if ( null !== $pull ) {
+			return $this->doc( 'tool_error', $pull );
+		}
 		// One estimate per site at a time; it never waits for a scan.
 		$locked = $this->lock_estimate();
 		if ( null === $locked ) {
@@ -496,16 +513,22 @@ class Site_PHP_Compat {
 		if ( ! $locked ) {
 			return $this->doc( 'busy' );
 		}
-		$pull = $this->ensure_image( $image );
-		if ( null !== $pull ) {
-			return $this->doc( 'tool_error', $pull );
+		// Taken before this check, so a restore starting now sees the estimate lock (Site_Backup_Restore::hold_scan_lock()).
+		if ( $this->restore_running( $site_data->site_fs_path ) ) {
+			return $this->doc( 'tool_error', 'a restore of the site is running' );
 		}
 		$mounts = $this->extra_mounts( $site_data, $code );
 		if ( is_string( $mounts ) ) {
 			return $this->doc( 'tool_error', $mounts );
 		}
 
-		$run = $this->docker( $this->docker_run_args( 'estimate', $image, $site_data, $code ), self::ESTIMATE_TIMEOUT + self::PROCESS_MARGIN, true );
+		// The client ignores signals (no --sig-proxy) and a timeout stops only the client: cleanup() removes the container by label.
+		$this->estimate_label = bin2hex( random_bytes( 8 ) );
+		$run                  = $this->docker( $this->docker_run_args( 'estimate', $image, $site_data, $code ), self::ESTIMATE_TIMEOUT + self::PROCESS_MARGIN, true );
+		if ( null !== $run['code'] ) {
+			// Ended on its own: --rm removed it.
+			$this->estimate_label = null;
+		}
 		if ( $run['timed_out'] ) {
 			return $this->doc( 'tool_error', 'timed out after ' . self::ESTIMATE_TIMEOUT . ' s' );
 		}
@@ -543,9 +566,16 @@ class Site_PHP_Compat {
 		if ( null === $marker ) {
 			return $this->doc( 'tool_error', 'could not create the temporary directory' );
 		}
-		$this->hold_cancel_guard( $marker );
+		if ( ! $this->hold_cancel_guard( $marker ) ) {
+			return $this->doc( 'tool_error', 'another cancel of the site is still running' );
+		}
 
-		if ( ! $this->lock_site( $site_data->site_fs_path ) ) {
+		$locked = $this->lock_site( $site_data->site_fs_path );
+		if ( ! $locked && $this->restore_running( $site_data->site_fs_path ) ) {
+			// No check runs during a restore: nothing to stop, and no request to leave.
+			return $this->doc( 'tool_error', 'a restore of the site is running' );
+		}
+		if ( ! $locked ) {
 			// A scan holds the lock: ask it to stop, then wait until it has removed its container, cleaned up and let go.
 			$token = $this->request_cancel( $marker );
 			if ( null === $token ) {
@@ -554,7 +584,7 @@ class Site_PHP_Compat {
 			$grace  = min( self::CANCEL_GRACE, $this->cancel_wait() );
 			$locked = $this->wait_for_site_lock( $site_data->site_fs_path, $grace );
 			if ( ! $locked ) {
-				// Untaken: a killed scan's docker client (it inherits the lock) or a frozen scan holds the lock. The id is read
+				// Untaken: a frozen scan holds the lock. The id is read
 				// first: no scan starts a container while the request stays, so a later scan's container is never this id.
 				$id = $this->running_container_id( $name );
 				if ( null !== $id && $token === $this->read_cancel( $marker ) ) {
@@ -639,17 +669,24 @@ class Site_PHP_Compat {
 	 * --cancel waits for the first, so it never replaces a request the first still waits on.
 	 *
 	 * @param string $marker cancel_path().
+	 *
+	 * @return bool False when another --cancel still holds it after twice cancel_wait() (e.g. stuck on a hung docker).
 	 */
 	protected function hold_cancel_guard( $marker ) {
-		$guard = $this->own_dir( dirname( self::guard_path( $marker ) ) ) ? @fopen( self::guard_path( $marker ), 'c' ) : false; // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- handled below.
+		$guard = $this->own_dir( dirname( self::guard_path( $marker ) ) ) ? @fopen( self::guard_path( $marker ), 'ce' ) : false; // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- handled below.
 		if ( false === $guard ) {
-			return;
+			return true;
 		}
-		// Polled, so signals still reach the handlers; the holder ends within cancel_wait() and its sweep.
+		// Polled, so signals still reach the handlers.
+		$until = microtime( true ) + 2 * $this->cancel_wait();
 		while ( ! flock( $guard, LOCK_EX | LOCK_NB, $would_block ) ) {
 			if ( ! $would_block ) {
 				fclose( $guard );
-				return;
+				return true;
+			}
+			if ( microtime( true ) >= $until ) {
+				fclose( $guard );
+				return false;
 			}
 			usleep( 100000 );
 			if ( function_exists( 'pcntl_signal_dispatch' ) ) {
@@ -657,6 +694,8 @@ class Site_PHP_Compat {
 			}
 		}
 		$this->cancel_guard = $guard;
+
+		return true;
 	}
 
 	/**
@@ -665,7 +704,7 @@ class Site_PHP_Compat {
 	 */
 	protected function clear_stale_cancel() {
 		// Not created here: a --cancel creates it before its request, so while it is missing any request is a live one.
-		$guard = @fopen( self::guard_path( $this->cancel_marker ), 'r' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- missing is handled.
+		$guard = @fopen( self::guard_path( $this->cancel_marker ), 're' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- missing is handled.
 		if ( false === $guard ) {
 			return;
 		}
@@ -770,7 +809,8 @@ class Site_PHP_Compat {
 	 * @return string[]
 	 */
 	public function docker_run_args( $mode, $image, $site_data, $code, $out = null, $timeout = null ) {
-		$args = [ 'docker', 'run', '--rm', '--init' ];
+		// No --sig-proxy: the client would pass a terminal's SIGHUP on to the scanner.
+		$args = [ 'docker', 'run', '--rm', '--init', '--sig-proxy=false' ];
 		if ( 'scan' === $mode ) {
 			array_push( $args, '--name', 'ee-php-compat-' . $this->site );
 		}
@@ -786,6 +826,9 @@ class Site_PHP_Compat {
 			'-e', 'COMPAT_SITE=' . $this->site, '-e', 'COMPAT_IMAGE=' . $image, '-e', 'COMPAT_REPORT_MAX=' . self::REPORT_MAX,
 			'--mount', "type=bind,src=$code,dst=/var/www,readonly"
 		);
+		if ( 'estimate' === $mode && null !== $this->estimate_label ) {
+			array_push( $args, '--label', 'ee-php-compat-estimate=' . $this->estimate_label );
+		}
 		if ( 'estimate' === $mode ) {
 			// The byte model misses PHPCS's per-file cost on dense many-file trees (2x short seen): more per batch, wider top end.
 			array_push( $args, '-e', 'COMPAT_SECONDS_PER_BATCH=' . self::ESTIMATE_SECONDS_PER_BATCH, '-e', 'COMPAT_HIGH_FACTOR=' . self::ESTIMATE_HIGH_FACTOR );
@@ -1851,7 +1894,8 @@ class Site_PHP_Compat {
 	 * @return bool False when another php-compat run holds it.
 	 */
 	protected function lock_site( $site_fs_path ) {
-		$handle = @fopen( $site_fs_path, 'r' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- handled below.
+		// Close-on-exec: a child (docker pull, rm) must not keep the lock after this process is killed.
+		$handle = @fopen( $site_fs_path, 're' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- handled below.
 		if ( false === $handle ) {
 			EE::debug( "Could not open $site_fs_path to lock it; relying on the container name." );
 
@@ -1873,13 +1917,50 @@ class Site_PHP_Compat {
 	}
 
 	/**
+	 * A restore holds the site directory shared and every php-compat run exclusive, so only shared holders mean a restore.
+	 * Briefly locks it when no one holds it.
+	 *
+	 * @param string $site_fs_path Site directory.
+	 *
+	 * @return bool
+	 */
+	protected function restore_running( $site_fs_path ) {
+		$handle = @fopen( $site_fs_path, 're' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- none then.
+		if ( false === $handle ) {
+			return false;
+		}
+		$restore = flock( $handle, LOCK_SH | LOCK_NB ) && ! flock( $handle, LOCK_EX | LOCK_NB );
+		fclose( $handle );
+
+		return $restore;
+	}
+
+	/**
+	 * For `ee site restore`: whether an estimate of the site runs now (it holds its lock file exclusive).
+	 *
+	 * @param string $site Site name.
+	 *
+	 * @return bool
+	 */
+	public static function estimate_running( $site ) {
+		$handle = @fopen( EE_ROOT_DIR . '/tmp/' . self::TEMP_DIR . "/.estimate-lock/$site", 're' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- missing: none ran.
+		if ( false === $handle ) {
+			return false;
+		}
+		$running = ! flock( $handle, LOCK_SH | LOCK_NB );
+		fclose( $handle );
+
+		return $running;
+	}
+
+	/**
 	 * @return bool|null False when another estimate of the site holds the lock; null when the lock file can't be made.
 	 */
 	protected function lock_estimate() {
 		$parent = $this->temp_parent();
 		$path   = null === $parent ? null : $this->control_path( $parent, 'estimate-lock' );
 		// Not in the per-site directory, whose leftovers a scan removes.
-		$handle = null === $path ? false : @fopen( $path, 'c' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- handled below.
+		$handle = null === $path ? false : @fopen( $path, 'ce' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- handled below.
 		if ( false === $handle ) {
 			return null;
 		}
@@ -1901,10 +1982,15 @@ class Site_PHP_Compat {
 	/**
 	 * @param string $name Container name.
 	 *
-	 * @return string|false running, exited, or false when there is none.
+	 * @return string|false running, exited, unknown (docker failed or timed out), or false when there is none.
 	 */
 	protected function container_status( $name ) {
-		return \EE_DOCKER::container_status( $name );
+		$run = $this->docker( [ 'docker', 'inspect', '--format', '{{.State.Running}}', $name ], 60 );
+		if ( 0 === $run['code'] ) {
+			return 'true' === trim( $run['stdout'] ) ? 'running' : 'exited';
+		}
+		// Only Docker's own answer means none: a daemon that fails or hangs may still run it.
+		return 1 === $run['code'] && preg_match( '/no such (object|container)/i', $run['stderr'] ) ? false : 'unknown';
 	}
 
 	/**
@@ -1994,6 +2080,30 @@ class Site_PHP_Compat {
 	 * @param string $image The pinned image with its tag, never removed.
 	 */
 	protected function remove_other_tags( $image ) {
+		// Only with no other check running: one between its pull and its `docker run` has no container that keeps its tag.
+		if ( null !== $this->image_lock ) {
+			flock( $this->image_lock, LOCK_UN );
+			$alone = flock( $this->image_lock, LOCK_EX | LOCK_NB );
+			if ( ! $alone ) {
+				flock( $this->image_lock, LOCK_SH );
+				EE::debug( 'Keeping the other ' . self::IMAGE . ' tags: another check is running.' );
+
+				return;
+			}
+		}
+		try {
+			$this->remove_unused_tags( $image );
+		} finally {
+			if ( null !== $this->image_lock ) {
+				flock( $this->image_lock, LOCK_SH );
+			}
+		}
+	}
+
+	/**
+	 * @param string $image The pinned image with its tag, never removed.
+	 */
+	protected function remove_unused_tags( $image ) {
 		$list = $this->docker( [ 'docker', 'image', 'ls', '--format', '{{.Tag}}', self::IMAGE ], 60 );
 		if ( 0 !== $list['code'] ) {
 			EE::debug( 'Could not list the ' . self::IMAGE . ' tags.' );
@@ -2015,6 +2125,32 @@ class Site_PHP_Compat {
 				EE::debug( "Could not remove $old." );
 			}
 		}
+	}
+
+	/**
+	 * Hold the host-wide image lock shared until cleanup(); without it (no usable temp directory) old tags are removed as before.
+	 */
+	protected function hold_image() {
+		$parent = $this->temp_parent();
+		$handle = null === $parent ? false : @fopen( "$parent/.image-lock", 'ce' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- handled below.
+		if ( false === $handle ) {
+			return;
+		}
+		// Held exclusive only while another check removes old tags; polled, so signals still reach the handlers.
+		$until = microtime( true ) + 60;
+		while ( ! flock( $handle, LOCK_SH | LOCK_NB, $would_block ) ) {
+			if ( ! $would_block || microtime( true ) >= $until ) {
+				fclose( $handle );
+				EE::debug( 'Going on without the scanner image lock.' );
+
+				return;
+			}
+			usleep( 100000 );
+			if ( function_exists( 'pcntl_signal_dispatch' ) ) {
+				null === $this->dispatch ? pcntl_signal_dispatch() : call_user_func( $this->dispatch );
+			}
+		}
+		$this->image_lock = $handle;
 	}
 
 	/**
@@ -3063,8 +3199,30 @@ class Site_PHP_Compat {
 		$this->site     = $site_data->site_url;
 		$this->dispatch = $dispatch;
 		$parent         = rtrim( $this->temp_base(), '/' ) . '/' . self::TEMP_DIR;
+		$name           = 'ee-php-compat-' . $this->site;
 		// Nothing to do, and no temp directory created, for a site never checked.
-		if ( ! file_exists( $parent ) && false === $this->container_status( 'ee-php-compat-' . $this->site ) ) {
+		if ( ! file_exists( $parent ) && ! is_link( $parent ) && false === $this->container_status( $name ) ) {
+			return null;
+		}
+		$usable = $this->temp_parent();
+		if ( null === $usable || null === $this->cancel_path( $usable ) ) {
+			// No check can run with these directories (a link, another owner): only a container can be left, and is stopped by name.
+			EE::warning( "Leaving $parent as it is: not a directory of this user with mode 0700." );
+			if ( false !== $this->container_status( $name ) && ! $this->container_gone( $name ) ) {
+				return "could not remove the container $name";
+			}
+			// A scan whose container was just removed lets go of the site lock as it ends; kept as below.
+			if ( ! $this->lock_site( $site_data->site_fs_path ) ) {
+				if ( $this->restore_running( $site_data->site_fs_path ) ) {
+					return 'a restore of the site is running';
+				}
+				if ( ! $this->wait_for_site_lock( $site_data->site_fs_path, $this->cancel_wait() ) ) {
+					return 'the running check did not stop within ' . $this->cancel_wait() . ' s';
+				}
+			}
+			$this->delete_lock = $this->lock;
+			$this->lock        = null;
+
 			return null;
 		}
 		try {
@@ -3108,12 +3266,17 @@ class Site_PHP_Compat {
 	 * @return bool Whether none runs now.
 	 */
 	protected function wait_for_estimate( $parent ) {
-		$handle = @fopen( "$parent/.estimate-lock/{$this->site}", 'r' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- missing: none ran.
+		$handle = @fopen( "$parent/.estimate-lock/{$this->site}", 're' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- missing: none ran.
 		if ( false === $handle ) {
 			return true;
 		}
-		$until = microtime( true ) + $this->estimate_wait();
+		$until  = microtime( true ) + $this->estimate_wait();
+		$logged = false;
 		while ( ! flock( $handle, LOCK_EX | LOCK_NB, $would_block ) ) {
+			if ( $would_block && ! $logged ) {
+				EE::log( "Waiting for the running php-compat estimate of {$this->site} to finish." );
+				$logged = true;
+			}
 			if ( ! $would_block || microtime( true ) >= $until ) {
 				fclose( $handle );
 
@@ -3151,6 +3314,14 @@ class Site_PHP_Compat {
 				$this->temp_dir = null;
 			}
 		}
+		if ( null !== $this->estimate_label ) {
+			$label                = 'label=ee-php-compat-estimate=' . $this->estimate_label;
+			$this->estimate_label = null;
+			$ids                  = $this->docker( [ 'docker', 'ps', '-aq', '--filter', $label ], 60 );
+			foreach ( preg_split( '/\s+/', trim( $ids['stdout'] ), -1, PREG_SPLIT_NO_EMPTY ) as $id ) {
+				$this->docker( [ 'docker', 'rm', '-f', $id ], 60 );
+			}
+		}
 		if ( null !== $this->temp_dir ) {
 			$dir            = $this->temp_dir;
 			$this->temp_dir = null;
@@ -3181,6 +3352,12 @@ class Site_PHP_Compat {
 			fclose( $this->cancel_guard );
 			$this->cancel_guard = null;
 		}
-		$this->cleaning = false;
+		if ( null !== $this->image_lock ) {
+			fclose( $this->image_lock );
+			$this->image_lock = null;
+		}
+		// Without the lock, a request that comes now is for another scan: a second cleanup() leaves it.
+		$this->cancel_marker = null;
+		$this->cleaning      = false;
 	}
 }
