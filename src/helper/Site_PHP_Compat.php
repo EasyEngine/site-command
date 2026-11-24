@@ -349,7 +349,7 @@ class Site_PHP_Compat {
 
 		// Two EE runs can't both pass the container check below and then clear each other's directory as a leftover.
 		if ( ! $this->lock_site( $site_data->site_fs_path ) ) {
-			return $this->doc( 'busy' );
+			return $this->restore_running( $site_data->site_fs_path ) ? $this->doc( 'tool_error', 'a restore of the site is running' ) : $this->doc( 'busy' );
 		}
 		$parent = $this->temp_parent();
 		if ( null !== $parent ) {
@@ -492,6 +492,10 @@ class Site_PHP_Compat {
 		if ( ! $locked ) {
 			return $this->doc( 'busy' );
 		}
+		// Taken before this check, so a restore starting now sees the estimate lock (Site_Backup_Restore::hold_scan_lock()).
+		if ( $this->restore_running( $site_data->site_fs_path ) ) {
+			return $this->doc( 'tool_error', 'a restore of the site is running' );
+		}
 		$pull = $this->ensure_image( $image );
 		if ( null !== $pull ) {
 			return $this->doc( 'tool_error', $pull );
@@ -543,7 +547,12 @@ class Site_PHP_Compat {
 			return $this->doc( 'tool_error', 'another cancel of the site is still running' );
 		}
 
-		if ( ! $this->lock_site( $site_data->site_fs_path ) ) {
+		$locked = $this->lock_site( $site_data->site_fs_path );
+		if ( ! $locked && $this->restore_running( $site_data->site_fs_path ) ) {
+			// No check runs during a restore: nothing to stop, and no request to leave.
+			return $this->doc( 'tool_error', 'a restore of the site is running' );
+		}
+		if ( ! $locked ) {
 			// A scan holds the lock: ask it to stop, then wait until it has removed its container, cleaned up and let go.
 			$token = $this->request_cancel( $marker );
 			if ( null === $token ) {
@@ -1612,6 +1621,43 @@ class Site_PHP_Compat {
 		$this->lock = $handle;
 
 		return true;
+	}
+
+	/**
+	 * A restore holds the site directory shared and every php-compat run exclusive, so only shared holders mean a restore.
+	 * Briefly locks it when no one holds it.
+	 *
+	 * @param string $site_fs_path Site directory.
+	 *
+	 * @return bool
+	 */
+	protected function restore_running( $site_fs_path ) {
+		$handle = @fopen( $site_fs_path, 're' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- none then.
+		if ( false === $handle ) {
+			return false;
+		}
+		$restore = flock( $handle, LOCK_SH | LOCK_NB ) && ! flock( $handle, LOCK_EX | LOCK_NB );
+		fclose( $handle );
+
+		return $restore;
+	}
+
+	/**
+	 * For `ee site restore`: whether an estimate of the site runs now (it holds its lock file exclusive).
+	 *
+	 * @param string $site Site name.
+	 *
+	 * @return bool
+	 */
+	public static function estimate_running( $site ) {
+		$handle = @fopen( EE_ROOT_DIR . '/tmp/' . self::TEMP_DIR . "/.estimate-lock/$site", 're' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- missing: none ran.
+		if ( false === $handle ) {
+			return false;
+		}
+		$running = ! flock( $handle, LOCK_SH | LOCK_NB );
+		fclose( $handle );
+
+		return $running;
 	}
 
 	/**
