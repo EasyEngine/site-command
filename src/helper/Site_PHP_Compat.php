@@ -963,8 +963,7 @@ class Site_PHP_Compat {
 		$dir        = dirname( dirname( $files[0] ) );
 		$app_config = ( '.' === $dir ? '' : "$dir/" ) . 'config/application.php';
 		// Only when the loader includes it: a stale copy WordPress never reads says nothing.
-		$loader     = self::php_code( (string) $this->read_site_file( $code, $files[0] ) );
-		if ( '.' !== dirname( $files[0] ) && null !== self::resolve_in( $code, $app_config ) && preg_match( '#\b(?:require|include)(?:_once)?[^;]*config/application\.php#i', $loader ) ) {
+		if ( '.' !== dirname( $files[0] ) && null !== self::resolve_in( $code, $app_config ) && self::includes( (string) $this->read_site_file( $code, $files[0] ), 'config/application.php' ) ) {
 			$files[] = $app_config;
 		}
 
@@ -972,21 +971,30 @@ class Site_PHP_Compat {
 	}
 
 	/**
-	 * PHP source without whitespace, comments or inline HTML, for static reads.
+	 * Whether a require or include statement in the source names a file ending in $suffix (as a string in its operand).
 	 *
 	 * @param string $source PHP source.
+	 * @param string $suffix End of the path, e.g. config/application.php (a whole path segment).
 	 *
-	 * @return string
+	 * @return bool
 	 */
-	protected static function php_code( $source ) {
-		$code = '';
+	public static function includes( $source, $suffix ) {
+		$inside = false;
 		foreach ( @token_get_all( $source ) as $token ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- a broken file still tokenises.
-			if ( ! is_array( $token ) || ! in_array( $token[0], [ T_WHITESPACE, T_COMMENT, T_DOC_COMMENT, T_OPEN_TAG, T_CLOSE_TAG, T_INLINE_HTML ], true ) ) {
-				$code .= is_array( $token ) ? $token[1] : $token;
+			$type = is_array( $token ) ? $token[0] : null;
+			if ( in_array( $type, [ T_REQUIRE, T_REQUIRE_ONCE, T_INCLUDE, T_INCLUDE_ONCE ], true ) ) {
+				$inside = true;
+			} elseif ( $inside && ';' === $token ) {
+				$inside = false;
+			} elseif ( $inside && T_CONSTANT_ENCAPSED_STRING === $type ) {
+				$path = substr( $token[1], 1, -1 );
+				if ( $path === $suffix || substr( $path, -strlen( $suffix ) - 1 ) === "/$suffix" ) {
+					return true;
+				}
 			}
 		}
 
-		return $code;
+		return false;
 	}
 
 	/**
