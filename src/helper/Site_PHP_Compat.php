@@ -114,6 +114,9 @@ class Site_PHP_Compat {
 	/** @var resource|null Lock on the site directory while a scan runs, or on the site's estimate lock file while an estimate runs. */
 	protected $lock;
 
+	/** @var resource|null Shared host-wide lock while this check uses the scanner image, so no other check removes its tag. */
+	protected $image_lock;
+
 	/** @var array|null --output directory as validated: path, dev, ino. */
 	protected $output_dir;
 
@@ -372,6 +375,7 @@ class Site_PHP_Compat {
 			}
 		}
 
+		$this->hold_image();
 		$pull = $this->ensure_image( $image );
 		if ( null !== $pull ) {
 			return $this->doc( 'tool_error', $pull );
@@ -485,6 +489,7 @@ class Site_PHP_Compat {
 			return $this->doc( 'tool_error', 'the site code path has a comma or a quote' );
 		}
 		// Before the lock: `ee site delete` waits only for the estimate's own time limit, not for a slow pull.
+		$this->hold_image();
 		$pull = $this->ensure_image( $image );
 		if ( null !== $pull ) {
 			return $this->doc( 'tool_error', $pull );
@@ -1788,6 +1793,30 @@ class Site_PHP_Compat {
 	 * @param string $image The pinned image with its tag, never removed.
 	 */
 	protected function remove_other_tags( $image ) {
+		// Only with no other check running: one between its pull and its `docker run` has no container that keeps its tag.
+		if ( null !== $this->image_lock ) {
+			flock( $this->image_lock, LOCK_UN );
+			$alone = flock( $this->image_lock, LOCK_EX | LOCK_NB );
+			if ( ! $alone ) {
+				flock( $this->image_lock, LOCK_SH );
+				EE::debug( 'Keeping the other ' . self::IMAGE . ' tags: another check is running.' );
+
+				return;
+			}
+		}
+		try {
+			$this->remove_unused_tags( $image );
+		} finally {
+			if ( null !== $this->image_lock ) {
+				flock( $this->image_lock, LOCK_SH );
+			}
+		}
+	}
+
+	/**
+	 * @param string $image The pinned image with its tag, never removed.
+	 */
+	protected function remove_unused_tags( $image ) {
 		$list = $this->docker( [ 'docker', 'image', 'ls', '--format', '{{.Tag}}', self::IMAGE ], 60 );
 		if ( 0 !== $list['code'] ) {
 			EE::debug( 'Could not list the ' . self::IMAGE . ' tags.' );
@@ -1808,6 +1837,18 @@ class Site_PHP_Compat {
 			if ( 0 !== $this->docker( [ 'docker', 'image', 'rm', $old ], 60 )['code'] ) {
 				EE::debug( "Could not remove $old." );
 			}
+		}
+	}
+
+	/**
+	 * Hold the host-wide image lock shared until cleanup(); without it (no usable temp directory) old tags are removed as before.
+	 */
+	protected function hold_image() {
+		$parent = $this->temp_parent();
+		$handle = null === $parent ? false : @fopen( "$parent/.image-lock", 'ce' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- handled below.
+		// Blocks only while another check removes old tags.
+		if ( false !== $handle && flock( $handle, LOCK_SH ) ) {
+			$this->image_lock = $handle;
 		}
 	}
 
@@ -2990,6 +3031,10 @@ class Site_PHP_Compat {
 		if ( null !== $this->cancel_guard ) {
 			fclose( $this->cancel_guard );
 			$this->cancel_guard = null;
+		}
+		if ( null !== $this->image_lock ) {
+			fclose( $this->image_lock );
+			$this->image_lock = null;
 		}
 		// Without the lock, a request that comes now is for another scan: a second cleanup() leaves it.
 		$this->cancel_marker = null;
