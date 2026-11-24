@@ -86,6 +86,11 @@ abstract class EE_Site_Command {
 	 */
 	private static $le_renewal_started = false;
 
+	/**
+	 * @var Site_PHP_Compat|null $php_compat_check The running `site php-compat`, cleaned up on a fatal error or a signal.
+	 */
+	private $php_compat_check;
+
 	public function __construct() {
 
 		$this->fs = new Filesystem();
@@ -440,7 +445,7 @@ abstract class EE_Site_Command {
 	 * : Path to the SSL crt file. Required with --ssl=custom.
 	 *
 	 * [--php=<php-version>]
-	 * : PHP version for site. Currently only supports PHP 5.6, 7.0, 7.2, 7.3, 7.4, 8.0, 8.1, 8.2, 8.3, 8.4, and 8.5.
+	 * : PHP version for site. Currently only supports PHP 5.6, 7.0, 7.2, 7.3, 7.4, 8.0, 8.1, 8.2, 8.3, 8.4, 8.5, and 8.6.
 	 * ---
 	 * options:
 	 *  - 5.6
@@ -454,6 +459,7 @@ abstract class EE_Site_Command {
 	 *  - 8.3
 	 *  - 8.4
 	 *  - 8.5
+	 *  - 8.6
 	 * ---
 	 *
 	 * [--proxy-cache=<on-or-off>]
@@ -518,6 +524,11 @@ abstract class EE_Site_Command {
 		$proxy_cache     = get_flag_value( $assoc_args, 'proxy-cache', false );
 		$add_domains     = get_flag_value( $assoc_args, 'add-alias-domains', false );
 		$delete_domains  = get_flag_value( $assoc_args, 'delete-alias-domains', false );
+
+		// The synopsis check compares loosely, so values like 8.10 or 08.5 pass it as 8.1 or 8.5.
+		if ( false !== $php && ! preg_match( '/^\d\.\d\z/', (string) $php ) ) {
+			EE::error( "Invalid value specified for 'php': $php" );
+		}
 
 		if ( $ssl ) {
 			$this->update_ssl( $assoc_args );
@@ -2897,6 +2908,14 @@ abstract class EE_Site_Command {
 		if ( null === $error ) {
 			$error = error_get_last();
 		}
+		// rollback() below and the signal handlers exit, so later shutdown functions, like the check's own, wouldn't run.
+		if ( null !== $this->php_compat_check ) {
+			if ( isset( $error['type'] ) && E_ERROR === $error['type'] ) {
+				// After running out of memory, cleanup() needs some to stop the container.
+				@ini_set( 'memory_limit', '-1' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged
+			}
+			$this->php_compat_check->cleanup();
+		}
 		$logger = \EE::get_file_logger()->withName( 'site-command' );
 
 		// Check if the $this->site_data is set and it is array and  $this->site_data['site_url'] is set.
@@ -3222,6 +3241,87 @@ abstract class EE_Site_Command {
 
 			EE::error( $e->getMessage() );
 		}
+	}
+
+	/**
+	 * Checks a site's PHP code for compatibility with a PHP version.
+	 *
+	 * Runs PHPCompatibility in a throwaway container with no network against a read-only mount of the site's code: plugins, themes, mu-plugins, drop-ins and other code under wp-content for WordPress sites (not WordPress core), everything under htdocs for PHP sites. It ends with a verdict: safe to upgrade (every file checked, no errors), not safe (at least one error), or can't confirm (some files couldn't be checked). Warnings never change the verdict. The verdict comes from static analysis, which can't see breakage that only shows at runtime.
+	 *
+	 * The command exits 0 whenever it printed a result, including when a check of the site is already running (`busy`), was stopped with --cancel (`cancelled`) or couldn't run (`tool_error`).
+	 *
+	 * ## OPTIONS
+	 *
+	 * [<site-name>]
+	 * : Name of the website.
+	 *
+	 * [--php=<php-version>]
+	 * : PHP version to check the code against. Required, except with --cancel.
+	 * ---
+	 * options:
+	 *  - 5.6
+	 *  - 7.0
+	 *  - 7.2
+	 *  - 7.3
+	 *  - 7.4
+	 *  - 8.0
+	 *  - 8.1
+	 *  - 8.2
+	 *  - 8.3
+	 *  - 8.4
+	 *  - 8.5
+	 *  - 8.6
+	 * ---
+	 *
+	 * [--estimate]
+	 * : Print how long a check of this site should take on this server, without checking anything.
+	 *
+	 * [--format=<format>]
+	 * : Render output in a particular format. json prints the verdict and the counts, never the findings.
+	 * ---
+	 * default: table
+	 * options:
+	 *   - table
+	 *   - json
+	 * ---
+	 *
+	 * [--output=<path>]
+	 * : Also write the full report, with every error and warning, as JSON to this absolute path. The file is owned by root with mode 0600 and replaces an existing one. It is written only when the check finishes with a result (status ok); otherwise an existing file is left as it was. Its directory and every parent must be owned by root and not writable by other users (a sticky directory such as /tmp is fine). Not with --estimate.
+	 *
+	 * [--timeout=<seconds>]
+	 * : Time limit for the scan itself, in seconds. A scan that hits it reports tool_error and no verdict. Pulling the scanner image on first use isn't counted. Default: 7200. Not with --estimate.
+	 *
+	 * [--cancel]
+	 * : Stop the site's running check and remove what it left behind, then exit. Prints cancelled when a check was stopped (that check then reports cancelled, with no verdict and no --output file) and not_running when none was running. Waits up to 60 seconds for the stopped check to clean up. An estimate isn't stopped. Not with --php, --estimate, --output or --timeout.
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     # Check whether a site's code works on PHP 8.4
+	 *     $ ee site php-compat example.com --php=8.4
+	 *
+	 *     # See how long the check will take first
+	 *     $ ee site php-compat example.com --php=8.4 --estimate
+	 *
+	 *     # Print the summary as JSON and write the full report to a file
+	 *     $ ee site php-compat example.com --php=8.4 --format=json --output=/root/example.com-php84.json
+	 *
+	 *     # Stop a running check
+	 *     $ ee site php-compat example.com --cancel
+	 *
+	 * @subcommand php-compat
+	 */
+	public function php_compat( $args, $assoc_args ) {
+		$args                   = auto_site_name( $args, 'site', 'php-compat' );
+		$this->site_data        = get_site_info( $args, false, true, false );
+		$this->php_compat_check = new Site_PHP_Compat();
+		// Dispatched from this class's scope: the SIGTERM/SIGINT handlers are the site type's protected rollback().
+		$this->php_compat_check->run(
+			$this->site_data,
+			$assoc_args,
+			function () {
+				pcntl_signal_dispatch();
+			}
+		);
 	}
 
 	/**
