@@ -882,14 +882,12 @@ class Site_PHP_Compat {
 		if ( ! $ids ) {
 			// Not running (a disabled site): only its compose files say what it mounts.
 			foreach ( array_merge( [ $site_data->site_fs_path . '/docker-compose-custom.yml' ], (array) glob( $site_data->site_fs_path . '/user-docker-compose/*.yml' ), (array) glob( $site_data->site_fs_path . '/user-docker-compose/*.yaml' ) ) as $file ) {
-				$targets = is_file( $file ) ? self::compose_targets( $file ) : [];
-				if ( null === $targets ) {
-					return "could not read the volumes in $file; enable the site so this check can see its mounts";
+				$mounts = is_file( $file ) ? self::compose_mounts_code( $file ) : false;
+				if ( null === $mounts ) {
+					return "could not read $file; enable the site to check mounted code";
 				}
-				foreach ( $targets as $target ) {
-					if ( ! is_string( $target ) || false !== strpos( $target, '$' ) || 0 === strpos( rtrim( $target, '/' ) . '/', '/var/www/' ) ) {
-						return "$file mounts code below /var/www, which this check can only see while the site runs; enable the site and run it again";
-					}
+				if ( $mounts ) {
+					return "$file mounts code below /var/www, which this check can only see while the site runs; enable the site and run it again";
 				}
 			}
 
@@ -922,40 +920,46 @@ class Site_PHP_Compat {
 	}
 
 	/**
-	 * Container paths the volumes of the services in a compose file mount at (short `src:dst[:mode]` or long form).
+	 * Whether a compose file may mount anything below /var/www, read without a YAML parser (the release phar has none).
+	 * Only lines that can't name such a mount are passed over: short volume entries (`- src:dst[:mode]`) and `target:`
+	 * keys are judged by their destination, `source:` lines are fine; any other line that mentions /var/www, and any `$`
+	 * (interpolation), counts as one.
 	 *
 	 * @param string $file Compose file.
 	 *
-	 * @return array|null Targets (any value that isn't a plain path is returned as is, to be refused), or null when the
-	 *                    file can't be parsed.
+	 * @return bool|null True when it may, false when it doesn't, null when it can't be read.
 	 */
-	protected static function compose_targets( $file ) {
-		try {
-			$doc = \Symfony\Component\Yaml\Yaml::parseFile( $file );
-		} catch ( \Exception $e ) {
+	protected static function compose_mounts_code( $file ) {
+		$text = @file_get_contents( $file ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- null when unreadable.
+		if ( false === $text ) {
 			return null;
 		}
-		if ( null === $doc ) {
-			return [];
-		}
-		if ( ! is_array( $doc ) || ( isset( $doc['services'] ) && ! is_array( $doc['services'] ) ) ) {
-			return null;
-		}
-		$targets = [];
-		foreach ( isset( $doc['services'] ) ? $doc['services'] : [] as $service ) {
-			foreach ( is_array( $service ) && isset( $service['volumes'] ) ? (array) $service['volumes'] : [] as $volume ) {
-				if ( is_array( $volume ) ) {
-					$targets[] = isset( $volume['target'] ) ? $volume['target'] : null;
-				} elseif ( is_string( $volume ) ) {
-					$parts     = explode( ':', $volume );
-					$targets[] = count( $parts ) > 1 ? $parts[1] : $parts[0];
-				} else {
-					$targets[] = null;
-				}
+		foreach ( preg_split( '/\r\n|\r|\n/', $text ) as $line ) {
+			$line = trim( $line );
+			if ( '' === $line || '#' === $line[0] ) {
+				continue;
+			}
+			if ( false !== strpos( $line, '$' ) ) {
+				return true;
+			}
+			if ( false === strpos( $line, '/var/www' ) || preg_match( '/^-?\s*source:\s/', $line ) ) {
+				continue;
+			}
+			$target = null;
+			if ( preg_match( '/^-?\s*target:\s*([\'"]?)([^\'"#\s]+)\1\s*$/', $line, $m ) ) {
+				$target = $m[2];
+			} elseif ( preg_match( '/^-\s*([\'"]?)([^\'"#\s:]+):([^\'"#\s:]+)(?::(?:ro|rw|z|Z|cached|delegated|consistent)(?:,[a-z]+)*)?\1\s*$/', $line, $m ) ) {
+				$target = $m[3];
+			} elseif ( preg_match( '/^-\s*[A-Za-z_][A-Za-z0-9_]*=/', $line ) ) {
+				// An environment entry (`- NAME=value`), not a volume.
+				continue;
+			}
+			if ( null === $target || 0 === strpos( rtrim( $target, '/' ) . '/', '/var/www/' ) ) {
+				return true;
 			}
 		}
 
-		return $targets;
+		return false;
 	}
 
 	/**
@@ -1372,12 +1376,19 @@ class Site_PHP_Compat {
 		$token_is = function ( $at, array $kinds ) use ( $types ) {
 			return isset( $types[ $at ] ) && in_array( $types[ $at ][0], $kinds, true );
 		};
-		// Once wp-settings.php is loaded, WordPress has set these constants: a later define never takes effect.
+		// Once wp-settings.php is loaded, WordPress has set these constants: whatever comes after never takes effect, so it is
+		// passed over. After a load of it that may not run (in a block, after `if (…)`), what follows is unresolved.
 		$booted = PHP_INT_MAX;
-		if ( preg_match_all( '/\b(?:require|include)(?:_once)?[^;]*wp-settings\.php/i', $code, $boots, PREG_OFFSET_CAPTURE ) ) {
+		$maybe  = PHP_INT_MAX;
+		if ( preg_match_all( '/\b(?:require|include)(?:_once)?[^;]*wp-settings\.php[\'"]\)?;/i', $code, $boots, PREG_OFFSET_CAPTURE ) ) {
 			foreach ( $boots[0] as $boot ) {
-				if ( $token_is( $boot[1], [ T_REQUIRE, T_REQUIRE_ONCE, T_INCLUDE, T_INCLUDE_ONCE ] ) ) {
-					$booted = min( $booted, $boot[1] );
+				$at = $boot[1];
+				if ( ! $token_is( $at, [ T_REQUIRE, T_REQUIRE_ONCE, T_INCLUDE, T_INCLUDE_ONCE ] ) ) {
+					continue;
+				}
+				$maybe = min( $maybe, $at );
+				if ( 0 === $depths[ $at ] && ( 0 === $at || in_array( $code[ $at - 1 ], [ ';', '}' ], true ) ) ) {
+					$booted = min( $booted, $at );
 				}
 			}
 		}
@@ -1386,12 +1397,12 @@ class Site_PHP_Compat {
 		foreach ( $matches as $match ) {
 			$name = $match[5][0];
 			$at   = $match[0][1];
-			if ( ! $token_is( $at, [ T_IF, T_STRING ] ) || ! $token_is( $match[4][1], [ T_CONSTANT_ENCAPSED_STRING ] ) ) {
+			if ( ! $token_is( $at, [ T_IF, T_STRING ] ) || ! $token_is( $match[4][1], [ T_CONSTANT_ENCAPSED_STRING ] ) || $at > $booted ) {
 				continue;
 			}
 			// A statement of its own: after `if (…)`, `else` or `:` it may never run.
 			$own = 0 === $at || in_array( $code[ $at - 1 ], [ ';', '}' ], true );
-			if ( ! $own || $at > $booted || ( '' !== $match[2][0] && $match[2][0] !== $name ) || 0 !== $depths[ $at ] || isset( $found[ $name ] ) ) {
+			if ( ! $own || $at > $maybe || ( '' !== $match[2][0] && $match[2][0] !== $name ) || 0 !== $depths[ $at ] || isset( $found[ $name ] ) ) {
 				return $name;
 			}
 			$found[ $name ] = $match[6][0];
@@ -1415,7 +1426,7 @@ class Site_PHP_Compat {
 			$at = $use[1];
 			// A bare constant, or a string that is exactly its name (constant( 'X' )); other text in strings doesn't count.
 			$quoted = isset( $types[ $at - 1 ] ) && T_CONSTANT_ENCAPSED_STRING === $types[ $at - 1 ][0] && 1 === preg_match( '/^([\'"])' . $use[0] . '\1$/D', $types[ $at - 1 ][1] );
-			if ( ! $token_is( $at, [ T_STRING ] ) && ! $quoted ) {
+			if ( ( ! $token_is( $at, [ T_STRING ] ) && ! $quoted ) || $at > $booted ) {
 				continue;
 			}
 			// Uses come in order, so the spans before this one can be skipped for good.
