@@ -2586,7 +2586,7 @@ DEALLOCATE PREPARE ee_stmt;
 	 */
 	private function hold_scan_lock() {
 		$message = sprintf( 'A php-compat check of %1$s is running and reads the files a restore replaces. Wait for it to finish or stop it with `ee site php-compat %1$s --cancel`, then run the restore again.', $this->site_data['site_url'] );
-		$handle  = @fopen( $this->site_data['site_fs_path'], 'r' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- handled below.
+		$handle  = @fopen( $this->site_data['site_fs_path'], 're' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- handled below.
 		if ( false !== $handle && flock( $handle, LOCK_EX | LOCK_NB, $would_block ) ) {
 			$this->scan_lock = $handle;
 

@@ -552,7 +552,7 @@ class Site_PHP_Compat {
 			$grace  = min( self::CANCEL_GRACE, $this->cancel_wait() );
 			$locked = $this->wait_for_site_lock( $site_data->site_fs_path, $grace );
 			if ( ! $locked ) {
-				// Untaken: a killed scan's docker client (it inherits the lock) or a frozen scan holds the lock. The id is read
+				// Untaken: a frozen scan holds the lock. The id is read
 				// first: no scan starts a container while the request stays, so a later scan's container is never this id.
 				$id = $this->running_container_id( $name );
 				if ( null !== $id && $token === $this->read_cancel( $marker ) ) {
@@ -641,7 +641,7 @@ class Site_PHP_Compat {
 	 * @return bool False when another --cancel still holds it after twice cancel_wait() (e.g. stuck on a hung docker).
 	 */
 	protected function hold_cancel_guard( $marker ) {
-		$guard = $this->own_dir( dirname( self::guard_path( $marker ) ) ) ? @fopen( self::guard_path( $marker ), 'c' ) : false; // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- handled below.
+		$guard = $this->own_dir( dirname( self::guard_path( $marker ) ) ) ? @fopen( self::guard_path( $marker ), 'ce' ) : false; // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- handled below.
 		if ( false === $guard ) {
 			return true;
 		}
@@ -672,7 +672,7 @@ class Site_PHP_Compat {
 	 */
 	protected function clear_stale_cancel() {
 		// Not created here: a --cancel creates it before its request, so while it is missing any request is a live one.
-		$guard = @fopen( self::guard_path( $this->cancel_marker ), 'r' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- missing is handled.
+		$guard = @fopen( self::guard_path( $this->cancel_marker ), 're' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- missing is handled.
 		if ( false === $guard ) {
 			return;
 		}
@@ -1592,7 +1592,8 @@ class Site_PHP_Compat {
 	 * @return bool False when another php-compat run holds it.
 	 */
 	protected function lock_site( $site_fs_path ) {
-		$handle = @fopen( $site_fs_path, 'r' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- handled below.
+		// Close-on-exec: a child (docker pull, rm) must not keep the lock after this process is killed.
+		$handle = @fopen( $site_fs_path, 're' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- handled below.
 		if ( false === $handle ) {
 			EE::debug( "Could not open $site_fs_path to lock it; relying on the container name." );
 
@@ -1620,7 +1621,7 @@ class Site_PHP_Compat {
 		$parent = $this->temp_parent();
 		$path   = null === $parent ? null : $this->control_path( $parent, 'estimate-lock' );
 		// Not in the per-site directory, whose leftovers a scan removes.
-		$handle = null === $path ? false : @fopen( $path, 'c' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- handled below.
+		$handle = null === $path ? false : @fopen( $path, 'ce' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- handled below.
 		if ( false === $handle ) {
 			return null;
 		}
@@ -2854,7 +2855,7 @@ class Site_PHP_Compat {
 	 * @return bool Whether none runs now.
 	 */
 	protected function wait_for_estimate( $parent ) {
-		$handle = @fopen( "$parent/.estimate-lock/{$this->site}", 'r' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- missing: none ran.
+		$handle = @fopen( "$parent/.estimate-lock/{$this->site}", 're' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- missing: none ran.
 		if ( false === $handle ) {
 			return true;
 		}
