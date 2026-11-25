@@ -1357,10 +1357,11 @@ class Site_PHP_Compat {
 	 * @param string $code Real path of the site's app/.
 	 * @param string $out  The scan's /out directory on the host.
 	 *
-	 * @return array manifest (bool), unlisted (up to 10 container paths), unlisted_more (int), error (string|null).
+	 * @return array manifest (bool), unlisted (up to 10 container paths), unlisted_more (int), walk (ok|failed, null when
+	 *               no walk ran), walk_error (string|null), error (string|null: why there is no positive verdict besides unlisted).
 	 */
 	protected function cross_check( $code, $out ) {
-		$result = [ 'manifest' => false, 'unlisted' => [], 'unlisted_more' => 0, 'error' => null ];
+		$result = [ 'manifest' => false, 'unlisted' => [], 'unlisted_more' => 0, 'walk' => null, 'walk_error' => null, 'error' => null ];
 		$m      = $this->read_manifest( $out );
 		if ( ! is_array( $m ) ) {
 			$result['error'] = $m;
@@ -1417,13 +1418,15 @@ class Site_PHP_Compat {
 				}
 				$seen[ $ino ] = true;
 				if ( ++$count <= self::NOT_CHECKED_STDOUT ) {
-					$unlisted[] = self::clean( '/var/www' . substr( $path, strlen( $code ) ) );
+					$unlisted[] = self::cut( self::clean( '/var/www' . substr( $path, strlen( $code ) ) ) );
 				}
 				return false;
 			}
 		);
+		$result['walk'] = null === $walk ? 'ok' : 'failed';
 		if ( null !== $walk ) {
-			$result['error'] = "can't list the site's files to compare with what the scanner read: $walk";
+			$result['walk_error'] = self::cut( $walk );
+			$result['error']      = "can't list the site's files to compare with what the scanner read: $walk";
 		}
 		$result['unlisted']      = $unlisted;
 		$result['unlisted_more'] = max( 0, $count - self::NOT_CHECKED_STDOUT );
@@ -1599,24 +1602,7 @@ class Site_PHP_Compat {
 		$core_dirs  = array_values( array_intersect( $m['core']['dirs'], [ 'wp-admin', 'wp-includes' ] ) );
 		$core_files = array_values( array_intersect( $m['core']['files'], self::CORE_FILES ) );
 
-		// (a) old releases: siblings of the live release in releases/, only when nginx's root is the live release or below.
-		$top  = $layout['top'];
-		$live = null;
-		for ( $dir = null !== $abspath ? $abspath : $top; null !== $dir && strlen( $dir ) > strlen( $code ); $dir = dirname( $dir ) ) {
-			if ( 'releases' === basename( dirname( $dir ) ) ) {
-				$live = $dir;
-				break;
-			}
-		}
-		$old = [];
-		if ( null !== $live && null !== $top && 0 === strpos( $top . '/', $live . '/' ) ) {
-			foreach ( (array) @scandir( dirname( $live ) ) as $name ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- unreadable lists nothing.
-				$dir = dirname( $live ) . '/' . $name;
-				if ( '.' !== $name && '..' !== $name && $dir !== $live && ! is_link( $dir ) && is_dir( $dir ) ) {
-					$old[ $dir ] = true;
-				}
-			}
-		}
+		$old = $this->old_release_dirs( $code );
 		// The scanner names old releases only for php sites, which it walks whole; a wp scan never leaves the live root.
 		$listed = [];
 		foreach ( $m['old_releases'] as $path ) {
@@ -1665,6 +1651,37 @@ class Site_PHP_Compat {
 			'sniff'      => $m['sniff'],
 			'exempt'     => $exempt,
 		];
+	}
+
+	/**
+	 * Exempt shape (a): the old releases beside the live release in releases/, only when nginx's root is the live release
+	 * or below it (--public-dir=current).
+	 *
+	 * @param string $code Real path of the site's app/.
+	 *
+	 * @return array Real host directories as keys.
+	 */
+	protected function old_release_dirs( $code ) {
+		$top     = null === $this->cross_layout ? null : $this->cross_layout['top'];
+		$abspath = null === $this->cross_layout ? null : $this->cross_layout['abspath'];
+		$live    = null;
+		for ( $dir = null !== $abspath ? $abspath : $top; null !== $dir && strlen( $dir ) > strlen( $code ); $dir = dirname( $dir ) ) {
+			if ( 'releases' === basename( dirname( $dir ) ) ) {
+				$live = $dir;
+				break;
+			}
+		}
+		$old = [];
+		if ( null !== $live && null !== $top && 0 === strpos( $top . '/', $live . '/' ) ) {
+			foreach ( (array) @scandir( dirname( $live ) ) as $name ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- unreadable lists nothing.
+				$dir = dirname( $live ) . '/' . $name;
+				if ( '.' !== $name && '..' !== $name && $dir !== $live && ! is_link( $dir ) && is_dir( $dir ) ) {
+					$old[ $dir ] = true;
+				}
+			}
+		}
+
+		return $old;
 	}
 
 	/**
@@ -1836,11 +1853,12 @@ class Site_PHP_Compat {
 	 */
 	protected function walk_tree( $top, callable $visit ) {
 		$todo     = [ $top ];
-		$deadline = microtime( true ) + self::WALK_SECONDS;
+		$seconds  = $this->walk_seconds();
+		$deadline = microtime( true ) + $seconds;
 		while ( $todo ) {
 			$dir = array_pop( $todo );
 			if ( microtime( true ) > $deadline ) {
-				return 'it takes more than ' . self::WALK_SECONDS . ' s to list';
+				return 'it takes more than ' . $seconds . ' s to list';
 			}
 			// A long walk still answers a signal or a --cancel (run() reports cancelled then).
 			if ( function_exists( 'pcntl_signal_dispatch' ) ) {
@@ -1872,6 +1890,13 @@ class Site_PHP_Compat {
 		}
 
 		return null;
+	}
+
+	/**
+	 * @return int The time bound of a walk of the site's files.
+	 */
+	protected function walk_seconds() {
+		return self::WALK_SECONDS;
 	}
 
 	/**
@@ -2169,6 +2194,19 @@ class Site_PHP_Compat {
 			// The WordPress root and its config are read on the host before the scan: only a mount inside wp-content leaves them as read.
 			if ( $this->wp_layout && 0 !== strpos( $dst . '/', $this->scan_path . '/wp-content/' ) ) {
 				return 'the site\'s php container mounts ' . self::clean( $dst ) . ' over the WordPress files, which this check reads before it scans';
+			}
+			// Mounted code is seen only by the scanner, never by EE's app/ walk: it must land, after the kernel follows the
+			// volume's links, where the scanner walks (wp: the root's wp-content; php: not a /var/www dot entry or an old release).
+			$at = self::resolve_in( $code, substr( $dst, strlen( '/var/www/' ) ) );
+			if ( $this->wp_layout ) {
+				$content = self::resolve_in( $code, substr( $this->scan_path, strlen( '/var/www/' ) ) . '/wp-content' );
+				$outside = null === $content || 0 !== strpos( $at . '/', $content . '/' );
+			} else {
+				$top     = (string) substr( $at, strlen( $code ) + 1 );
+				$outside = '' === $top || '.' === $top[0] || null !== self::under_any( $at . '/x', $code, $this->old_release_dirs( $code ) );
+			}
+			if ( $outside ) {
+				return 'the site\'s php container mounts ' . self::clean( $dst ) . ' at ' . self::clean( '/var/www' . substr( $at, strlen( $code ) ) ) . ', where the scanner doesn\'t look';
 			}
 			EE::debug( "php-compat: also mounting $src at $dst" );
 			array_push( $this->extra_mounts, '--mount', "type=bind,src=$src,dst=$dst,readonly" );
@@ -3340,6 +3378,8 @@ class Site_PHP_Compat {
 			'manifest'      => $this->cross['manifest'],
 			'unlisted'      => $this->cross['unlisted'],
 			'unlisted_more' => $this->cross['unlisted_more'],
+			'walk'          => $this->cross['walk'],
+			'walk_error'    => $this->cross['walk_error'],
 		];
 		if ( $doc['errors'] > 0 || ( null !== $core && false === $core['supports'] ) ) {
 			$doc['safe_to_upgrade'] = false;
@@ -3357,6 +3397,15 @@ class Site_PHP_Compat {
 	 */
 	protected function current_php() {
 		return null !== $this->current_php && $this->current_php === $this->container_php ? $this->current_php : null;
+	}
+
+	/**
+	 * @param string $text Text.
+	 *
+	 * @return string At most NOT_CHECKED_CHARS characters of it, so stdout stays fixed-size.
+	 */
+	protected static function cut( $text ) {
+		return preg_match( '/^.{' . self::NOT_CHECKED_CHARS . '}/us', $text, $m ) ? $m[0] : $text;
 	}
 
 	/**
