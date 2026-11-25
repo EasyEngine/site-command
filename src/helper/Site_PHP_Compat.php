@@ -158,8 +158,11 @@ class Site_PHP_Compat {
 	/** @var bool Whether the record/nginx root mismatch was already reported. */
 	protected $warned_root = false;
 
-	/** @var string|null The PHP version the site runs now (its record), major.minor; null when unknown. */
+	/** @var string|null The PHP version the site's record says, major.minor; null when unknown. */
 	protected $current_php;
+
+	/** @var string|null The PHP version of the running php container's image (easyengine/phpX.Y), null when unknown. */
+	protected $container_php;
 
 	/** @var string|null Cancel request file a scan watches once it holds the site lock. */
 	protected $cancel_marker;
@@ -530,7 +533,7 @@ class Site_PHP_Compat {
 			// The report says what stdout says (gated verdict, scoped fields), with the full not_checked list and the components.
 			$raw = self::encode( $full + [ 'components' => $report['components'] ] );
 			// A value json_encode() refuses (INF in a key EE doesn't know): no report rather than an empty one.
-			if ( '' === $raw ) {
+			if ( ! is_string( $raw ) || '' === $raw ) {
 				return $this->doc( 'tool_error', 'could not encode the report' );
 			}
 			if ( ! $this->write_report( $output, $raw ) ) {
@@ -1257,8 +1260,8 @@ class Site_PHP_Compat {
 							$found = "$path links to its own ancestor " . $real;
 							return 'stop';
 						}
-						if ( null !== $real && is_dir( $real ) && ( file_exists( "$real/wp-settings.php" ) || is_dir( "$real/wp-includes" ) ) ) {
-							$found = "$path links to another WordPress install ($real)";
+						if ( null !== $real && self::reaches_install( $code, $real, $abspath ) ) {
+							$found = "$path links into another WordPress install ($real)";
 							return 'stop';
 						}
 						// The scanner follows it: what lies there counts as inside (e.g. shared uploads of a Deployer release).
@@ -1322,6 +1325,39 @@ class Site_PHP_Compat {
 		}
 
 		return '!' === $found[0] ? self::clean( substr( $found, 1 ) ) : self::clean( $found ) . '; this check can\'t scan that layout';
+	}
+
+	/**
+	 * Whether a link target is (in) another WordPress install: the target, any of its ancestors up to app/, or (for a
+	 * directory) any direct child holds wp-settings.php or wp-includes/. The live WordPress root doesn't count.
+	 *
+	 * @param string $code    Real path of the site's app/.
+	 * @param string $real    Real link target.
+	 * @param string $abspath Real WordPress root.
+	 *
+	 * @return bool
+	 */
+	protected static function reaches_install( $code, $real, $abspath ) {
+		$install = function ( $dir ) use ( $abspath ) {
+			return $dir !== $abspath && is_dir( $dir ) && ( is_file( "$dir/wp-settings.php" ) || is_dir( "$dir/wp-includes" ) );
+		};
+		for ( $dir = $real; strlen( $dir ) >= strlen( $code ); $dir = dirname( $dir ) ) {
+			if ( $install( $dir ) ) {
+				return true;
+			}
+			if ( $dir === $code ) {
+				break;
+			}
+		}
+		if ( is_dir( $real ) && ! is_link( $real ) ) {
+			foreach ( (array) @scandir( $real ) as $name ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- unreadable lists nothing.
+				if ( '.' !== $name && '..' !== $name && ! is_link( "$real/$name" ) && $install( "$real/$name" ) ) {
+					return true;
+				}
+			}
+		}
+
+		return false;
 	}
 
 	/**
@@ -1708,6 +1744,8 @@ class Site_PHP_Compat {
 			return 'could not read how the site\'s php container is configured';
 		}
 		$config = $info['Config'];
+		// The PHP it runs: easyengine/php8.4:<tag>; easyengine/php (latest) or any other image tells nothing.
+		$this->container_php = isset( $config['Image'] ) && preg_match( '#^easyengine/php(\d+\.\d+):#', (string) $config['Image'], $m ) ? $m[1] : null;
 		foreach ( [ 'Cmd', 'Entrypoint' ] as $key ) {
 			if ( ( isset( $config[ $key ] ) ? $config[ $key ] : null ) !== ( isset( $own[ $key ] ) ? $own[ $key ] : null ) ) {
 				return "the site's php container runs another " . strtolower( $key ) . ' than its image, which this check can\'t confirm';
@@ -2820,7 +2858,7 @@ class Site_PHP_Compat {
 		$core                    = null;
 		if ( $this->wp_layout && null !== $this->wp_version ) {
 			// Core's files are never scanned; not_checked stays the scanner's own list (its type and reason values are a fixed set).
-			$core             = self::wp_supports( $this->wp_version['branch'], $this->target, $this->current_php );
+			$core             = self::wp_supports( $this->wp_version['branch'], $this->target, $this->current_php() );
 			$doc['wordpress'] = [
 				'version'            => self::clean( $this->wp_version['version'] ),
 				'supports'           => $core['supports'],
@@ -2838,6 +2876,13 @@ class Site_PHP_Compat {
 		}
 
 		return $doc;
+	}
+
+	/**
+	 * @return string|null The PHP version the site runs now: only when its record and its running container agree.
+	 */
+	protected function current_php() {
+		return null !== $this->current_php && $this->current_php === $this->container_php ? $this->current_php : null;
 	}
 
 	/**
@@ -2881,6 +2926,7 @@ class Site_PHP_Compat {
 	 *               (the reason to print, or null).
 	 */
 	public static function wp_supports( $branch, $target, $current = null ) {
+		$current = null !== $current && preg_match( '/^\d+\.\d+$/D', (string) $current ) ? (string) $current : null;
 		$minimum = null;
 		$highest = '0';
 		foreach ( self::WP_PHP_SUPPORT as $wp => list( $low, $high ) ) {
@@ -3105,7 +3151,7 @@ class Site_PHP_Compat {
 		}
 
 		$tail = sprintf( '%s. %s checked.', self::count_of( $doc['warnings'], 'warning' ), self::count_of( $doc['files_checked'], 'file' ) );
-		$core = isset( $doc['wordpress'] ) && null !== $this->wp_version ? self::wp_supports( $this->wp_version['branch'], $target, $this->current_php ) : null;
+		$core = isset( $doc['wordpress'] ) && null !== $this->wp_version ? self::wp_supports( $this->wp_version['branch'], $target, $this->current_php() ) : null;
 		$why  = null === $core ? null : $core['why'];
 		if ( false === $doc['safe_to_upgrade'] ) {
 			if ( $doc['errors'] > 0 ) {

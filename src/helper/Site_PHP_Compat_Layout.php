@@ -616,10 +616,6 @@ class Site_PHP_Compat_Layout {
 			if ( null === $part ) {
 				return null;
 			}
-			// PHP follows each link before `..`; a textual collapse could call another directory the default.
-			if ( preg_match( '#(^|/)\.\.(/|$)#', $part ) ) {
-				return false;
-			}
 			$path .= $part;
 			$i     = $next;
 			if ( $i < $to ) {
@@ -628,6 +624,12 @@ class Site_PHP_Compat_Layout {
 				}
 				$i++;
 			}
+		}
+
+		// PHP follows each link before `..`; a textual collapse could call another directory the default. The joined
+		// string is tested, so `'/L/.' . './x'` counts too.
+		if ( preg_match( '#(^|/)\.\.(/|$)#', $path ) ) {
+			return false;
 		}
 
 		return self::normalise( $path );
