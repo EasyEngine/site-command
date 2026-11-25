@@ -248,13 +248,29 @@ abstract class EE_Site_Command {
 		// A running php-compat check mounts the site's code: stop it first, and drop what php-compat keeps for the site.
 		// Kept on $this: the site lock it holds must last until this process ends.
 		$this->php_compat_check = new Site_PHP_Compat();
-		$compat                 = $this->php_compat_check->stop_for_delete(
+		// Nothing is deleted yet: a signal while php-compat is stopped ends the delete without the rollback messages.
+		$previous = [];
+		if ( function_exists( 'pcntl_signal' ) ) {
+			$site = $this->site_data['site_url'];
+			foreach ( [ SIGTERM, SIGINT, SIGQUIT, SIGUSR1, SIGHUP ] as $signal ) {
+				$previous[ $signal ] = pcntl_signal_get_handler( $signal );
+				pcntl_signal(
+					$signal,
+					function () use ( $site ) {
+						$this->delete_stopped( $site );
+					}
+				);
+			}
+		}
+		$compat = $this->php_compat_check->stop_for_delete(
 			(object) $this->site_data,
-			// Dispatched in this class's scope, where the protected rollback() handlers can be called.
 			function () {
 				pcntl_signal_dispatch();
 			}
 		);
+		foreach ( $previous as $signal => $handler ) {
+			pcntl_signal( $signal, $handler );
+		}
 		if ( null !== $compat ) {
 			\EE::error( sprintf( 'Could not stop the php-compat check of %s (%s). Nothing was deleted.', $this->site_data['site_url'], $compat ) );
 		}
@@ -3307,6 +3323,16 @@ abstract class EE_Site_Command {
 	}
 
 	/**
+	 * A signal while `ee site delete` stops php-compat: nothing is deleted yet, so there is nothing to roll back.
+	 *
+	 * @param string $site Site name.
+	 */
+	protected function delete_stopped( $site ) {
+		\EE::warning( "Delete of $site stopped: nothing was deleted." );
+		exit( 1 );
+	}
+
+	/**
 	 * Checks a site's PHP code for compatibility with a PHP version.
 	 *
 	 * Runs PHPCompatibility in a throwaway container with no network against a read-only mount of the site's code: for WordPress sites, the WordPress directory nginx serves (plugins, themes, mu-plugins, drop-ins and its other PHP, not WordPress core), and code mounted below its wp-content while the site runs; for PHP sites, everything under htdocs. A WordPress site gets a verdict only when the check recognises its whole layout: WordPress at the public directory (any --public-dir, a current/ release link) or below it, loaded by WordPress's own index.php, a wp-config.php made only of the settings WordPress, EasyEngine and common plugins write, no other PHP in the site's files outside WordPress, and EasyEngine's own nginx, PHP-FPM and container setup. Anything else (a moved wp-content, a custom index.php, a config that runs or loads other code, a file PHP runs before WordPress other than one in the scanned directory) gets no verdict, with the reason. It ends with a verdict: safe to upgrade (every file checked, no errors), not safe (at least one error), or can't confirm (some files couldn't be checked). Warnings never change the verdict. The verdict comes from static analysis, which can't see breakage that only shows at runtime.
@@ -3383,7 +3409,7 @@ abstract class EE_Site_Command {
 				\EE::warning( 'Stopping the check: removing its container and temporary files.' );
 				exit( 1 );
 			};
-			foreach ( [ SIGTERM, SIGINT, SIGUSR1 ] as $signal ) {
+			foreach ( [ SIGTERM, SIGINT, SIGQUIT, SIGUSR1 ] as $signal ) {
 				pcntl_signal( $signal, $stop );
 			}
 			// A lost terminal doesn't stop a check; it ends and cleans up on its own, or with --cancel. Ignored rather than

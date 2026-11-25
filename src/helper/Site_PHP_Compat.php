@@ -359,10 +359,6 @@ class Site_PHP_Compat {
 		if ( false === $code ) {
 			return $this->doc( 'tool_error', "can't resolve {$site_data->site_fs_path}/app, the link to the site's code" );
 		}
-		$layout = $this->resolve_layout( $site_data, $code );
-		if ( null !== $layout ) {
-			return $layout;
-		}
 		if ( false !== strpbrk( $code, ',"' ) ) {
 			return $this->doc( 'tool_error', 'the site code path has a comma or a quote' );
 		}
@@ -396,6 +392,11 @@ class Site_PHP_Compat {
 		$pull = $this->ensure_image( $image );
 		if ( null !== $pull ) {
 			return $this->doc( 'tool_error', $pull );
+		}
+		// Read under the site lock and after the pull, so the layout checked is the one scanned.
+		$layout = $this->resolve_layout( $site_data, $code );
+		if ( null !== $layout ) {
+			return $layout;
 		}
 		$mounts = $this->extra_mounts( $site_data, $code );
 		if ( is_string( $mounts ) ) {
@@ -501,10 +502,6 @@ class Site_PHP_Compat {
 		if ( false === $code ) {
 			return $this->doc( 'tool_error', "can't resolve {$site_data->site_fs_path}/app, the link to the site's code" );
 		}
-		$layout = $this->resolve_layout( $site_data, $code );
-		if ( null !== $layout ) {
-			return $layout;
-		}
 		if ( false !== strpbrk( $code, ',"' ) ) {
 			return $this->doc( 'tool_error', 'the site code path has a comma or a quote' );
 		}
@@ -525,6 +522,14 @@ class Site_PHP_Compat {
 		// Taken before this check, so a restore starting now sees the estimate lock (Site_Backup_Restore::hold_scan_lock()).
 		if ( $this->restore_running( $site_data->site_fs_path ) ) {
 			return $this->doc( 'tool_error', 'a restore of the site is running' );
+		}
+		// The pull ran unlocked: a delete may have gone through meanwhile, and the layout is read only now.
+		if ( ! is_dir( $site_data->site_fs_path ) || $this->code_dir( $site_data->site_fs_path ) !== $code ) {
+			return $this->doc( 'tool_error', 'the site was deleted or changed while the scanner image was pulled' );
+		}
+		$layout = $this->resolve_layout( $site_data, $code );
+		if ( null !== $layout ) {
+			return $layout;
 		}
 		$mounts = $this->extra_mounts( $site_data, $code );
 		if ( is_string( $mounts ) ) {
@@ -3099,9 +3104,9 @@ class Site_PHP_Compat {
 		$this->dispatch = $dispatch;
 		$parent         = rtrim( $this->temp_base(), '/' ) . '/' . self::TEMP_DIR;
 		$name           = 'ee-php-compat-' . $this->site;
-		// Nothing to do, and no temp directory created, for a site never checked.
-		if ( ! file_exists( $parent ) && ! is_link( $parent ) && false === $this->container_status( $name ) ) {
-			return null;
+		// Never checked on this host: no check runs without the temporary directory, and docker isn't asked.
+		if ( ! file_exists( $parent ) && ! is_link( $parent ) ) {
+			return $this->hold_for_delete( $site_data );
 		}
 		$usable = $this->temp_parent();
 		if ( null === $usable || null === $this->cancel_path( $usable ) ) {
@@ -3110,20 +3115,9 @@ class Site_PHP_Compat {
 			if ( false !== $this->container_status( $name ) && ! $this->container_gone( $name ) ) {
 				return "could not remove the container $name";
 			}
-			// A scan whose container was just removed lets go of the site lock as it ends; kept as below.
-			if ( ! $this->lock_site( $site_data->site_fs_path ) ) {
-				if ( $this->restore_running( $site_data->site_fs_path ) ) {
-					return 'a restore of the site is running';
-				}
-				if ( ! $this->wait_for_site_lock( $site_data->site_fs_path, $this->cancel_wait() ) ) {
-					return 'the running check did not stop within ' . $this->cancel_wait() . ' s';
-				}
-			}
-			$this->delete_lock = $this->lock;
-			$this->lock        = null;
-
-			return null;
+			return $this->hold_for_delete( $site_data );
 		}
+		$kept = null;
 		try {
 			$result = $this->run_cancel( $site_data );
 			if ( 'tool_error' !== $result['doc']['status'] ) {
@@ -3135,7 +3129,11 @@ class Site_PHP_Compat {
 			$this->cleanup();
 		}
 		if ( 'tool_error' === $result['doc']['status'] ) {
-			return $result['doc']['detail'];
+			// Once its container is gone the check reads nothing more: a process that doesn't let go of the lock doesn't stop the delete.
+			if ( $this->restore_running( $site_data->site_fs_path ) || false !== $this->container_status( $name ) && ! $this->container_gone( $name ) ) {
+				return $result['doc']['detail'];
+			}
+			EE::warning( "The php-compat check of {$this->site} didn't stop cleanly ({$result['doc']['detail']}); its container is gone, so the delete goes on." );
 		}
 		$this->delete_lock = $kept;
 		$parent            = $this->temp_parent();
@@ -3153,6 +3151,30 @@ class Site_PHP_Compat {
 				$this->remove_tree( "$parent/{$this->site}" );
 			}
 		}
+
+		return null;
+	}
+
+	/**
+	 * Takes the site lock for the rest of a delete, so no check starts meanwhile. Refused only while a restore runs; a lock
+	 * another php-compat process keeps past CANCEL_WAIT gives a warning, not a refusal.
+	 *
+	 * @param object $site_data Site record.
+	 *
+	 * @return string|null Why the delete can't go on, or null.
+	 */
+	protected function hold_for_delete( $site_data ) {
+		if ( ! $this->lock_site( $site_data->site_fs_path ) ) {
+			if ( $this->restore_running( $site_data->site_fs_path ) ) {
+				return 'a restore of the site is running';
+			}
+			if ( ! $this->wait_for_site_lock( $site_data->site_fs_path, $this->cancel_wait() ) ) {
+				EE::warning( "Another php-compat process of {$this->site} still holds the site's lock after " . $this->cancel_wait() . ' s; the delete goes on.' );
+				return null;
+			}
+		}
+		$this->delete_lock = $this->lock;
+		$this->lock        = null;
 
 		return null;
 	}

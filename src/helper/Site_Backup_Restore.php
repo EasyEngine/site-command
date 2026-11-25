@@ -2588,9 +2588,20 @@ DEALLOCATE PREPARE ee_stmt;
 	 * replaces app/; the lock goes with the process. Shared: php-compat holds it exclusive, so it can tell a restore from a check.
 	 */
 	private function hold_scan_lock() {
-		$message = sprintf( 'A php-compat check of %1$s is running and reads the files a restore replaces. Wait for it to finish or stop it with `ee site php-compat %1$s --cancel`, then run the restore again.', $this->site_data['site_url'] );
+		$message = sprintf( 'A php-compat check, `ee site php-compat %1$s --cancel` or `ee site delete %1$s` holds the site\'s lock (a check reads the files a restore replaces). Wait for it to finish or stop a check with `ee site php-compat %1$s --cancel`, then run the restore again.', $this->site_data['site_url'] );
 		$handle  = @fopen( $this->site_data['site_fs_path'], 're' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- handled below.
-		if ( false !== $handle && flock( $handle, LOCK_SH | LOCK_NB, $would_block ) ) {
+		// A --cancel or an estimate's probe holds it only for a moment: try for a few seconds before refusing.
+		$locked = false;
+		for ( $try = 0; false !== $handle && $try < 30; $try++ ) {
+			if ( $try ) {
+				usleep( 100000 );
+			}
+			$locked = flock( $handle, LOCK_SH | LOCK_NB, $would_block );
+			if ( $locked || ! $would_block ) {
+				break;
+			}
+		}
+		if ( $locked ) {
 			$this->scan_lock = $handle;
 			// After taking the lock: an estimate takes its own first, then looks for a restore.
 			if ( Site_PHP_Compat::estimate_running( $this->site_data['site_url'] ) ) {
