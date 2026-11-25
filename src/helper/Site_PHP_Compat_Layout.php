@@ -197,7 +197,7 @@ class Site_PHP_Compat_Layout {
 			return 'line ' . $t[ $end + 1 ][2] . ' comes after WordPress is loaded';
 		}
 
-		return [ 'sub' => trim( dirname( $inc['path'] ), '/.' ) ];
+		return [ 'sub' => trim( dirname( $inc['path'] ), '/' ) ];
 	}
 
 	/**
@@ -248,7 +248,10 @@ class Site_PHP_Compat_Layout {
 		if ( is_string( $t ) ) {
 			return "{$env['file']}: $t";
 		}
-		$state = [ 'booted' => false, 'content' => null, 'guard' => null ];
+		if ( ! isset( $env['followed'] ) ) {
+			$env['followed'] = new \ArrayObject();
+		}
+		$state = [ 'booted' => false, 'content' => null, 'guard' => null, 'nest' => 0 ];
 		$error = self::statements( $t, 0, count( $t ), $env, $depth, $state, true );
 		if ( null !== $error ) {
 			return $error;
@@ -300,6 +303,20 @@ class Site_PHP_Compat_Layout {
 	 * @return int|string Index after the block, or the reason it is refused.
 	 */
 	private static function if_block( array $t, $i, $to, array $env, $depth, array &$state ) {
+		if ( $state['nest'] >= self::MAX_NEST ) {
+			return self::unknown( $t, $i, $env, 'nests `if` blocks deeper than this check reads' );
+		}
+		$state['nest']++;
+		$after = self::if_chain( $t, $i, $to, $env, $depth, $state );
+		$state['nest']--;
+
+		return $after;
+	}
+
+	/**
+	 * @return int|string
+	 */
+	private static function if_chain( array $t, $i, $to, array $env, $depth, array &$state ) {
 		while ( true ) {
 			$kw = $t[ $i ][0];
 			if ( T_ELSE !== $kw ) {
@@ -433,8 +450,8 @@ class Site_PHP_Compat_Layout {
 			}
 			return null;
 		}
-		if ( in_array( $t[ $i ][0], [ T_REQUIRE, T_REQUIRE_ONCE, T_INCLUDE, T_INCLUDE_ONCE ], true ) ) {
-			return self::include_statement( $t, $i, $end, $env, $depth, $state, $top );
+		if ( in_array( $t[ $s ][0], [ T_REQUIRE, T_REQUIRE_ONCE, T_INCLUDE, T_INCLUDE_ONCE ], true ) ) {
+			return self::include_statement( $t, $s, $end, $env, $depth, $state, $top );
 		}
 
 		return self::unknown( $t, $i, $env );
@@ -526,16 +543,32 @@ class Site_PHP_Compat_Layout {
 		if ( 'blog-header' === $inc['kind'] ) {
 			return self::unknown( $t, $i, $env );
 		}
+
+		return self::follow( $t, $i, $inc, $env, $depth );
+	}
+
+	/**
+	 * A file a config (or a file it loads) names: absent is fine; inside the scanned WordPress root it must pass the config
+	 * grammar, or else be code the scan reads that touches nothing WordPress loads code from (screen()).
+	 *
+	 * @return string|null
+	 */
+	private static function follow( array $t, $i, array $inc, array $env, $depth ) {
 		$base = [
 			'ABSPATH'   => $env['root'],
 			'__DIR__'   => $env['dir'],
 			'__FILE__'  => $env['dir'],
 			'dirname-2' => dirname( $env['dir'] ),
+			'/'         => '',
 		][ $inc['base'] ];
 		$path = self::normalise( $base . '/' . ltrim( $inc['path'], '/' ) );
 		// PHP joins `__DIR__ . 'x.php'` without a slash: a sibling of the directory, never what's meant here.
 		if ( null === $path || '' === $inc['path'] || '/' !== $inc['path'][0] && 'ABSPATH' !== $inc['base'] || '.php' !== substr( $path, -4 ) ) {
 			return self::unknown( $t, $i, $env, 'loads a file this check can\'t name' );
+		}
+		// An absolute path is the container's: /var/www is the site's app/.
+		if ( '/' === $inc['base'] && isset( $env['canon'] ) ) {
+			$path = call_user_func( $env['canon'], $path );
 		}
 		$file = call_user_func( $env['resolve'], $path );
 		if ( 'absent' === $file['state'] ) {
@@ -555,8 +588,91 @@ class Site_PHP_Compat_Layout {
 		if ( $depth >= 2 ) {
 			return "{$env['file']} line {$t[ $i ][2]} loads {$file['real']}, a config file nested too deep for this check";
 		}
+		$key = $depth . ':' . $file['real'];
+		if ( $env['followed']->offsetExists( $key ) ) {
+			return $env['followed'][ $key ];
+		}
+		if ( count( $env['followed'] ) >= self::MAX_FILES ) {
+			return "{$env['file']} line {$t[ $i ][2]} loads {$file['real']}, more files than this check follows";
+		}
+		$sub   = [ 'dir' => dirname( $file['real'] ), 'file' => $file['real'], 'boot' => false ] + $env;
+		$error = self::check_config( $file['source'], $sub, $depth + 1 );
+		if ( null !== $error ) {
+			$error = self::screen( $file['source'], $sub, $depth + 1 );
+		}
+		$env['followed'][ $key ] = $error;
 
-		return self::check_config( $file['source'], [ 'dir' => dirname( $file['real'] ), 'file' => $file['real'], 'boot' => false ] + $env, $depth + 1 );
+		return $error;
+	}
+
+	/**
+	 * A file below the WordPress root that the scan reads as code but that doesn't fit the config grammar (a plugin's
+	 * generated headers file, say). PHP loads it before wp-settings.php, so it may not name the constants or globals
+	 * WordPress loads code from, run code from a string, or load a file other than one follow() accepts. Like the --vip
+	 * files, it is a token screen, not a proof: deliberate evasion is left to the coverage of app/.
+	 *
+	 * @return string|null
+	 */
+	private static function screen( $source, array $env, $depth ) {
+		$t = self::tokens( $source );
+		if ( is_string( $t ) ) {
+			return "{$env['file']}: $t";
+		}
+		$names = array_merge( array_keys( self::DIR_DEFAULTS ), self::NEVER_DEFINED, self::INSIDE_ROOT, self::NAME_VALUES );
+		$deny  = [ 'extract', 'parse_str', 'call_user_func', 'call_user_func_array', 'create_function', 'set_include_path', 'spl_autoload', 'ini_alter', 'assert', 'preg_replace', 'unserialize', 'constant' ];
+		$n     = count( $t );
+		for ( $i = 0; $i < $n; $i++ ) {
+			list( $id, $text, $line ) = $t[ $i ];
+			$at   = "{$env['file']} line $line";
+			$word = T_CONSTANT_ENCAPSED_STRING === $id ? substr( $text, 1, -1 ) : $text;
+			$call = isset( $t[ $i + 1 ] ) && '(' === $t[ $i + 1 ][0];
+			if ( ( T_STRING === $id || T_CONSTANT_ENCAPSED_STRING === $id ) && in_array( self::upper( $word ), $names, true ) ) {
+				return "$at names $word, which changes where WordPress loads code from";
+			}
+			if ( T_VARIABLE === $id && in_array( substr( $text, 1 ), [ 'GLOBALS', 'wp_filter', 'wp_theme_directories', 'wp_plugin_paths', 'wp_local_package', 'locale' ], true ) ) {
+				return "$at uses $text, which WordPress reads to find code";
+			}
+			if ( in_array( $id, [ T_EVAL, '`', '$' ], true ) || $call && in_array( $id, [ T_VARIABLE, T_CONSTANT_ENCAPSED_STRING ], true ) ) {
+				return "$at runs code this check can't read";
+			}
+			if ( T_STRING === $id && $call && in_array( self::lower( $text ), $deny, true ) ) {
+				return "$at calls $text(), which can load code or set what this check can't see";
+			}
+			if ( T_STRING === $id && $call && 'ini_set' === self::lower( $text ) ) {
+				$close = self::matching( $t, $i + 1, $n );
+				$args  = null === $close ? null : self::call_args( $t, $i, $close + 1 );
+				if ( ! $args || ! in_array( self::lower( (string) self::literal_arg( $t, $args[0] ) ), self::INI_KEYS, true ) ) {
+					return "$at calls ini_set() for a setting this check doesn't accept";
+				}
+			}
+			if ( ( T_STRING === $id && $call && 'define' === self::lower( $text ) || T_CONST === $id ) ) {
+				$close = T_CONST === $id ? null : self::matching( $t, $i + 1, $n );
+				$args  = null === $close ? null : self::call_args( $t, $i, $close + 1 );
+				$name  = T_CONST === $id ? ( isset( $t[ $i + 1 ] ) && T_STRING === $t[ $i + 1 ][0] ? $t[ $i + 1 ][1] : null ) : ( $args ? self::name_literal( $t, $args[0] ) : null );
+				if ( null === $name ) {
+					return "$at defines a constant whose name is not a plain string";
+				}
+				if ( 'ABSPATH' === self::upper( $name ) ) {
+					return "$at defines ABSPATH, which only WordPress's own guard in wp-config.php may";
+				}
+			}
+			if ( in_array( $id, [ T_REQUIRE, T_REQUIRE_ONCE, T_INCLUDE, T_INCLUDE_ONCE ], true ) ) {
+				$end = self::statement_end( $t, $i );
+				$inc = null === $end ? null : self::include_target( $t, $i, $end );
+				if ( null === $inc || 'blog-header' === $inc['kind'] ) {
+					return "$at loads a file this check can't name";
+				}
+				if ( 'settings' === $inc['kind'] ) {
+					return "$at loads wp-settings.php somewhere other than at the end of wp-config.php";
+				}
+				$error = self::follow( $t, $i, $inc, $env, $depth );
+				if ( null !== $error ) {
+					return $error;
+				}
+			}
+		}
+
+		return null;
 	}
 
 	/**
@@ -583,6 +699,14 @@ class Site_PHP_Compat_Layout {
 			}
 			if ( T_VARIABLE === $id && in_array( substr( $text, 1 ), [ 'GLOBALS', 'wp_filter', 'wp_theme_directories' ], true ) ) {
 				return "line $line uses $text";
+			}
+			// A name built at run time (`'WP_' . 'CONTENT_DIR'`) would get past the name check above.
+			if ( T_STRING === $id && 'define' === self::lower( $text ) && isset( $t[ $i + 1 ] ) && '(' === $t[ $i + 1 ][0] ) {
+				$close = self::matching( $t, $i + 1, $n );
+				$args  = null === $close ? null : self::call_args( $t, $i, $close + 1 );
+				if ( ! $args || null === self::name_literal( $t, $args[0] ) ) {
+					return "line $line defines a constant whose name is not a plain string";
+				}
 			}
 			if ( in_array( $id, [ T_EVAL, '`', '$' ], true ) || T_VARIABLE === $id && isset( $t[ $i + 1 ] ) && '(' === $t[ $i + 1 ][0] ) {
 				return "line $line runs code this check can't read";
@@ -767,6 +891,12 @@ class Site_PHP_Compat_Layout {
 			'T_STRING:dirname ( T_FILE:__file__ ) .'     => '__FILE__',
 			'T_STRING:dirname ( T_DIR:__dir__ ) .'       => 'dirname-2',
 		];
+		// An absolute literal: `require '/var/www/htdocs/wp-content/x.php';`.
+		if ( 1 === count( $ops ) && T_CONSTANT_ENCAPSED_STRING === $ops[0][0] ) {
+			$path = self::literal( $ops[0][1] );
+
+			return null === $path || '/' !== substr( $path, 0, 1 ) || preg_match( '#(^|/)\.\.?(/|$)#', $path ) || preg_match( '/[\x00-\x1F\x7F]/', $path ) ? null : [ 'kind' => 'file', 'base' => '/', 'path' => $path ];
+		}
 		foreach ( $bases as $prefix => $base ) {
 			if ( 0 !== strpos( $sig, $prefix . ' ' ) || 'ABSPATH' === $base && 'ABSPATH' !== $ops[0][1] ) {
 				continue;
@@ -782,7 +912,7 @@ class Site_PHP_Compat_Layout {
 			if ( 'ABSPATH' === $base && in_array( $path, [ 'wp-settings.php', '/wp-settings.php' ], true ) ) {
 				return [ 'kind' => 'settings', 'base' => $base, 'path' => $path ];
 			}
-			if ( in_array( $base, [ '__DIR__', '__FILE__' ], true ) && preg_match( '#^(?:/[A-Za-z0-9_-][A-Za-z0-9_.-]*)*/wp-blog-header\.php$#D', $path ) ) {
+			if ( in_array( $base, [ '__DIR__', '__FILE__' ], true ) && preg_match( '#^(?:/[A-Za-z0-9_-](?:[A-Za-z0-9_.-]*[A-Za-z0-9_-])?)*/wp-blog-header\.php$#D', $path ) ) {
 				return [ 'kind' => 'blog-header', 'base' => $base, 'path' => $path ];
 			}
 			return [ 'kind' => 'file', 'base' => $base, 'path' => $path ];
