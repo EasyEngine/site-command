@@ -16,8 +16,18 @@ class Site_PHP_Compat_Layout {
 		'WPMU_PLUGIN_DIR' => 'wp-content/mu-plugins',
 	];
 
-	/** Constants a config may never set: each moves core or theme code WordPress loads. */
-	const NEVER_DEFINED = [ 'WPINC', 'TEMPLATEPATH', 'STYLESHEETPATH', 'WP_LANG_DIR', 'PLUGINDIR', 'MUPLUGINDIR' ];
+	/**
+	 * Constants a config may never set: each moves core or theme code WordPress loads. Core (4.9–7.1) requires from
+	 * BLOCKS_PATH and GETID3_INCLUDEPATH with a guard or after its own define, so an earlier define wins; Akismet ships
+	 * with core.
+	 */
+	const NEVER_DEFINED = [ 'WPINC', 'TEMPLATEPATH', 'STYLESHEETPATH', 'WP_LANG_DIR', 'PLUGINDIR', 'MUPLUGINDIR', 'LANGDIR', 'BLOCKS_PATH', 'GETID3_INCLUDEPATH', 'AKISMET__PLUGIN_DIR' ];
+
+	/** Constants code is loaded from that a config may set only to a path inside the WordPress root (WP Super Cache's drop-in). */
+	const INSIDE_ROOT = [ 'WPCACHEHOME' ];
+
+	/** Constants core puts into the name of a file it loads (locale file, filesystem class, theme): a plain name only. */
+	const NAME_VALUES = [ 'WPLANG', 'FS_METHOD', 'WP_DEFAULT_THEME' ];
 
 	/** The only variables a config may assign (table prefix, multisite, EE's --cache and memcached object caches). */
 	const VARIABLES = [ 'table_prefix', 'base', 'redis_server', 'memcached_servers', 'forwarded_ips', 'http_x_headers', 'xffaddrs', 'batcache' ];
@@ -357,16 +367,30 @@ class Site_PHP_Compat_Layout {
 		// define( 'NAME', expr );
 		if ( self::is_word( $t, $s, 'define' ) ) {
 			$args = self::call_args( $t, $s, $end );
+			if ( null !== $args && 3 === count( $args ) && 1 === count( $args[2] ) && self::is_word( $t, $args[2][0], 'true' ) ) {
+				return self::unknown( $t, $i, $env, 'defines a case-insensitive constant, which PHP 8 no longer has' );
+			}
+			// A third argument of false is the default, ignored on every version.
+			if ( null !== $args && 3 === count( $args ) && 1 === count( $args[2] ) && self::is_word( $t, $args[2][0], 'false' ) ) {
+				array_pop( $args );
+			}
 			if ( null === $args || 2 !== count( $args ) ) {
 				return self::unknown( $t, $i, $env );
 			}
 			return self::define( $t, $args, $env, $state, $i );
 		}
-		// defined( 'NAME' ) || define( 'NAME', expr );
-		if ( self::is_word( $t, $s, 'defined' ) && isset( $t[ $s + 1 ] ) && '(' === $t[ $s + 1 ][0] ) {
+		// declare( strict_types = 0|1 );
+		if ( T_DECLARE === $t[ $i ][0] && $end === $i + 6 && self::is_word( $t, $i + 2, 'strict_types' ) && '(' === $t[ $i + 1 ][0] && '=' === $t[ $i + 3 ][0] && in_array( $t[ $i + 4 ][1], [ '0', '1' ], true ) && ')' === $t[ $i + 5 ][0] ) {
+			return null;
+		}
+		// defined( 'NAME' ) || define( 'NAME', expr );  ! defined( 'NAME' ) && define( 'NAME', expr );
+		$not = '!' === $t[ $s ][0] ? 1 : 0;
+		if ( self::is_word( $t, $s + $not, 'defined' ) && isset( $t[ $s + $not + 1 ] ) && '(' === $t[ $s + $not + 1 ][0] ) {
+			$s    += $not;
 			$close = self::matching( $t, $s + 1, $end );
 			$or    = null === $close ? null : $close + 1;
-			$args  = null === $or || ! in_array( $t[ $or ][0], [ T_BOOLEAN_OR, T_LOGICAL_OR ], true ) || ! self::is_word( $t, $or + 1, 'define' ) ? null : self::call_args( $t, $or + 1, $end );
+			$ops   = $not ? [ T_BOOLEAN_AND, T_LOGICAL_AND ] : [ T_BOOLEAN_OR, T_LOGICAL_OR ];
+			$args  = null === $or || ! in_array( $t[ $or ][0], $ops, true ) || ! self::is_word( $t, $or + 1, 'define' ) ? null : self::call_args( $t, $or + 1, $end );
 			$name  = null === $close || $close !== $s + 3 ? null : self::name_literal( $t, [ $s + 2 ] );
 			if ( null === $args || 2 !== count( $args ) || null === $name || self::name_literal( $t, $args[0] ) !== $name ) {
 				return self::unknown( $t, $i, $env );
@@ -436,6 +460,26 @@ class Site_PHP_Compat_Layout {
 			$value = self::signature( $t, $args[1] );
 			if ( ! $env['boot'] || 'ABSPATH' !== $state['guard'] || ! in_array( $value, [ "T_DIR . '/'", 'T_DIR . "/"', "T_STRING:dirname ( T_FILE ) . '/'", 'T_STRING:dirname ( T_FILE ) . "/"' ], true ) ) {
 				return self::unknown( $t, $at, $env, 'defines ABSPATH other than in WordPress\'s own guard' );
+			}
+			return null;
+		}
+		if ( in_array( $upper, self::NAME_VALUES, true ) ) {
+			$value = self::literal_arg( $t, $args[1] );
+			if ( null === $value || ! preg_match( '/^[A-Za-z0-9_.@-]*$/D', $value ) ) {
+				return "{$env['file']} line {$t[ $at ][2]} sets $name to something other than a plain name, which WordPress puts into the name of a file it loads";
+			}
+			return null;
+		}
+		if ( in_array( $upper, self::INSIDE_ROOT, true ) ) {
+			$raw  = self::path_value( $t, $args[1][0], end( $args[1] ) + 1, $env, $state['content'] );
+			$path = is_string( $raw ) && isset( $env['canon'] ) ? call_user_func( $env['canon'], $raw ) : $raw;
+			$site = false;
+			foreach ( [ '/var/www', $env['dir'], $env['root'] ] as $prefix ) {
+				$site = $site || is_string( $raw ) && 0 === strpos( $raw . '/', $prefix . '/' );
+			}
+			// Inside the WordPress root the scan reads it; a path outside the site (left from another host) isn't there.
+			if ( ! is_string( $path ) || $site && 0 !== strpos( $path . '/', $env['root'] . '/' ) ) {
+				return "{$env['file']} line {$t[ $at ][2]} sets $name, which code is loaded from, to a path outside {$env['root']}";
 			}
 			return null;
 		}
@@ -581,7 +625,7 @@ class Site_PHP_Compat_Layout {
 			$ops = [ '.', '?', ':', '!', ',', '-', '+', '*', '/', '%', '|', '&', '^', '~', '<', '>', '@', ')', ']', '(', '[',
 				T_IS_EQUAL, T_IS_NOT_EQUAL, T_IS_IDENTICAL, T_IS_NOT_IDENTICAL, T_IS_SMALLER_OR_EQUAL, T_IS_GREATER_OR_EQUAL,
 				T_BOOLEAN_AND, T_BOOLEAN_OR, T_LOGICAL_AND, T_LOGICAL_OR, T_LOGICAL_XOR, T_COALESCE, T_DOUBLE_ARROW, T_SL, T_SR,
-				T_INT_CAST, T_BOOL_CAST, T_STRING_CAST, T_DOUBLE_CAST, T_SPACESHIP, T_POW ];
+				T_INT_CAST, T_BOOL_CAST, T_STRING_CAST, T_DOUBLE_CAST, T_ARRAY_CAST, T_SPACESHIP, T_POW ];
 			// PHP 8.1 tokenises `&` by what follows it.
 			foreach ( [ 'T_AMPERSAND_NOT_FOLLOWED_BY_VAR_OR_VARARG', 'T_AMPERSAND_FOLLOWED_BY_VAR_OR_VARARG' ] as $name ) {
 				if ( defined( $name ) ) {
@@ -596,6 +640,10 @@ class Site_PHP_Compat_Layout {
 		for ( $i = $from; $i < $to; $i++ ) {
 			list( $id, $text, $line ) = $t[ $i ];
 			$call = isset( $t[ $i + 1 ] ) && $i + 1 < $to && '(' === $t[ $i + 1 ][0];
+			// `&` only as bitwise and: after `=`, `(`, `,` or `=>` it takes a reference, which writes through to any global.
+			if ( '&' === $text && ( $i === $from || ! in_array( $t[ $i - 1 ][0], $after_value, true ) ) ) {
+				return "{$env['file']} line $line takes a reference with &, which this check doesn't accept in a config";
+			}
 			if ( in_array( $id, [ T_CONSTANT_ENCAPSED_STRING, T_LNUMBER, T_DNUMBER, T_DIR, T_FILE, T_LINE ], true ) ) {
 				if ( $call ) {
 					return "{$env['file']} line $line calls a string as a function";
@@ -834,7 +882,8 @@ class Site_PHP_Compat_Layout {
 		}
 		$name = substr( $t[ $arg[0] ][1], 1, -1 );
 
-		return preg_match( '/^[A-Za-z_][A-Za-z0-9_]*$/D', $name ) ? $name : null;
+		// Trailing spaces: the handbook's own `'FTP_PLUGIN_DIR '` (a different constant, so harmless).
+		return preg_match( '/^[A-Za-z_][A-Za-z0-9_]* *$/D', $name ) ? $name : null;
 	}
 
 	/**
