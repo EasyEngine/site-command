@@ -564,9 +564,10 @@ class Site_PHP_Compat_Layout {
 			'dirname-2' => dirname( $env['dir'] ),
 			'/'         => '',
 		][ $inc['base'] ];
-		$path = self::normalise( $base . '/' . ltrim( $inc['path'], '/' ) );
+		// No textual normalising: the literal has no `.` or `..` segment, and resolve() follows links like PHP.
+		$path = $base . '/' . ltrim( $inc['path'], '/' );
 		// PHP joins `__DIR__ . 'x.php'` without a slash: a sibling of the directory, never what's meant here.
-		if ( null === $path || '' === $inc['path'] || '/' !== $inc['path'][0] && 'ABSPATH' !== $inc['base'] || '.php' !== substr( $path, -4 ) ) {
+		if ( '' === $inc['path'] || '/' !== $inc['path'][0] && 'ABSPATH' !== $inc['base'] || '.php' !== substr( $path, -4 ) ) {
 			return self::unknown( $t, $i, $env, 'loads a file this check can\'t name' );
 		}
 		// An absolute path is the container's: /var/www is the site's app/.
@@ -861,7 +862,8 @@ class Site_PHP_Compat_Layout {
 			return false;
 		}
 
-		return self::normalise( $path );
+		// Returned as joined: canon() resolves it the way PHP does (links first); never collapsed as text.
+		return $path;
 	}
 
 	/**
