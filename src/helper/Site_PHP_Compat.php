@@ -359,6 +359,11 @@ class Site_PHP_Compat {
 		if ( false === $code ) {
 			return $this->doc( 'tool_error', "can't resolve {$site_data->site_fs_path}/app, the link to the site's code" );
 		}
+		// Read first so a layout this check refuses is answered at once, without a lock or a pull; read again under the lock.
+		$layout = $this->resolve_layout( $site_data, $code );
+		if ( null !== $layout ) {
+			return $layout;
+		}
 		if ( false !== strpbrk( $code, ',"' ) ) {
 			return $this->doc( 'tool_error', 'the site code path has a comma or a quote' );
 		}
@@ -501,6 +506,11 @@ class Site_PHP_Compat {
 		}
 		if ( false === $code ) {
 			return $this->doc( 'tool_error', "can't resolve {$site_data->site_fs_path}/app, the link to the site's code" );
+		}
+		// Read first so a layout this check refuses is answered at once, without a lock or a pull; read again under the lock.
+		$layout = $this->resolve_layout( $site_data, $code );
+		if ( null !== $layout ) {
+			return $layout;
 		}
 		if ( false !== strpbrk( $code, ',"' ) ) {
 			return $this->doc( 'tool_error', 'the site code path has a comma or a quote' );
@@ -1189,6 +1199,13 @@ class Site_PHP_Compat {
 			if ( microtime( true ) > $deadline ) {
 				return 'it takes more than ' . self::WALK_SECONDS . ' s to list';
 			}
+			// A long walk still answers a signal or a --cancel (run() reports cancelled then).
+			if ( function_exists( 'pcntl_signal_dispatch' ) ) {
+				null === $this->dispatch ? pcntl_signal_dispatch() : call_user_func( $this->dispatch );
+			}
+			if ( $this->cancel_requested() ) {
+				return 'a cancel was requested';
+			}
 			$entries = @scandir( $dir ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is handled.
 			if ( false === $entries ) {
 				return self::clean( $dir ) . ' can\'t be listed';
@@ -1307,7 +1324,8 @@ class Site_PHP_Compat {
 		$off = in_array( strtolower( $value ), [ '', 'none', 'off', 'no', 'false', 'null', '0' ], true );
 		switch ( $key ) {
 			case 'include':
-				return 'etc/php-fpm.d/*.conf' === $value;
+				// php-fpm.conf of EE's images: relative before PHP 8.6, absolute from 8.6.
+				return in_array( $value, [ 'etc/php-fpm.d/*.conf', '/usr/local/etc/php-fpm.d/*.conf' ], true );
 			case 'security.limit_extensions':
 				return '.php' === $value;
 			case 'user_ini.filename':
@@ -1392,9 +1410,10 @@ class Site_PHP_Compat {
 				return "sets {$m[1]} to $value";
 			}
 		}
+		// nginx's own config directory (old images used /etc/nginx) is EE's; anything the site's code can write is not.
 		preg_match_all( '/(?:^|[;{}])\s*include\s+([^;\s]+)\s*;/', $text, $all, PREG_SET_ORDER );
 		foreach ( $all as $m ) {
-			if ( ! in_array( $m[1], [ 'mime.types', 'fastcgi_params', 'fastcgi.conf', '/usr/local/openresty/nginx/conf/conf.d/main.conf', '/usr/local/openresty/nginx/conf/custom/*.conf' ], true ) ) {
+			if ( preg_match( '#/var/www|\.\.|\$|^["\']#', $m[1] ) ) {
 				return "includes {$m[1]}";
 			}
 		}
@@ -1454,6 +1473,8 @@ class Site_PHP_Compat {
 			'/usr/local/etc'              => realpath( $site_data->site_fs_path . '/config/php' ),
 			'/var/log/php'                => realpath( $site_data->site_fs_path . '/logs/php' ),
 			'/etc/easyengine/admin-tools' => realpath( $site_data->site_fs_path . '/config/admin-tools' ),
+			// macOS mounts only custom.ini instead of all of config/php.
+			'/usr/local/etc/php/php/conf.d/custom.ini' => realpath( $site_data->site_fs_path . '/config/php/php/conf.d/custom.ini' ),
 		];
 		foreach ( $mounts as $mount ) {
 			$dst = isset( $mount['Destination'] ) ? rtrim( (string) $mount['Destination'], '/' ) : '';
