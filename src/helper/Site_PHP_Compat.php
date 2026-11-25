@@ -107,6 +107,9 @@ class Site_PHP_Compat {
 	/** Longest php-compat lists the site's files for (PHP outside WordPress, links, .user.ini files). */
 	const WALK_SECONDS = 120;
 
+	// tool_error detail when the site's directory or app/ is missing or its lock can't be opened (a delete in progress).
+	const SITE_GONE = 'the site is being deleted or its files are missing';
+
 	// Directory names the scanner searches by name only (its manifest's sniff.skipped_dirs); the sniff doesn't apply below them.
 	const SCANNER_SKIP_NAMES = [ 'uploads', 'cache', 'upgrade', 'upgrade-temp-backup', 'node_modules', '.git' ];
 
@@ -163,6 +166,9 @@ class Site_PHP_Compat {
 
 	/** @var string|null Real path of the wp-config.php WordPress loads when that makes EE's app/wp-config.php unused (shape (c)). */
 	protected $ee_config_unused_by;
+
+	/** @var bool Whether the last lock_site() couldn't open the site directory (gone during a delete). */
+	protected $lock_unopenable = false;
 
 	/** @var array|null The cross-check of the scanner's manifest (cross_check()). */
 	protected $cross;
@@ -419,8 +425,8 @@ class Site_PHP_Compat {
 		}
 		$code = $this->code_dir( $site_data->site_fs_path );
 		if ( null === $code ) {
-			$this->looked_in = $site_data->site_fs_path . '/app';
-			return $this->doc( 'no_code_found' );
+			// R48: delete removes the site's files before its record, so no app/ is never "no code found".
+			return $this->doc( 'tool_error', self::SITE_GONE );
 		}
 		if ( false === $code ) {
 			return $this->doc( 'tool_error', "can't resolve {$site_data->site_fs_path}/app, the link to the site's code" );
@@ -437,6 +443,10 @@ class Site_PHP_Compat {
 		// Two EE runs can't both pass the container check below and then clear each other's directory as a leftover.
 		if ( ! $this->lock_site( $site_data->site_fs_path ) ) {
 			return $this->restore_running( $site_data->site_fs_path ) ? $this->doc( 'tool_error', 'a restore of the site is running' ) : $this->doc( 'busy' );
+		}
+		// R48: a site directory that can't be opened is being deleted (delete removes it before the record); never scan unlocked.
+		if ( $this->lock_unopenable ) {
+			return $this->doc( 'tool_error', self::SITE_GONE );
 		}
 		$parent = $this->temp_parent();
 		if ( null !== $parent ) {
@@ -577,8 +587,8 @@ class Site_PHP_Compat {
 		}
 		$code = $this->code_dir( $site_data->site_fs_path );
 		if ( null === $code ) {
-			$this->looked_in = $site_data->site_fs_path . '/app';
-			return $this->doc( 'no_code_found' );
+			// R48: delete removes the site's files before its record, so no app/ is never "no code found".
+			return $this->doc( 'tool_error', self::SITE_GONE );
 		}
 		if ( false === $code ) {
 			return $this->doc( 'tool_error', "can't resolve {$site_data->site_fs_path}/app, the link to the site's code" );
@@ -2567,7 +2577,8 @@ class Site_PHP_Compat {
 	 */
 	protected function lock_site( $site_fs_path ) {
 		// Close-on-exec: a child (docker pull, rm) must not keep the lock after this process is killed.
-		$handle = @fopen( $site_fs_path, 're' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- handled below.
+		$handle                = @fopen( $site_fs_path, 're' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- handled below.
+		$this->lock_unopenable = false === $handle;
 		if ( false === $handle ) {
 			EE::debug( "Could not open $site_fs_path to lock it; relying on the container name." );
 
