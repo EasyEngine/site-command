@@ -1056,19 +1056,8 @@ class Site_PHP_Compat {
 			if ( null !== $detail ) {
 				return $this->doc( 'tool_error', $detail );
 			}
-			// WP-CLI configs anywhere in app/ but old releases (not served) and the www-data home's tool dirs.
-			$old                = $this->old_release_dirs( $code );
-			$this->wp_cli_files = [];
-			$error              = $this->walk_tree(
-				$code,
-				function ( $path, $name, $type ) use ( $code, $old ) {
-					if ( in_array( $name, self::WP_CLI_CONFIGS, true ) ) {
-						$this->wp_cli_files[] = substr( $path, strlen( $code ) + 1 );
-					}
-					return 'dir' === $type && ! isset( $old[ $path ] ) && ! ( dirname( $path ) === $code && in_array( $name, self::HOME_DOTDIRS, true ) );
-				}
-			);
-			$detail = null !== $error ? "can't look through {$app} for WP-CLI configs: $error" : $this->wp_cli_config_check( $code, $this->cross_layout['top'], $app );
+			$this->wp_cli_files = self::wp_cli_chain( $code, [ $rel, $this->cross_layout['top'] ] );
+			$detail             = $this->wp_cli_config_check( $code, $this->cross_layout['top'], $app );
 			return null === $detail ? null : $this->doc( 'tool_error', $detail );
 		}
 
@@ -1119,12 +1108,12 @@ class Site_PHP_Compat {
 			'config'  => $this->ee_config_unused_by,
 			'links'   => $layout_links,
 		];
-		$this->wp_cli_files = [];
-		$walk               = $this->app_walk( $code, $rel, $root, $layout['abspath'], $allowed );
+		$walk = $this->app_walk( $code, $rel, $root, $layout['abspath'], $allowed );
 		if ( is_string( $walk ) ) {
 			return $this->doc( 'tool_error', str_replace( "$code/", $app, $walk ) );
 		}
-		$detail = $this->wp_cli_config_check( $code, $layout['abspath'], $app );
+		$this->wp_cli_files = self::wp_cli_chain( $code, [ $rel, $root, null === $layout['abspath'] ? null : substr( $layout['abspath'], strlen( $code ) + 1 ), $this->cross_layout['top'] ] );
+		$detail             = $this->wp_cli_config_check( $code, $layout['abspath'], $app );
 		if ( null !== $detail ) {
 			return $this->doc( 'tool_error', $detail );
 		}
@@ -1348,9 +1337,6 @@ class Site_PHP_Compat {
 				$inside = null !== $abspath && 0 === strpos( $path . '/', $abspath . '/' );
 				if ( '.user.ini' === $name ) {
 					$user_ini[] = [ $path, $type ];
-				}
-				if ( in_array( $name, self::WP_CLI_CONFIGS, true ) ) {
-					$this->wp_cli_files[] = substr( $path, strlen( $code ) + 1 );
 				}
 				if ( 'link' === $type ) {
 					// A log or output file sent to /dev/null, stdout or stderr: exact targets only, never a code name.
@@ -2810,7 +2796,38 @@ class Site_PHP_Compat {
 	}
 
 	/**
-	 * WP-CLI configs (every wp-cli.yml and wp-cli.local.yml found in app/, and the www-data user's .wp-cli/config.yml) may
+	 * The WP-CLI configs `wp` reads when run from the site root, the served root or the WordPress root: wp-cli.yml and
+	 * wp-cli.local.yml in each directory from app/ down to each of them (as written and as resolved, since WP-CLI looks
+	 * upwards from the real working directory). Deeper ones apply only to a `wp` run from inside them (residual R-WPCLI-CWD).
+	 *
+	 * @param string $code Real path of the site's app/.
+	 * @param array  $dirs Directories, relative to app/ or real host paths; null entries are skipped.
+	 *
+	 * @return string[] Config files relative to app/.
+	 */
+	protected static function wp_cli_chain( $code, array $dirs ) {
+		$files = [];
+		foreach ( $dirs as $dir ) {
+			if ( null === $dir ) {
+				continue;
+			}
+			$dir = 0 === strpos( $dir . '/', $code . '/' ) ? substr( $dir, strlen( $code ) + 1 ) : $dir;
+			for ( $dir = trim( (string) $dir, '/' ); ; $dir = dirname( $dir ) ) {
+				$dir = '.' === $dir ? '' : $dir;
+				foreach ( self::WP_CLI_CONFIGS as $name ) {
+					$files[] = ltrim( "$dir/$name", '/' );
+				}
+				if ( '' === $dir ) {
+					break;
+				}
+			}
+		}
+
+		return array_values( array_unique( $files ) );
+	}
+
+	/**
+	 * WP-CLI configs (wp_cli_chain(), and the www-data user's .wp-cli/config.yml) may
 	 * hold only blank lines, comments and top-level `key: scalar` lines for path, url, user, color, quiet and debug. `path`
 	 * must lead to the WordPress root this check scans (php sites: the served root). Anything else (exec, require, inherit,
 	 * aliases, blocks) can make WP-CLI run code this check doesn't follow; there's no YAML parser in the phar.
@@ -2836,14 +2853,25 @@ class Site_PHP_Compat {
 			}
 			$text = str_replace( [ "\r\n", "\r" ], "\n", $found['source'] );
 			$text = 0 === strpos( $text, "\xEF\xBB\xBF" ) ? substr( $text, 3 ) : $text;
+			$list = false;
 			foreach ( explode( "\n", $text ) as $n => $line ) {
 				if ( '' === trim( $line ) || '#' === substr( ltrim( $line ), 0, 1 ) ) {
+					continue;
+				}
+				// apache_modules: a block or flow list of plain module names (mod_rewrite); nothing else may be nested.
+				$item = '[A-Za-z0-9_.-]+';
+				if ( $list && preg_match( '/^[ \t]+-[ \t]+' . $item . '[ \t]*(?:[ \t]#.*)?$/D', $line ) ) {
+					continue;
+				}
+				$list = false;
+				if ( preg_match( '/^apache_modules:[ \t]*(?:\[[ \t]*(?:' . $item . '[ \t]*(?:,[ \t]*' . $item . '[ \t]*)*)?\])?[ \t]*(?:[ \t]#.*)?$/D', $line, $am ) ) {
+					$list = false === strpos( $line, '[' );
 					continue;
 				}
 				// A plain YAML scalar: no flow/anchor/tag/alias start, `:` only when not followed by a blank, ` #` starts a comment.
 				$scalar = '(?:\'[^\']*\'|"[^"\\\\]*"|[^\s\'"{}\[\],&*!|>%@`#:](?:[^\s#:]|:(?=\S)|[ \t]+(?=[^\s#]))*)';
 				if ( ! preg_match( '/^(' . implode( '|', self::WP_CLI_KEYS ) . '):(?:[ \t]+(' . $scalar . '))?[ \t]*(?:[ \t]#.*)?$/D', $line, $m ) ) {
-					return sprintf( '%s%s line %d isn\'t a WP-CLI setting this check accepts (only %s, as plain values): %s', $app, $file, $n + 1, implode( ', ', self::WP_CLI_KEYS ), self::clean( substr( trim( $line ), 0, 60 ) ) );
+					return sprintf( '%s%s line %d isn\'t a WP-CLI setting this check accepts (only %s as plain values, and apache_modules): %s', $app, $file, $n + 1, implode( ', ', self::WP_CLI_KEYS ), self::clean( substr( trim( $line ), 0, 60 ) ) );
 				}
 				if ( 'path' !== $m[1] ) {
 					continue;
