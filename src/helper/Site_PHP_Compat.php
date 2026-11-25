@@ -161,6 +161,9 @@ class Site_PHP_Compat {
 	/** @var array|null What resolve_layout() found, for the cross-check: wp, and as real host paths scan (the scanner's root), top, abspath, a2 index. */
 	protected $cross_layout;
 
+	/** @var string|null Real path of the wp-config.php WordPress loads when that makes EE's app/wp-config.php unused (shape (c)). */
+	protected $ee_config_unused_by;
+
 	/** @var array|null The cross-check of the scanner's manifest (cross_check()). */
 	protected $cross;
 
@@ -1035,8 +1038,9 @@ class Site_PHP_Compat {
 		if ( null !== $index ) {
 			$allowed[] = $index;
 		}
-		$this->wp_version  = null;
-		$this->current_php = isset( $site_data->php_version ) && preg_match( '/^\d+\.\d+$/D', (string) $site_data->php_version ) ? (string) $site_data->php_version : null;
+		$this->wp_version          = null;
+		$this->ee_config_unused_by = null;
+		$this->current_php         = isset( $site_data->php_version ) && preg_match( '/^\d+\.\d+$/D', (string) $site_data->php_version ) ? (string) $site_data->php_version : null;
 		if ( null !== $layout['abspath'] ) {
 			// Core isn't scanned: its version decides whether it supports the target PHP.
 			$file    = $this->site_file( $code, substr( $layout['abspath'], strlen( $code ) + 1 ) . '/wp-includes/version.php', self::PHP_SOURCE_MAX );
@@ -1058,6 +1062,8 @@ class Site_PHP_Compat {
 			'abspath' => $layout['abspath'],
 			// (d): the served index.php of layout a2, which passed WordPress's own loader recogniser above.
 			'index'   => $root !== $rel ? $index : null,
+			// (c): the config WordPress loads instead of EE's app/wp-config.php.
+			'config'  => $this->ee_config_unused_by,
 		];
 		$walk = $this->app_walk( $code, $rel, $root, $layout['abspath'], $allowed );
 		if ( is_string( $walk ) ) {
@@ -1225,6 +1231,15 @@ class Site_PHP_Compat {
 			if ( 'ok' === $parent['state'] ) {
 				$read[] = $parent['real'];
 			}
+		}
+		// (c) EE's app/wp-config.php is unused when WordPress's own lookup (its root, else the real parent) loads another file.
+		$real_root = substr( $abspath, strlen( $code ) + 1 );
+		$parent    = dirname( $real_root );
+		$ee_config = "$code/wp-config.php";
+		$stat      = @lstat( $ee_config ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is handled.
+		if ( in_array( $config[0], [ "$real_root/wp-config.php", ( '.' === $parent ? '' : "$parent/" ) . 'wp-config.php' ], true ) && $file['real'] !== $ee_config && false !== $stat && 0100000 === ( $stat['mode'] & 0170000 ) ) {
+			$read[]                    = $ee_config;
+			$this->ee_config_unused_by = $file['real'];
 		}
 
 		return $read;
@@ -1616,8 +1631,10 @@ class Site_PHP_Compat {
 			$old = $listed;
 		}
 
-		// (c) EE's app/wp-config.php when the WordPress root has its own, which WordPress loads first.
-		$unused_config = null !== $abspath && $abspath !== $code && is_file( "$abspath/wp-config.php" ) ? "$code/wp-config.php" : null;
+		// (c) EE's app/wp-config.php when WordPress loads another config, validated before the scan and read by the scanner.
+		$loaded        = isset( $layout['config'] ) ? $layout['config'] : null;
+		$loaded_stat   = null === $loaded ? false : @lstat( $loaded ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is handled.
+		$unused_config = null !== $abspath && $abspath !== $code && false !== $loaded_stat && isset( $checked[ $loaded_stat['dev'] . ':' . $loaded_stat['ino'] ] ) ? "$code/wp-config.php" : null;
 		$index         = $layout['index'];
 		$exempt        = function ( $path ) use ( $code, $old, $abspath, $core_dirs, $core_files, $unused_config, $index ) {
 			if ( $old && null !== self::under_any( $path, $code, $old ) ) {
