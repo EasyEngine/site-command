@@ -107,6 +107,9 @@ class Site_PHP_Compat {
 	/** Longest php-compat lists the site's files for (PHP outside WordPress, links, .user.ini files). */
 	const WALK_SECONDS = 120;
 
+	// Directory names the scanner searches by name only (its manifest's sniff.skipped_dirs); the sniff doesn't apply below them.
+	const SCANNER_SKIP_NAMES = [ 'uploads', 'cache', 'upgrade', 'upgrade-temp-backup', 'node_modules', '.git' ];
+
 	/** EE's own config/nginx/custom/admin-tools.conf (site-type-wp templates/config/nginx/admin-tools.conf.mustache). */
 	const ADMIN_TOOLS_CONF = "# ee-admin pages\nlocation ^~ /ee-admin/ {\n\troot /var/www/htdocs ;\n\tlocation ~ \\.php$ {\n\t\ttry_files \$uri =404;\n\t\tinclude fastcgi_params;\n\t\tfastcgi_pass php;\n\t}\n}\n";
 
@@ -155,7 +158,7 @@ class Site_PHP_Compat {
 	/** @var array|null WordPress's version ( version, branch ) read from the scanned root's wp-includes/version.php. */
 	protected $wp_version;
 
-	/** @var array|null What resolve_layout() found, for the cross-check: top, abspath, a2 index (real host paths). */
+	/** @var array|null What resolve_layout() found, for the cross-check: wp, and as real host paths scan (the scanner's root), top, abspath, a2 index. */
 	protected $cross_layout;
 
 	/** @var array|null The cross-check of the scanner's manifest (cross_check()). */
@@ -1012,7 +1015,7 @@ class Site_PHP_Compat {
 					return 'dir' === $type;
 				}
 			);
-			$this->cross_layout = [ 'top' => self::resolve_in( $code, $rel ), 'abspath' => null, 'index' => null ];
+			$this->cross_layout = [ 'wp' => false, 'scan' => $code, 'top' => self::resolve_in( $code, $rel ), 'abspath' => null, 'index' => null ];
 			$detail             = null !== $error ? "can't look through {$app}htdocs for .user.ini files: $error" : $this->prepend_check( $site_data, $code, $user_ini, null );
 			return null === $detail ? null : $this->doc( 'tool_error', $detail );
 		}
@@ -1049,6 +1052,8 @@ class Site_PHP_Compat {
 			$allowed = array_merge( $allowed, $config );
 		}
 		$this->cross_layout = [
+			'wp'      => true,
+			'scan'    => self::resolve_in( $code, $root ),
 			'top'     => self::resolve_in( $code, $rel ),
 			'abspath' => $layout['abspath'],
 			// (d): the served index.php of layout a2, which passed WordPress's own loader recogniser above.
@@ -1344,10 +1349,10 @@ class Site_PHP_Compat {
 	}
 
 	/**
-	 * Compares every code file in app/ with the scanner's manifest (/out/manifest.json): each must be in `checked`, in or
-	 * under `not_checked`, or one of the exact exempt shapes (INTERFACE.md "Cross-check"): (a) old releases when nginx serves
-	 * current/ or deeper, (b) the live WordPress root's core files, (c) EE's unused app/wp-config.php beside the root's own,
-	 * (d) the served index.php of layout a2. Code is what the manifest says: its extensions, and its content sniff.
+	 * Compares every code file in app/ with the scanner's manifest (/out/manifest.json, INTERFACE.md "File manifest"):
+	 * each must be in `checked` or `not_checked` (by inode, or under a not_checked directory), or one of the exact exempt
+	 * shapes of "Cross-check". Code is what the manifest says it is; the manifest's own exemptions count only where EE's
+	 * shape check agrees.
 	 *
 	 * @param string $code Real path of the site's app/.
 	 * @param string $out  The scan's /out directory on the host.
@@ -1356,57 +1361,70 @@ class Site_PHP_Compat {
 	 */
 	protected function cross_check( $code, $out ) {
 		$result = [ 'manifest' => false, 'unlisted' => [], 'unlisted_more' => 0, 'error' => null ];
-		$file   = $out . '/manifest.json';
-		clearstatcache( true, $file );
-		$raw = is_file( $file ) && ! is_link( $file ) && filesize( $file ) <= self::REPORT_MAX ? @file_get_contents( $file ) : false; // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is handled.
-		$m   = false === $raw ? null : json_decode( $raw, true );
-		$ok  = is_array( $m ) && isset( $m['v'], $m['code_extensions'], $m['checked'], $m['not_checked'] ) && 1 === $m['v'] && array_key_exists( 'sniff', $m )
-			&& is_array( $m['code_extensions'] ) && is_array( $m['checked'] ) && is_array( $m['not_checked'] );
-		foreach ( $ok ? array_merge( $m['code_extensions'], $m['checked'], $m['not_checked'] ) : [] as $value ) {
-			$ok = $ok && is_string( $value ) && '' !== $value;
+		$m      = $this->read_manifest( $out );
+		if ( ! is_array( $m ) ) {
+			$result['error'] = $m;
+			return $result;
 		}
-		$sniff = $ok ? self::manifest_sniff( $m['sniff'] ) : false;
-		if ( ! $ok || false === $sniff ) {
+		$rules = $this->manifest_rules( $code, $m );
+		if ( is_string( $rules ) ) {
+			$result['error'] = $rules;
 			return $result;
 		}
 		$result['manifest'] = true;
-		$insensitive        = ! empty( $m['extensions_case_insensitive'] );
-		$extensions         = array_map(
-			function ( $ext ) {
-				return preg_quote( $ext, '/' );
-			},
-			$m['code_extensions']
-		);
-		$code_name          = '/\.(?:' . implode( '|', $extensions ) . ')$/D' . ( $insensitive ? 'i' : '' );
-		$checked            = array_flip( $m['checked'] );
-		$not_checked        = $m['not_checked'];
-		$exempt             = $this->cross_exempt( $code );
 		$unlisted           = [];
 		$count              = 0;
-		$result['error']    = $this->walk_tree(
+		$seen               = [];
+		$searchable         = [ $code => self::uid33_may( @lstat( $code ), 0100 ) ]; // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is handled.
+		$covered            = function ( $path, array $stat, $phar ) use ( $code, $rules ) {
+			$ino = $stat['dev'] . ':' . $stat['ino'];
+			if ( ( ! $phar && isset( $rules['checked'][ $ino ] ) ) || isset( $rules['nc_files'][ $ino ] ) || null !== self::under_any( $path, $code, $rules['nc_dirs'] ) ) {
+				return true;
+			}
+			return call_user_func( $rules['exempt'], $path );
+		};
+		$walk               = $this->walk_tree(
 			$code,
-			function ( $path, $name, $type ) use ( $code, $code_name, $sniff, $checked, $not_checked, $exempt, &$unlisted, &$count ) {
+			function ( $path, $name, $type, $stat = false ) use ( $code, $rules, $covered, &$searchable, &$seen, &$unlisted, &$count ) {
 				if ( 'dir' === $type ) {
+					$searchable[ $path ] = $searchable[ dirname( $path ) ] && self::uid33_may( $stat, 0100 );
 					return true;
 				}
-				if ( 'file' !== $type || ! ( preg_match( $code_name, $name ) || self::sniffed( $path, $name, $sniff ) ) ) {
+				if ( 'link' === $type ) {
+					// A code-named link runs its target as code, whatever the target is called.
+					if ( ! preg_match( $rules['code_name'], $name ) && ! preg_match( $rules['phar'], $name ) ) {
+						return false;
+					}
+					$target = self::resolve_in( $code, substr( $path, strlen( $code ) + 1 ) );
+					$stat   = null === $target ? false : @lstat( $target ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is handled.
+					if ( false === $stat || 0100000 !== ( $stat['mode'] & 0170000 ) ) {
+						return false;
+					}
+					$phar = 1 === preg_match( $rules['phar'], $name ) || 1 === preg_match( $rules['phar'], basename( $target ) );
+					$path = $target;
+				} elseif ( 'file' !== $type ) {
 					return false;
-				}
-				$container = '/var/www' . substr( $path, strlen( $code ) );
-				if ( isset( $checked[ $container ] ) || call_user_func( $exempt, $path ) ) {
-					return false;
-				}
-				foreach ( $not_checked as $entry ) {
-					if ( $entry === $container || '/' === substr( $entry, -1 ) && 0 === strpos( $container, $entry ) ) {
+				} else {
+					$phar = 1 === preg_match( $rules['phar'], $name );
+					if ( ! $phar && ! preg_match( $rules['code_name'], $name ) && ! $this->manifest_sniffs( $path, $name, $stat, $searchable[ dirname( $path ) ], $rules ) ) {
 						return false;
 					}
 				}
+				// A file reached again (through a link, or a hard link) counts once.
+				$ino = $stat['dev'] . ':' . $stat['ino'];
+				if ( isset( $seen[ $ino ] ) || $covered( $path, $stat, $phar ) ) {
+					return false;
+				}
+				$seen[ $ino ] = true;
 				if ( ++$count <= self::NOT_CHECKED_STDOUT ) {
-					$unlisted[] = self::clean( $container );
+					$unlisted[] = self::clean( '/var/www' . substr( $path, strlen( $code ) ) );
 				}
 				return false;
 			}
 		);
+		if ( null !== $walk ) {
+			$result['error'] = "can't list the site's files to compare with what the scanner read: $walk";
+		}
 		$result['unlisted']      = $unlisted;
 		$result['unlisted_more'] = max( 0, $count - self::NOT_CHECKED_STDOUT );
 
@@ -1414,75 +1432,175 @@ class Site_PHP_Compat {
 	}
 
 	/**
-	 * The manifest's content sniff, validated: null (extensions only), [ bytes, regex, exclude, scope ], or false when it
-	 * is something this check can't apply exactly.
+	 * Reads and validates /out/manifest.json; paths written `b64:` are decoded.
 	 *
-	 * @param mixed $sniff Manifest value.
+	 * @param string $out The scan's /out directory on the host.
 	 *
-	 * @return array|null|false
+	 * @return array|string|null The manifest; null when there is none; why it can't be used.
 	 */
-	protected static function manifest_sniff( $sniff ) {
-		if ( null === $sniff ) {
+	protected function read_manifest( $out ) {
+		$file = $out . '/manifest.json';
+		clearstatcache( true, $file );
+		if ( false === @lstat( $file ) ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- none is an older scanner.
 			return null;
 		}
-		if ( ! is_array( $sniff ) || ! isset( $sniff['bytes'], $sniff['regex'] ) || ! is_int( $sniff['bytes'] ) || $sniff['bytes'] < 1 || ! is_string( $sniff['regex'] ) || false === @preg_match( $sniff['regex'], '' ) ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- an invalid pattern is false.
-			return false;
+		$bad = "the scanner's list of the files it read can't be used";
+		try {
+			self::raise_memory_limit();
+			$raw = \EE\Site\Utils\get_container_file_contents( $file, $out, self::REPORT_MAX );
+			if ( ! $this->make_room( self::decode_cost( $raw ) ) ) {
+				return "$bad: it needs more memory to read than is available";
+			}
+			$m = json_decode( $raw, true );
+		} catch ( \Exception $e ) {
+			return "$bad: " . self::clean( $e->getMessage() );
 		}
-		$exclude = isset( $sniff['exclude_extensions'] ) ? $sniff['exclude_extensions'] : [];
-		$scope   = isset( $sniff['scope'] ) ? $sniff['scope'] : 'all';
-		if ( ! is_array( $exclude ) || 'all' !== $scope ) {
-			// Only the scope this check knows how to reproduce; anything else fails closed (no positive verdict).
-			return false;
+		if ( ! is_array( $m ) || ! array_key_exists( 'v', $m ) ) {
+			return "$bad: it isn't valid";
 		}
-		foreach ( $exclude as $ext ) {
-			if ( ! is_string( $ext ) ) {
+		if ( 1 !== $m['v'] ) {
+			return "$bad: its version isn't one this check knows";
+		}
+		$strings = function ( $list ) {
+			if ( ! is_array( $list ) || array_values( $list ) !== $list ) {
 				return false;
+			}
+			foreach ( $list as $item ) {
+				if ( ! is_string( $item ) || '' === $item ) {
+					return false;
+				}
+			}
+			return true;
+		};
+		$regex   = function ( $value ) {
+			return is_string( $value ) && false !== @preg_match( $value, '' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- an invalid pattern is false.
+		};
+		$sniff   = isset( $m['sniff'] ) ? $m['sniff'] : null;
+		$core    = isset( $m['core'] ) ? $m['core'] : null;
+		$valid   = isset( $m['code_extensions'], $m['phar_regex'], $m['roots'], $m['excluded'], $m['old_releases'], $m['checked'], $m['not_checked'] )
+			&& $strings( $m['code_extensions'] ) && $m['code_extensions'] && isset( $m['extensions_case_insensitive'] ) && is_bool( $m['extensions_case_insensitive'] ) && $regex( $m['phar_regex'] )
+			// No sniff (null) would switch content sniffing off: the scanner always writes one.
+			&& is_array( $sniff ) && isset( $sniff['bytes'], $sniff['regex'], $sniff['exclude_extensions'], $sniff['scope'] ) && is_int( $sniff['bytes'] ) && $sniff['bytes'] > 0
+			&& $regex( $sniff['regex'] ) && is_array( $sniff['exclude_extensions'] ) && ( ! $sniff['exclude_extensions'] || $strings( $sniff['exclude_extensions'] ) )
+			&& is_array( $core ) && array_key_exists( 'root', $core ) && ( null === $core['root'] || ( is_string( $core['root'] ) && '' !== $core['root'] ) ) && isset( $core['dirs'], $core['files'] ) && $strings( $core['dirs'] ) && $strings( $core['files'] );
+		foreach ( [ 'roots', 'excluded', 'old_releases', 'checked', 'not_checked' ] as $key ) {
+			$valid = $valid && ( [] === $m[ $key ] || $strings( $m[ $key ] ) );
+		}
+		if ( ! $valid ) {
+			return "$bad: it isn't valid";
+		}
+		// Only scopes this check reproduces exactly; any other fails closed.
+		if ( 'except_skipped_dirs' === $sniff['scope'] ) {
+			if ( ! isset( $sniff['skipped_dirs'] ) || ! ( [] === $sniff['skipped_dirs'] || $strings( $sniff['skipped_dirs'] ) ) ) {
+				return "$bad: it isn't valid";
+			}
+		} elseif ( 'all' === $sniff['scope'] ) {
+			$m['sniff']['skipped_dirs'] = [];
+		} else {
+			return "$bad: its content sniff scope isn't one this check knows";
+		}
+		$m['sniff']['exclude_extensions'] = array_map( 'strtolower', $sniff['exclude_extensions'] );
+		// Every path is a container path under /var/www; one that isn't valid UTF-8 comes as `b64:` + base64 of its bytes.
+		$decode = function ( $path ) {
+			if ( 0 === strpos( $path, 'b64:' ) ) {
+				$path = base64_decode( substr( $path, 4 ), true );
+			}
+			return is_string( $path ) && 0 === strpos( $path, '/var/www/' ) && false === strpos( $path, "\0" ) ? $path : null;
+		};
+		$lists  = [ [ 'roots' ], [ 'excluded' ], [ 'old_releases' ], [ 'checked' ], [ 'not_checked' ], [ 'sniff', 'skipped_dirs' ] ];
+		foreach ( $lists as $keys ) {
+			$list = 1 === count( $keys ) ? $m[ $keys[0] ] : $m['sniff']['skipped_dirs'];
+			foreach ( $list as $i => $path ) {
+				$list[ $i ] = $decode( $path );
+				if ( null === $list[ $i ] ) {
+					return "$bad: it names a path outside the site";
+				}
+			}
+			if ( 1 === count( $keys ) ) {
+				$m[ $keys[0] ] = $list;
+			} else {
+				$m['sniff']['skipped_dirs'] = $list;
+			}
+		}
+		if ( null !== $core['root'] ) {
+			$m['core']['root'] = $decode( $core['root'] );
+			if ( null === $m['core']['root'] ) {
+				return "$bad: it names a path outside the site";
 			}
 		}
 
-		return [ min( $sniff['bytes'], 1048576 ), $sniff['regex'], array_map( 'strtolower', $exclude ) ];
+		return $m;
 	}
 
 	/**
-	 * Whether a regular file without a code extension is code by the manifest's sniff.
-	 *
-	 * @param string     $path  Real host path.
-	 * @param string     $name  File name.
-	 * @param array|null $sniff manifest_sniff().
-	 *
-	 * @return bool
-	 */
-	protected static function sniffed( $path, $name, $sniff ) {
-		if ( null === $sniff ) {
-			return false;
-		}
-		list( $bytes, $regex, $exclude ) = $sniff;
-		$dot = strrpos( $name, '.' );
-		if ( false !== $dot && in_array( strtolower( substr( $name, $dot + 1 ) ), $exclude, true ) ) {
-			return false;
-		}
-		$handle = @fopen( $path, 'rb' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- unreadable is sniffed as nothing.
-		if ( false === $handle ) {
-			return true;
-		}
-		$head = (string) fread( $handle, $bytes );
-		fclose( $handle );
-
-		return 1 === preg_match( $regex, $head );
-	}
-
-	/**
-	 * The exact exempt shapes of the cross-check (INTERFACE.md "Cross-check", each approved by the user).
+	 * The manifest turned into host lookups, after checking its scope against the layout EE resolved. A manifest exemption
+	 * (old_releases, core) counts only where EE's exact shape check agrees; when they disagree, nothing is positive.
 	 *
 	 * @param string $code Real path of the site's app/.
+	 * @param array  $m    read_manifest().
 	 *
-	 * @return callable( $real_host_path ) bool
+	 * @return array|string Lookups, or why the manifest and this check disagree.
 	 */
-	protected function cross_exempt( $code ) {
-		$layout  = null === $this->cross_layout ? [ 'top' => null, 'abspath' => null, 'index' => null ] : $this->cross_layout;
+	protected function manifest_rules( $code, array $m ) {
+		$layout   = null !== $this->cross_layout ? $this->cross_layout : [
+			'wp'      => false,
+			'scan'    => null,
+			'top'     => null,
+			'abspath' => null,
+			'index'   => null,
+		];
+		$disagree = "the scanner's list of the files it read disagrees with this check about the site's %s, so this check can't tell that it read all the site's code";
+		$checked  = [];
+		$nc_files = [];
+		$nc_dirs  = [];
+		foreach ( $m['checked'] as $path ) {
+			$stat = self::manifest_stat( $code, $path );
+			if ( false !== $stat && 0100000 === ( $stat['mode'] & 0170000 ) ) {
+				$checked[ $stat['dev'] . ':' . $stat['ino'] ] = true;
+			}
+		}
+		foreach ( $m['not_checked'] as $path ) {
+			$host = self::manifest_dir( $code, $path );
+			if ( null !== $host ) {
+				$nc_dirs[ $host ] = true;
+				continue;
+			}
+			$stat = '/' === substr( $path, -1 ) ? false : self::manifest_stat( $code, $path );
+			if ( false !== $stat && 0100000 === ( $stat['mode'] & 0170000 ) ) {
+				$nc_files[ $stat['dev'] . ':' . $stat['ino'] ] = true;
+			}
+		}
+		// The sniff isn't applied below the directories the scanner searched by name only (accepted residual R-SNIFF).
+		$skipped = [];
+		foreach ( $m['sniff']['skipped_dirs'] as $path ) {
+			$host = self::manifest_dir( $code, $path );
+			if ( null !== $host && in_array( basename( $host ), self::SCANNER_SKIP_NAMES, true ) ) {
+				$skipped[ $host ] = true;
+			}
+		}
+
+		// roots: the WordPress root EE passed (wp), or all of /var/www (php).
+		$roots = [];
+		foreach ( $m['roots'] as $path ) {
+			$roots[] = self::manifest_dir( $code, $path );
+		}
+		$expected = $layout['wp'] ? $layout['scan'] : $code;
+		// No root on either side covers nothing, so any code file in app/ is still unlisted.
+		if ( ( null === $expected ? [] : [ $expected ] ) !== $roots ) {
+			return sprintf( $disagree, 'scanned directory' );
+		}
+
+		// (b) core: only the live WordPress root EE resolved, and only what both lists call core (index.php is scanned).
 		$abspath = $layout['abspath'];
-		$top     = $layout['top'];
-		// (a) The live release: the WordPress root's (or the served root's) ancestor directly in releases/.
+		$core    = null === $m['core']['root'] ? null : self::manifest_dir( $code, $m['core']['root'] );
+		if ( ( null === $m['core']['root'] ) !== ( null === $abspath ) || ( null !== $abspath && $core !== $abspath ) ) {
+			return sprintf( $disagree, 'WordPress core' );
+		}
+		$core_dirs  = array_values( array_intersect( $m['core']['dirs'], [ 'wp-admin', 'wp-includes' ] ) );
+		$core_files = array_values( array_intersect( $m['core']['files'], self::CORE_FILES ) );
+
+		// (a) old releases: siblings of the live release in releases/, only when nginx's root is the live release or below.
+		$top  = $layout['top'];
 		$live = null;
 		for ( $dir = null !== $abspath ? $abspath : $top; null !== $dir && strlen( $dir ) > strlen( $code ); $dir = dirname( $dir ) ) {
 			if ( 'releases' === basename( dirname( $dir ) ) ) {
@@ -1490,24 +1608,162 @@ class Site_PHP_Compat {
 				break;
 			}
 		}
-		$old_releases = null !== $live && null !== $top && 0 === strpos( $top . '/', $live . '/' ) ? dirname( $live ) : null;
+		$old = [];
+		if ( null !== $live && null !== $top && 0 === strpos( $top . '/', $live . '/' ) ) {
+			foreach ( (array) @scandir( dirname( $live ) ) as $name ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- unreadable lists nothing.
+				$dir = dirname( $live ) . '/' . $name;
+				if ( '.' !== $name && '..' !== $name && $dir !== $live && ! is_link( $dir ) && is_dir( $dir ) ) {
+					$old[ $dir ] = true;
+				}
+			}
+		}
+		// The scanner names old releases only for php sites, which it walks whole; a wp scan never leaves the live root.
+		$listed = [];
+		foreach ( $m['old_releases'] as $path ) {
+			$host = self::manifest_dir( $code, $path );
+			if ( $layout['wp'] || null === $host || ! isset( $old[ $host ] ) ) {
+				return sprintf( $disagree, 'old releases' );
+			}
+			$listed[ $host ] = true;
+		}
+		if ( ! $layout['wp'] ) {
+			$old = $listed;
+		}
+
 		// (c) EE's app/wp-config.php when the WordPress root has its own, which WordPress loads first.
 		$unused_config = null !== $abspath && $abspath !== $code && is_file( "$abspath/wp-config.php" ) ? "$code/wp-config.php" : null;
 		$index         = $layout['index'];
-
-		return function ( $path ) use ( $abspath, $old_releases, $live, $unused_config, $index ) {
-			if ( null !== $old_releases && 0 === strpos( $path, $old_releases . '/' ) && 0 !== strpos( $path, $live . '/' ) ) {
+		$exempt        = function ( $path ) use ( $code, $old, $abspath, $core_dirs, $core_files, $unused_config, $index ) {
+			if ( $old && null !== self::under_any( $path, $code, $old ) ) {
 				return true;
 			}
 			if ( null !== $abspath && 0 === strpos( $path, $abspath . '/' ) ) {
 				$rel = substr( $path, strlen( $abspath ) + 1 );
-				if ( 0 === strpos( $rel, 'wp-admin/' ) || 0 === strpos( $rel, 'wp-includes/' ) || in_array( $rel, self::CORE_FILES, true ) ) {
+				$top = strstr( $rel, '/', true );
+				if ( false === $top ? in_array( $rel, $core_files, true ) : in_array( $top, $core_dirs, true ) ) {
 					return true;
 				}
 			}
 
 			return $path === $unused_config || $path === $index;
 		};
+		$names         = array_map(
+			function ( $ext ) {
+				return preg_quote( $ext, '/' );
+			},
+			$m['code_extensions']
+		);
+
+		return [
+			'code'       => $code,
+			'checked'    => $checked,
+			'nc_files'   => $nc_files,
+			'nc_dirs'    => $nc_dirs,
+			'skipped'    => $skipped,
+			'code_name'  => '/\.(?:' . implode( '|', $names ) . ')\z/' . ( $m['extensions_case_insensitive'] ? 'i' : '' ),
+			'phar'       => $m['phar_regex'],
+			'sniff'      => $m['sniff'],
+			'exempt'     => $exempt,
+		];
+	}
+
+	/**
+	 * lstat() of a manifest path on the host, only when it names the same file there: the container path maps to app/ with
+	 * no link on the way (a host lookup would resolve an absolute link against the host).
+	 *
+	 * @param string $code Real path of the site's app/.
+	 * @param string $path Container path under /var/www/.
+	 *
+	 * @return array|false
+	 */
+	protected static function manifest_stat( $code, $path ) {
+		$host = $code . substr( rtrim( $path, '/' ), strlen( '/var/www' ) );
+		$real = @realpath( $host ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is handled.
+
+		return $real === $host ? @lstat( $host ) : false; // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is handled.
+	}
+
+	/**
+	 * @param string $code Real path of the site's app/.
+	 * @param string $path Container path; a directory ends with `/`.
+	 *
+	 * @return string|null Real host directory it names, or null when it isn't one (then it covers nothing).
+	 */
+	protected static function manifest_dir( $code, $path ) {
+		if ( '/' !== substr( $path, -1 ) ) {
+			return null;
+		}
+		$stat = self::manifest_stat( $code, $path );
+
+		return false !== $stat && 0040000 === ( $stat['mode'] & 0170000 ) ? rtrim( $code . substr( $path, strlen( '/var/www' ) ), '/' ) : null;
+	}
+
+	/**
+	 * @param string $path Real host path.
+	 * @param string $code Real path of the site's app/.
+	 * @param array  $dirs Real host directories as keys.
+	 *
+	 * @return string|null The directory of $dirs that $path is in (any depth), or null.
+	 */
+	protected static function under_any( $path, $code, array $dirs ) {
+		for ( $dir = dirname( $path ); strlen( $dir ) >= strlen( $code ); $dir = dirname( $dir ) ) {
+			if ( isset( $dirs[ $dir ] ) ) {
+				return $dir;
+			}
+			if ( $dir === $code ) {
+				break;
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Whether uid 33 (PHP-FPM's www-data, the scanner's user) may have a permission. Only the bits are read, and only "no"
+	 * is certain: the owner class counts when uid 33 owns it, and group or other bits (which bound every ACL entry) say maybe.
+	 *
+	 * @param array|false $stat lstat().
+	 * @param int         $bit  0400 read or 0100 search, in owner position.
+	 *
+	 * @return bool
+	 */
+	protected static function uid33_may( $stat, $bit ) {
+		if ( false === $stat ) {
+			return true;
+		}
+		$mode = $stat['mode'];
+
+		return 0 !== ( $mode & ( ( $bit >> 3 ) | ( $bit >> 6 ) ) ) || ( 33 === $stat['uid'] && 0 !== ( $mode & $bit ) );
+	}
+
+	/**
+	 * Whether a regular file without a code name is code by the manifest's content sniff (rule 3 of "File manifest").
+	 *
+	 * @param string      $path       Real host path.
+	 * @param string      $name       File name.
+	 * @param array|false $stat       Its lstat().
+	 * @param bool        $searchable Whether uid 33 may reach its directory.
+	 * @param array       $rules      manifest_rules().
+	 *
+	 * @return bool
+	 */
+	protected function manifest_sniffs( $path, $name, $stat, $searchable, array $rules ) {
+		$sniff = $rules['sniff'];
+		if ( in_array( strtolower( (string) pathinfo( $name, PATHINFO_EXTENSION ) ), $sniff['exclude_extensions'], true ) || null !== self::under_any( $path, $rules['code'], $rules['skipped'] ) ) {
+			return false;
+		}
+		// A file uid 33 can't read can't run under PHP-FPM, and the scanner doesn't sniff it either.
+		if ( ! $searchable || ! self::uid33_may( $stat, 0400 ) ) {
+			return false;
+		}
+		$handle = @fopen( $path, 'rb' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- unreadable fails closed.
+		if ( false === $handle ) {
+			return true;
+		}
+		$head = (string) fread( $handle, min( $sniff['bytes'], 1048576 ) );
+		fclose( $handle );
+
+		return 1 === preg_match( $sniff['regex'], $head );
 	}
 
 	/**
@@ -1525,11 +1781,11 @@ class Site_PHP_Compat {
 	 * @return string Why the cross-check refuses a positive verdict.
 	 */
 	protected static function cross_text( $cross ) {
-		if ( null === $cross || ! $cross['manifest'] ) {
+		if ( null === $cross || ( ! $cross['manifest'] && null === $cross['error'] ) ) {
 			return "the scanner gave no list of the files it read (an older scanner image), so this check can't tell that it read all the site's code";
 		}
 		if ( null !== $cross['error'] ) {
-			return "can't list the site's files to compare with what the scanner read: {$cross['error']}";
+			return $cross['error'];
 		}
 		$count = count( $cross['unlisted'] ) + $cross['unlisted_more'];
 
@@ -1570,7 +1826,7 @@ class Site_PHP_Compat {
 	}
 
 	/**
-	 * Walks a directory tree without following links, bounded in time: $visit( $path, $name, file|dir|link|other ) returns
+	 * Walks a directory tree without following links, bounded in time: $visit( $path, $name, file|dir|link|other, lstat ) returns
 	 * 'stop' to stop (true also stops for a non-directory), and for a directory whether to go into it.
 	 *
 	 * @param string   $top   Real directory.
@@ -1605,7 +1861,7 @@ class Site_PHP_Compat {
 				$stat = @lstat( $path ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is handled.
 				$mode = false === $stat ? 0 : $stat['mode'] & 0170000;
 				$type = 0120000 === $mode ? 'link' : ( 0040000 === $mode ? 'dir' : ( 0100000 === $mode ? 'file' : 'other' ) );
-				$go   = $visit( $path, $name, $type );
+				$go   = $visit( $path, $name, $type, $stat );
 				if ( 'stop' === $go || ( 'dir' !== $type && true === $go ) ) {
 					return null;
 				}
