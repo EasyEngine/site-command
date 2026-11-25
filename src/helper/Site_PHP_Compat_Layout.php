@@ -69,6 +69,13 @@ class Site_PHP_Compat_Layout {
 	 * @return array|string List of [ id, text, line ] (id is the T_* constant or the character), or the reason it is refused.
 	 */
 	public static function tokens( $source ) {
+		if ( ! function_exists( 'token_get_all' ) ) {
+			return 'this host\'s PHP has no tokenizer extension, which this check needs';
+		}
+		// A UTF-8 BOM before <?php is output, not code.
+		if ( 0 === strncmp( $source, "\xEF\xBB\xBF", 3 ) ) {
+			$source = substr( $source, 3 );
+		}
 		$raw = @token_get_all( $source ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- a broken file still tokenises.
 		if ( ! $raw || ! is_array( $raw[0] ) || T_OPEN_TAG !== $raw[0][0] || 0 !== strncasecmp( $raw[0][1], '<?php', 5 ) ) {
 			return 'it does not start with <?php';
@@ -76,17 +83,36 @@ class Site_PHP_Compat_Layout {
 		$out  = [];
 		$line = 1;
 		$fq   = defined( 'T_NAME_FULLY_QUALIFIED' ) ? T_NAME_FULLY_QUALIFIED : -1;
+		$pipe = defined( 'T_PIPE' ) ? T_PIPE : -1;
 		$skip = [ T_WHITESPACE, T_COMMENT, T_DOC_COMMENT ];
 		$n    = count( $raw );
 		for ( $i = 1; $i < $n; $i++ ) {
 			$t = $raw[ $i ];
+			if ( count( $out ) > self::MAX_TOKENS ) {
+				return 'it has more than ' . self::MAX_TOKENS . ' tokens';
+			}
 			if ( ! is_array( $t ) ) {
+				// Hosts before PHP 8.5 read the pipe `|>` as `|` `>`; `%>` ends PHP code on a 5.6 site with asp_tags on.
+				if ( ( '|' === $t || '%' === $t ) && isset( $raw[ $i + 1 ] ) && '>' === $raw[ $i + 1 ] ) {
+					return "line $line has $t>, which some PHP versions read differently";
+				}
 				$out[] = [ $t, $t, $line ];
 				continue;
 			}
 			$line = $t[2];
 			if ( T_COMMENT === $t[0] && 0 === strpos( $t[1], '#[' ) || defined( 'T_ATTRIBUTE' ) && T_ATTRIBUTE === $t[0] ) {
 				return "line $line has an attribute, which PHP 7 reads as a comment";
+			}
+			// PHP 7 runs a file whose last comment is never closed; PHP 8 refuses to parse it.
+			if ( in_array( $t[0], [ T_COMMENT, T_DOC_COMMENT ], true ) && 0 === strncmp( $t[1], '/*', 2 ) && ( strlen( $t[1] ) < 4 || '*/' !== substr( $t[1], -2 ) ) ) {
+				return "line $line has a comment that is never closed";
+			}
+			if ( $pipe === $t[0] ) {
+				return "line $line has |>, which some PHP versions read differently";
+			}
+			// `b'…'` is one token: the prefix would shift every literal read below.
+			if ( T_CONSTANT_ENCAPSED_STRING === $t[0] && '\'' !== $t[1][0] && '"' !== $t[1][0] ) {
+				return "line $line has a string with a b prefix";
 			}
 			if ( in_array( $t[0], $skip, true ) ) {
 				continue;
@@ -372,7 +398,7 @@ class Site_PHP_Compat_Layout {
 		// ini_set( … ); error_reporting( … );
 		if ( self::is_word( $t, $s, self::PURE_STATEMENTS ) ) {
 			$args = self::call_args( $t, $s, $end );
-			if ( null === $args || self::is_word( $t, $s, 'ini_set' ) && ( 2 !== count( $args ) || ! in_array( strtolower( (string) self::literal_arg( $t, $args[0] ) ), self::INI_KEYS, true ) ) ) {
+			if ( null === $args || self::is_word( $t, $s, 'ini_set' ) && ( 2 !== count( $args ) || ! in_array( self::lower( (string) self::literal_arg( $t, $args[0] ) ), self::INI_KEYS, true ) ) ) {
 				return self::unknown( $t, $i, $env );
 			}
 			foreach ( $args as $arg ) {
@@ -398,7 +424,7 @@ class Site_PHP_Compat_Layout {
 		if ( null === $name ) {
 			return self::unknown( $t, $at, $env, 'defines a constant whose name is not a plain string' );
 		}
-		$upper = strtoupper( $name );
+		$upper = self::upper( $name );
 		if ( in_array( $upper, self::NEVER_DEFINED, true ) ) {
 			return "{$env['file']} line {$t[ $at ][2]} defines $name, which changes where WordPress loads code from";
 		}
@@ -508,7 +534,7 @@ class Site_PHP_Compat_Layout {
 		for ( $i = 0; $i < $n; $i++ ) {
 			list( $id, $text, $line ) = $t[ $i ];
 			$word = T_CONSTANT_ENCAPSED_STRING === $id ? substr( $text, 1, -1 ) : $text;
-			if ( ( T_STRING === $id || T_CONSTANT_ENCAPSED_STRING === $id ) && in_array( strtoupper( $word ), $names, true ) ) {
+			if ( ( T_STRING === $id || T_CONSTANT_ENCAPSED_STRING === $id ) && in_array( self::upper( $word ), $names, true ) ) {
 				return "line $line names $word";
 			}
 			if ( T_VARIABLE === $id && in_array( substr( $text, 1 ), [ 'GLOBALS', 'wp_filter', 'wp_theme_directories' ], true ) ) {
@@ -583,7 +609,7 @@ class Site_PHP_Compat_Layout {
 				continue;
 			}
 			if ( in_array( $id, [ T_STRING, T_ISSET, T_EMPTY, T_ARRAY ], true ) ) {
-				$word = strtolower( $text );
+				$word = self::lower( $text );
 				if ( $call && ! in_array( $word, self::PURE_FUNCTIONS, true ) ) {
 					return "{$env['file']} line $line calls $text(), which this check doesn't accept in a config";
 				}
@@ -682,7 +708,7 @@ class Site_PHP_Compat_Layout {
 			' ',
 			array_map(
 				function ( $tok ) {
-					return is_int( $tok[0] ) ? token_name( $tok[0] ) . ':' . strtolower( $tok[1] ) : $tok[0];
+					return is_int( $tok[0] ) ? token_name( $tok[0] ) . ':' . self::lower( $tok[1] ) : $tok[0];
 				},
 				$ops
 			)
@@ -855,7 +881,7 @@ class Site_PHP_Compat_Layout {
 			' ',
 			array_map(
 				function ( $i ) use ( $t ) {
-					return is_int( $t[ $i ][0] ) ? ( T_CONSTANT_ENCAPSED_STRING === $t[ $i ][0] ? $t[ $i ][1] : token_name( $t[ $i ][0] ) . ( T_STRING === $t[ $i ][0] ? ':' . strtolower( $t[ $i ][1] ) : '' ) ) : $t[ $i ][0];
+					return is_int( $t[ $i ][0] ) ? ( T_CONSTANT_ENCAPSED_STRING === $t[ $i ][0] ? $t[ $i ][1] : token_name( $t[ $i ][0] ) . ( T_STRING === $t[ $i ][0] ? ':' . self::lower( $t[ $i ][1] ) : '' ) ) : $t[ $i ][0];
 				},
 				$arg
 			)
@@ -869,8 +895,19 @@ class Site_PHP_Compat_Layout {
 		return 1 === count( $arg ) && T_CONSTANT_ENCAPSED_STRING === $t[ $arg[0] ][0] ? self::literal( $t[ $arg[0] ][1] ) : null;
 	}
 
+	/**
+	 * ASCII case mapping: before PHP 8.2 strtolower() follows the locale, and a Turkish one keeps `I`.
+	 */
+	public static function lower( $text ) {
+		return strtr( $text, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz' );
+	}
+
+	public static function upper( $text ) {
+		return strtr( $text, 'abcdefghijklmnopqrstuvwxyz', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' );
+	}
+
 	private static function is_word( array $t, $i, $words ) {
-		return isset( $t[ $i ] ) && T_STRING === $t[ $i ][0] && in_array( strtolower( $t[ $i ][1] ), (array) $words, true );
+		return isset( $t[ $i ] ) && T_STRING === $t[ $i ][0] && in_array( self::lower( $t[ $i ][1] ), (array) $words, true );
 	}
 
 	private static function unknown( array $t, $i, array $env, $why = null ) {
