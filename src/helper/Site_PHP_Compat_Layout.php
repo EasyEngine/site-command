@@ -145,6 +145,34 @@ class Site_PHP_Compat_Layout {
 	}
 
 	/**
+	 * WordPress's version from wp-includes/version.php: exactly one `$wp_version = '<literal>';` statement.
+	 *
+	 * @param string $source PHP source.
+	 *
+	 * @return array|string [ 'version' => …, 'branch' => major.minor ], or why it can't be read.
+	 */
+	public static function wp_version( $source ) {
+		$t = self::tokens( $source );
+		if ( is_string( $t ) ) {
+			return $t;
+		}
+		$found = null;
+		foreach ( $t as $i => $token ) {
+			if ( T_VARIABLE !== $token[0] || '$wp_version' !== $token[1] ) {
+				continue;
+			}
+			$ok = null === $found && isset( $t[ $i + 3 ] ) && '=' === $t[ $i + 1 ][0] && T_CONSTANT_ENCAPSED_STRING === $t[ $i + 2 ][0] && ';' === $t[ $i + 3 ][0] && ( 0 === $i || ';' === $t[ $i - 1 ][0] );
+			$value = $ok ? self::literal( $t[ $i + 2 ][1] ) : null;
+			if ( null === $value || ! preg_match( '/^(\d+)\.(\d+)(?:\.\d+)*(?:-[A-Za-z0-9.]+)?$/D', $value, $m ) ) {
+				return 'line ' . $token[2] . ' is not a single $wp_version = \'<version>\'; statement';
+			}
+			$found = [ 'version' => $value, 'branch' => (int) $m[1] . '.' . (int) $m[2] ];
+		}
+
+		return null === $found ? 'it does not set $wp_version' : $found;
+	}
+
+	/**
 	 * Checks a wp-config.php (or a file it loads) statement by statement against the config grammar.
 	 *
 	 * $env: 'root' (real WordPress root), 'dir' (real directory of this file: __DIR__), 'file' (for messages), 'boot'

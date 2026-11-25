@@ -44,6 +44,36 @@ Feature: Check the PHP compatibility of a site's code
     And STDOUT should match "/\nThis is static analysis with PHPCompatibility [^\n]+\. Its coverage isn't complete and it can't see breakage that only shows at runtime\.\n$/"
     And the directory "{EE_ROOT_DIR}/tmp/php-compat/bh-site-command-180.test" should not exist
 
+  @wp
+  Scenario: A WordPress site's verdict covers what was checked, and core by its version
+    Given the compat-scanner image is available
+    And the site "bh-site-command-193.test" exists, created with "--type=wp"
+    When I run 'bin/ee site php-compat bh-site-command-193.test --php=8.4 --format=json'
+    Then the command should succeed
+    And the JSON field "status" in STDOUT should be "ok"
+    And the JSON field "wordpress.supports" in STDOUT should be "true"
+    And the JSON field "checked.dir" in STDOUT should contain "bh-site-command-193.test/app/htdocs"
+    And STDOUT should contain "only its version is checked"
+    When I run 'bin/ee site php-compat bh-site-command-193.test --php=8.4'
+    Then the command should succeed
+    And STDOUT should not contain "Safe to upgrade"
+    And STDOUT should contain "WordPress core files (only its version is checked)"
+    # A WordPress too old for the target is never fine, whatever the scan finds.
+    When I run 'sed -i "s#^.wp_version = .*#\$wp_version = \"6.1.1\";#" {SITES_DIR}/bh-site-command-193.test/app/htdocs/wp-includes/version.php'
+    Then the command should succeed
+    When I run 'bin/ee site php-compat bh-site-command-193.test --php=8.4 --format=json'
+    Then the command should succeed
+    And the JSON field "safe_to_upgrade" in STDOUT should be "false"
+    And the JSON field "wordpress.version" in STDOUT should be "6.1.1"
+    When I run 'bin/ee site php-compat bh-site-command-193.test --php=8.4'
+    Then the command should succeed
+    And STDOUT should contain "WordPress 6.1 doesn't support PHP 8.4; update WordPress to at least 6.7 first"
+    # A PHP version WordPress hasn't declared support for can't be confirmed.
+    When I run 'bin/ee site php-compat bh-site-command-193.test --php=8.6'
+    Then the command should succeed
+    And STDOUT should contain "WordPress hasn't declared support for PHP 8.6 yet"
+    And STDOUT should not contain "Safe to upgrade"
+
   Scenario: The JSON summary of a php site
     Given the compat-scanner image is available
     And the site "bh-site-command-181.test" exists, created with "--type=php"
@@ -64,14 +94,16 @@ Feature: Check the PHP compatibility of a site's code
     And the directory "{EE_ROOT_DIR}/tmp/php-compat/bh-site-command-181.test" should not exist
     And the docker container "ee-php-compat-bh-site-command-181.test" should not exist
 
-  Scenario: The table of a php site without errors says it is safe
+  Scenario: The table of a php site without errors says what was checked, never "safe"
     Given the compat-scanner image is available
     And the site "bh-site-command-184.test" exists, created with "--type=php"
     And I write "<?php\nfunction bh_compat_ok() { return 1; }\n" to the file "{SITES_DIR}/bh-site-command-184.test/app/htdocs/clean/ok.php"
     And I make everything under "{SITES_DIR}/bh-site-command-184.test/app/htdocs/clean" readable by everyone
     When I run 'bin/ee site php-compat bh-site-command-184.test --php=8.4'
     Then the command should succeed
-    And STDOUT should match "/^Safe to upgrade bh-site-command-184\.test to PHP 8\.4: 0 errors\. \d+ warnings?\. \d+ files? checked\.\n/"
+    And STDOUT should match "/^No PHP 8\.4 (problems|errors) found in the \d+ files? checked in bh-site-command-184\.test \(all PHP in [^)]+\/app\/htdocs\)\.( \d+ warnings?\.)?\n/"
+    And STDOUT should not contain "Safe to upgrade"
+    And STDOUT should not contain "WordPress core"
     And STDOUT should match "/\nThis is static analysis with PHPCompatibility [^\n]+\. Its coverage isn't complete and it can't see breakage that only shows at runtime\.\n$/"
 
   Scenario: --output writes a root-owned 0600 report that matches the summary
