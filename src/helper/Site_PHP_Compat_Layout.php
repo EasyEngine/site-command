@@ -163,7 +163,8 @@ class Site_PHP_Compat_Layout {
 			}
 			$ok = null === $found && isset( $t[ $i + 3 ] ) && '=' === $t[ $i + 1 ][0] && T_CONSTANT_ENCAPSED_STRING === $t[ $i + 2 ][0] && ';' === $t[ $i + 3 ][0] && ( 0 === $i || ';' === $t[ $i - 1 ][0] );
 			$value = $ok ? self::literal( $t[ $i + 2 ][1] ) : null;
-			if ( null === $value || ! preg_match( '/^(\d+)\.(\d+)(?:\.\d+)*(?:-[A-Za-z0-9.]+)?$/D', $value, $m ) ) {
+			// Releases, RCs, betas, nightlies and dev builds: 7.2-RC3-65000, 7.3-alpha-65762-src.
+			if ( null === $value || strlen( $value ) > 64 || ! preg_match( '/^(\d+)\.(\d+)(?:\.\d+)*(?:-[A-Za-z0-9.]+)*$/D', $value, $m ) ) {
 				return 'line ' . $token[2] . ' is not a single $wp_version = \'<version>\'; statement';
 			}
 			$found = [ 'version' => $value, 'branch' => (int) $m[1] . '.' . (int) $m[2] ];
@@ -399,7 +400,10 @@ class Site_PHP_Compat_Layout {
 			if ( null === $path ) {
 				return "can't resolve $name in {$env['file']} (line {$t[ $at ][2]}); this check only accepts its default, $default";
 			}
-			if ( $path !== $default ) {
+			$canon = isset( $env['canon'] ) ? $env['canon'] : function ( $value ) {
+				return $value;
+			};
+			if ( call_user_func( $canon, $path ) !== call_user_func( $canon, $default ) ) {
 				return "{$env['file']} sets $name to $path (line {$t[ $at ][2]}); this check only accepts its default, $default";
 			}
 			if ( 'WP_CONTENT_DIR' === $name ) {

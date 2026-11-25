@@ -45,7 +45,11 @@ class Site_PHP_Compat {
 	const SUMMARY_INTS  = [ 'errors', 'warnings', 'files_checked', 'files_not_checked', 'php_bytes', 'components_checked', 'components_with_errors', 'duration_s' ];
 	const ESTIMATE_INTS = [ 'php_files', 'php_bytes', 'components', 'estimated_seconds', 'estimated_seconds_low', 'estimated_seconds_high' ];
 	// --format=json prints only the documented keys (INTERFACE.md), in this order.
-	const SUMMARY_KEYS  = [ 'v', 'status', 'site', 'target', 'safe_to_upgrade', 'errors', 'warnings', 'files_checked', 'files_not_checked', 'php_bytes', 'components_checked', 'components_with_errors', 'checked', 'not_checked', 'wordpress', 'duration_s', 'tool' ];
+	const SUMMARY_KEYS  = [ 'v', 'status', 'site', 'target', 'safe_to_upgrade', 'errors', 'warnings', 'files_checked', 'files_not_checked', 'php_bytes', 'components_checked', 'components_with_errors', 'checked', 'not_checked', 'not_checked_more', 'wordpress', 'duration_s', 'tool' ];
+
+	// stdout stays fixed-size: at most this many not_checked entries, each string at most NOT_CHECKED_CHARS characters.
+	const NOT_CHECKED_STDOUT = 10;
+	const NOT_CHECKED_CHARS  = 256;
 	const TOOL_KEYS     = [ 'phpcs', 'phpcompatibility', 'phpcompatibility_wp', 'image' ];
 	const ESTIMATE_KEYS = [ 'v', 'status', 'estimate', 'site', 'target', 'php_files', 'php_bytes', 'components', 'estimated_seconds', 'estimated_seconds_low', 'estimated_seconds_high', 'inputs' ];
 	const INPUT_KEYS    = [ 'calibration_bytes', 'calibration_seconds', 'startup_seconds', 'bytes_per_second', 'batches', 'seconds_per_batch', 'cpus', 'load_average_1m', 'low_factor', 'high_factor' ];
@@ -61,7 +65,6 @@ class Site_PHP_Compat {
 	const CONFIG_MAX = 1048576;
 	// Size cap for PHP files read on the host (wp-config.php and what it includes, index.php): tokens take ~500x the bytes.
 	const PHP_SOURCE_MAX = 262144;
-	// Constants that move the code WordPress loads away from <root>/wp-content.
 	/**
 	 * PHP versions each WordPress branch supports, [ lowest, highest ], from WordPress's own "PHP Compatibility and WordPress
 	 * Versions" page (https://make.wordpress.org/core/handbook/references/php-compatibility-and-wordpress-versions/, last
@@ -509,8 +512,11 @@ class Site_PHP_Compat {
 			return $this->cancelled();
 		}
 
-		$summary = $this->summary( $this->scoped( $doc, $report ) );
+		$full    = $this->summary( $this->scoped( $doc, $report ) );
+		$summary = self::capped( $full );
 		if ( null !== $output ) {
+			// The report says what stdout says (gated verdict, scoped fields), with the full not_checked list and the components.
+			$raw = self::encode( $full + [ 'components' => $report['components'] ] );
 			if ( ! $this->write_report( $output, $raw ) ) {
 				return $this->doc( 'tool_error', "could not write the report to $output" );
 			}
@@ -1140,6 +1146,14 @@ class Site_PHP_Compat {
 				'file'    => $file['real'],
 				'boot'    => true,
 				'resolve' => $resolve,
+				// Container (/var/www/…) and host paths, links resolved, so a default written either way compares equal.
+				'canon'   => function ( $path ) use ( $code ) {
+					if ( 0 === strpos( $path . '/', '/var/www/' ) ) {
+						$path = $code . substr( $path, strlen( '/var/www' ) );
+					}
+					$real = 0 === strpos( $path . '/', $code . '/' ) ? self::resolve_in( $code, ltrim( substr( $path, strlen( $code ) ), '/' ) ) : null;
+					return null === $real ? $path : $real;
+				},
 			]
 		);
 		if ( null !== $error ) {
@@ -1167,9 +1181,11 @@ class Site_PHP_Compat {
 		$top      = (string) self::resolve_in( $code, $rel );
 		// The live release: the WordPress root or its ancestor directly in a releases/ directory.
 		$releases = null;
+		$live     = null;
 		for ( $dir = $abspath; null !== $dir && strlen( $dir ) > strlen( $code ); $dir = dirname( $dir ) ) {
 			if ( 'releases' === basename( dirname( $dir ) ) ) {
 				$releases = dirname( $dir );
+				$live     = $dir;
 				break;
 			}
 		}
@@ -1177,7 +1193,7 @@ class Site_PHP_Compat {
 		$found    = null;
 		$error    = $this->walk_tree(
 			$code,
-			function ( $path, $name, $type ) use ( $code, $top, $root, $abspath, $allowed, $releases, &$user_ini, &$found ) {
+			function ( $path, $name, $type ) use ( $code, $top, $root, $abspath, $allowed, $releases, $live, &$user_ini, &$found ) {
 				$inside = null !== $abspath && 0 === strpos( $path . '/', $abspath . '/' );
 				if ( '.user.ini' === $name ) {
 					$user_ini[] = [ $path, $type ];
@@ -1188,33 +1204,44 @@ class Site_PHP_Compat {
 						return false;
 					}
 					$real = self::resolve_in( $code, substr( $path, strlen( $code ) + 1 ) );
+					// A link to a file already read and validated (releases/wp-config.php -> ../wp-config.php): no other code.
+					if ( null !== $real && in_array( $real, $allowed, true ) ) {
+						return false;
+					}
 					if ( $inside ) {
 						if ( null !== $real && 0 === strpos( dirname( $path ) . '/', $real . '/' ) ) {
 							$found = "$path links to its own ancestor " . $real;
-							return true;
+							return 'stop';
 						}
 						return false;
 					}
 					$found = "$path is a link outside the WordPress directory";
-					return true;
+					return 'stop';
 				}
 				if ( 'dir' === $type ) {
 					if ( $inside ) {
 						if ( $path !== $abspath && ( file_exists( "$path/wp-settings.php" ) || is_dir( "$path/wp-includes" ) ) ) {
 							$found = "$path holds another WordPress install";
-							return true;
+							return 'stop';
 						}
 						return true;
 					}
 					if ( '.' === $name[0] ) {
 						return false;
 					}
-					// Old releases beside the live one, when nginx doesn't serve them.
-					return ! ( null !== $releases && dirname( $path ) === $releases && 0 !== strpos( $path . '/', $top . '/' ) );
+					// Old releases beside the live one are out of scope only when nginx doesn't serve them (root at current/ or deeper).
+					if ( null !== $releases && dirname( $path ) === $releases && $path !== $live ) {
+						if ( 0 === strpos( $path . '/', $top . '/' ) ) {
+							$found = "!nginx serves $top, which also exposes old releases (" . substr( $path, strlen( $top ) + 1 ) . "); set the site's public dir to current (`--public-dir=current`) or remove old releases";
+							return 'stop';
+						}
+						return false;
+					}
+					return true;
 				}
 				if ( ! $inside && self::php_name( $name ) && ! in_array( $path, $allowed, true ) ) {
 					$found = "$path is PHP outside the WordPress directory" . ( null === $abspath ? ' (there is no WordPress this check recognises)' : '' );
-					return true;
+					return 'stop';
 				}
 				return false;
 			}
@@ -1223,12 +1250,16 @@ class Site_PHP_Compat {
 			return "can't look through the site's files: $error";
 		}
 
-		return null === $found ? $user_ini : self::clean( $found ) . '; this check can\'t scan that layout';
+		if ( null === $found ) {
+			return $user_ini;
+		}
+
+		return '!' === $found[0] ? self::clean( substr( $found, 1 ) ) : self::clean( $found ) . '; this check can\'t scan that layout';
 	}
 
 	/**
 	 * Walks a directory tree without following links, bounded in time: $visit( $path, $name, file|dir|link|other ) returns
-	 * true to stop, and for a directory whether to go into it.
+	 * 'stop' to stop (true also stops for a non-directory), and for a directory whether to go into it.
 	 *
 	 * @param string   $top   Real directory.
 	 * @param callable $visit See above.
@@ -1263,10 +1294,11 @@ class Site_PHP_Compat {
 				$mode = false === $stat ? 0 : $stat['mode'] & 0170000;
 				$type = 0120000 === $mode ? 'link' : ( 0040000 === $mode ? 'dir' : ( 0100000 === $mode ? 'file' : 'other' ) );
 				$go   = $visit( $path, $name, $type );
+				if ( 'stop' === $go || ( 'dir' !== $type && true === $go ) ) {
+					return null;
+				}
 				if ( 'dir' === $type && $go ) {
 					$todo[] = $path;
-				} elseif ( 'dir' !== $type && true === $go ) {
-					return null;
 				}
 			}
 		}
@@ -1531,7 +1563,7 @@ class Site_PHP_Compat {
 				continue;
 			}
 			// The New Relic daemon's socket: EE's global volume, never code.
-			if ( '/run/newrelic' === $dst && isset( $mount['Type'], $mount['Name'] ) && 'volume' === $mount['Type'] && ( defined( 'GLOBAL_NEWRELIC_DAEMON' ) ? GLOBAL_NEWRELIC_DAEMON : 'global-newrelic-daemon' ) . '_newrelic_sock' === $mount['Name'] ) {
+			if ( '/run/newrelic' === $dst && isset( $mount['Type'], $mount['Name'] ) && 'volume' === $mount['Type'] && ( defined( 'GLOBAL_NEWRELIC_DAEMON' ) ? GLOBAL_NEWRELIC_DAEMON : 'global-newrelic-daemon' ) . '_newrelic_sock' === $mount['Name'] && $this->ee_plain_volume( $mount['Name'] ) ) {
 				continue;
 			}
 			if ( isset( $known[ $dst ] ) ) {
@@ -1560,6 +1592,22 @@ class Site_PHP_Compat {
 		}
 
 		return $this->extra_mounts;
+	}
+
+	/**
+	 * Whether a named volume is a plain local volume EE made: its EasyEngine label, and no options (a bind or a remote
+	 * filesystem under the same name would have them).
+	 *
+	 * @param string $name Volume name.
+	 *
+	 * @return bool
+	 */
+	protected function ee_plain_volume( $name ) {
+		$run  = $this->docker( [ 'docker', 'volume', 'inspect', '--format', '{{json .}}', $name ], 60 );
+		$info = 0 === $run['code'] ? json_decode( trim( $run['stdout'] ), true ) : null;
+
+		return is_array( $info ) && isset( $info['Labels']['org.label-schema.vendor'] ) && 'EasyEngine' === $info['Labels']['org.label-schema.vendor']
+			&& ( ! isset( $info['Driver'] ) || 'local' === $info['Driver'] ) && empty( $info['Options'] );
 	}
 
 	/**
@@ -2657,9 +2705,11 @@ class Site_PHP_Compat {
 	 * @param array $doc    Validated scanner summary.
 	 * @param array $report Validated report.
 	 *
-	 * @return array $doc with safe_to_upgrade, checked, not_checked and (WordPress) wordpress set.
+	 * @return array $doc with safe_to_upgrade, checked, not_checked (the scanner's entries) and (WordPress) wordpress set.
 	 */
 	protected function scoped( array $doc, array $report ) {
+		// Only EE sets these; the scanner can't.
+		unset( $doc['checked'], $doc['not_checked'], $doc['wordpress'] );
 		$doc['checked']     = [
 			'dir'        => self::clean( (string) $this->looked_in ),
 			'components' => $doc['components_checked'],
@@ -2677,20 +2727,17 @@ class Site_PHP_Compat {
 			},
 			$report['not_checked']
 		);
-		$core = null;
+		$doc['not_checked_more'] = 0;
+		$core                    = null;
 		if ( $this->wp_layout && null !== $this->wp_version ) {
-			$doc['not_checked'][] = [
-				'type'   => 'core',
-				'slug'   => 'wordpress',
-				'branch' => null,
-				'file'   => 'wp-admin, wp-includes and the core files beside them',
-				'reason' => 'only its version is checked',
-			];
+			// Core's files are never scanned; not_checked stays the scanner's own list (its type and reason values are a fixed set).
 			$core             = self::wp_supports( $this->wp_version['branch'], $this->target );
 			$doc['wordpress'] = [
-				'version'  => self::clean( $this->wp_version['version'] ),
-				'supports' => $core['supports'],
-				'minimum'  => $core['minimum'],
+				'version'            => self::clean( $this->wp_version['version'] ),
+				'supports'           => $core['supports'],
+				'minimum'            => $core['minimum'],
+				'table_newest'       => $core['table_newest'],
+				'core_files_checked' => false,
 			];
 		}
 		if ( $doc['errors'] > 0 || ( null !== $core && false === $core['supports'] ) ) {
@@ -2705,13 +2752,43 @@ class Site_PHP_Compat {
 	}
 
 	/**
+	 * The summary as stdout prints it: fixed-size, so not_checked keeps its first NOT_CHECKED_STDOUT entries, each string
+	 * cut to NOT_CHECKED_CHARS characters, and not_checked_more counts the rest (the --output report has them all).
+	 *
+	 * @param array $summary Full summary.
+	 *
+	 * @return array
+	 */
+	public static function capped( array $summary ) {
+		if ( ! isset( $summary['not_checked'] ) ) {
+			return $summary;
+		}
+		$all                         = $summary['not_checked'];
+		$summary['not_checked']      = array_map(
+			function ( $entry ) {
+				foreach ( $entry as $key => $value ) {
+					if ( is_string( $value ) && preg_match( '/^.{' . self::NOT_CHECKED_CHARS . '}/us', $value, $m ) && $m[0] !== $value ) {
+						$entry[ $key ] = $m[0];
+					}
+				}
+				return $entry;
+			},
+			array_slice( $all, 0, self::NOT_CHECKED_STDOUT )
+		);
+		$summary['not_checked_more'] = max( 0, count( $all ) - self::NOT_CHECKED_STDOUT );
+
+		return $summary;
+	}
+
+	/**
 	 * Whether a WordPress branch supports a PHP version, by WP_PHP_SUPPORT.
 	 *
 	 * @param string $branch WordPress major.minor.
 	 * @param string $target PHP major.minor.
 	 *
 	 * @return array supports (true, false, or null when WordPress hasn't said), minimum (lowest WordPress branch supporting
-	 *               the target, or null) and why (the verdict's reason, null when supported).
+	 *               the target, or null), table_newest (the newest row, when the branch is newer than the table) and why
+	 *               (the reason to print, or null).
 	 */
 	public static function wp_supports( $branch, $target ) {
 		$minimum = null;
@@ -2722,26 +2799,43 @@ class Site_PHP_Compat {
 			}
 			$highest = version_compare( $high, $highest, '>' ) ? $high : $highest;
 		}
+		$result = function ( $supports, $why, $min = null, $newest = null ) {
+			return [ 'supports' => $supports, 'minimum' => $min, 'table_newest' => $newest, 'why' => $why ];
+		};
 		if ( version_compare( $target, $highest, '>' ) ) {
-			return [ 'supports' => null, 'minimum' => null, 'why' => "WordPress hasn't declared support for PHP $target yet" ];
+			return $result( null, "WordPress hasn't declared support for PHP $target yet" );
 		}
-		$newest = (string) array_keys( self::WP_PHP_SUPPORT )[0];
+		$branches = array_map( 'strval', array_keys( self::WP_PHP_SUPPORT ) );
+		$newest   = $branches[0];
+		$oldest   = end( $branches );
 		if ( version_compare( $branch, $newest, '>' ) ) {
-			return [ 'supports' => null, 'minimum' => $minimum, 'why' => "this check doesn't know which PHP versions WordPress $branch supports" ];
-		}
-		if ( isset( self::WP_PHP_SUPPORT[ $branch ] ) ) {
-			list( $low, $high ) = self::WP_PHP_SUPPORT[ $branch ];
+			// WordPress doesn't drop a newer PHP within its support window: a newer branch supports what the newest row does.
+			list( $low, $high ) = self::WP_PHP_SUPPORT[ $newest ];
 			if ( version_compare( $target, $low, '>=' ) && version_compare( $target, $high, '<=' ) ) {
-				return [ 'supports' => true, 'minimum' => $minimum, 'why' => null ];
+				return $result( true, "WordPress $branch is newer than this check's table; WordPress $newest supports PHP $target", $minimum, $newest );
 			}
-			if ( version_compare( $target, $low, '<' ) ) {
-				return [ 'supports' => false, 'minimum' => $minimum, 'why' => "WordPress $branch doesn't support PHP $target; it needs PHP $low or newer" ];
+			return $result( null, "WordPress $branch is newer than this check's table, and WordPress $newest doesn't support PHP $target", $minimum, $newest );
+		}
+		if ( ! isset( self::WP_PHP_SUPPORT[ $branch ] ) ) {
+			// Older than every row: it can't support a PHP newer than the oldest row does.
+			if ( version_compare( $branch, $oldest, '<' ) && version_compare( $target, self::WP_PHP_SUPPORT[ $oldest ][1], '>' ) ) {
+				$why = "WordPress $branch doesn't support PHP $target";
+				return $result( false, null === $minimum ? $why : "$why; update WordPress to at least $minimum first", $minimum );
 			}
+			return $result( null, "this check doesn't know which PHP versions WordPress $branch supports", $minimum );
+		}
+		list( $low, $high ) = self::WP_PHP_SUPPORT[ $branch ];
+		if ( version_compare( $target, $low, '<' ) ) {
+			return $result( false, "WordPress $branch needs PHP $low or newer, so it doesn't support PHP $target" );
+		}
+		if ( version_compare( $target, $high, '<=' ) ) {
+			return $result( true, null, $minimum );
 		}
 		$why = "WordPress $branch doesn't support PHP $target";
 
-		return [ 'supports' => false, 'minimum' => $minimum, 'why' => null === $minimum ? $why : "$why; update WordPress to at least $minimum first" ];
+		return $result( false, null === $minimum ? $why : "$why; update WordPress to at least $minimum first", $minimum );
 	}
+
 
 	/**
 	 * Container scan summary to print: findings never, `site` always.
@@ -2917,11 +3011,11 @@ class Site_PHP_Compat {
 
 		$tail = sprintf( '%s. %s checked.', self::count_of( $doc['warnings'], 'warning' ), self::count_of( $doc['files_checked'], 'file' ) );
 		$core = isset( $doc['wordpress'] ) && null !== $this->wp_version ? self::wp_supports( $this->wp_version['branch'], $target ) : null;
-		$why  = null === $core || true === $core['supports'] ? null : $core['why'];
+		$why  = null === $core ? null : $core['why'];
 		if ( false === $doc['safe_to_upgrade'] ) {
 			if ( $doc['errors'] > 0 ) {
 				yield sprintf( 'Not safe to upgrade %s to PHP %s: %s in %s. %s', $site, $target, self::count_of( $doc['errors'], 'error' ), self::count_of( $doc['components_with_errors'], 'component' ), $tail );
-				if ( null !== $why && false === $core['supports'] ) {
+				if ( null !== $why ) {
 					yield ucfirst( $why ) . '.';
 				}
 			} else {
@@ -2933,7 +3027,7 @@ class Site_PHP_Compat {
 			$found = 0 === $doc['warnings'] ? 'problems' : 'errors';
 			$line  = sprintf( 'No PHP %s %s found in the %s checked in %s (%s in %s).', $target, $found, self::count_of( $doc['files_checked'], 'file' ), $site, $what, self::clean( (string) $this->looked_in ) );
 			if ( null !== $core ) {
-				$line .= sprintf( ' WordPress %s supports PHP %s.', $this->wp_version['branch'], $target );
+				$line .= ' ' . ( null === $why ? sprintf( 'WordPress %s supports PHP %s', $this->wp_version['branch'], $target ) : ucfirst( $why ) ) . '.';
 			}
 			yield $line . ( $doc['warnings'] > 0 ? ' ' . self::count_of( $doc['warnings'], 'warning' ) . '.' : '' );
 		} else {

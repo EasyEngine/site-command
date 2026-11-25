@@ -48,12 +48,16 @@ Feature: Check the PHP compatibility of a site's code
   Scenario: A WordPress site's verdict covers what was checked, and core by its version
     Given the compat-scanner image is available
     And the site "bh-site-command-193.test" exists, created with "--type=wp"
+    # Pinned to a branch in the check's table, whatever WordPress the site got.
+    When I run 'sed -i "s#^.wp_version = .*#\$wp_version = \"6.8.3\";#" {SITES_DIR}/bh-site-command-193.test/app/htdocs/wp-includes/version.php'
+    Then the command should succeed
     When I run 'bin/ee site php-compat bh-site-command-193.test --php=8.4 --format=json'
     Then the command should succeed
     And the JSON field "status" in STDOUT should be "ok"
     And the JSON field "wordpress.supports" in STDOUT should be "true"
     And the JSON field "checked.dir" in STDOUT should contain "bh-site-command-193.test/app/htdocs"
-    And STDOUT should contain "only its version is checked"
+    And the JSON field "wordpress.core_files_checked" in STDOUT should be "false"
+    And STDOUT should not contain "only its version is checked"
     When I run 'bin/ee site php-compat bh-site-command-193.test --php=8.4'
     Then the command should succeed
     And STDOUT should not contain "Safe to upgrade"
@@ -61,14 +65,20 @@ Feature: Check the PHP compatibility of a site's code
     # A WordPress too old for the target is never fine, whatever the scan finds.
     When I run 'sed -i "s#^.wp_version = .*#\$wp_version = \"6.1.1\";#" {SITES_DIR}/bh-site-command-193.test/app/htdocs/wp-includes/version.php'
     Then the command should succeed
-    When I run 'bin/ee site php-compat bh-site-command-193.test --php=8.4 --format=json'
+    When I run 'bin/ee site php-compat bh-site-command-193.test --php=8.4 --format=json --output={TMP}/report-193.json'
     Then the command should succeed
     And the JSON field "safe_to_upgrade" in STDOUT should be "false"
     And the JSON field "wordpress.version" in STDOUT should be "6.1.1"
+    And the JSON file "{TMP}/report-193.json" should hold every field of the STDOUT JSON except "report,report_bytes"
     When I run 'bin/ee site php-compat bh-site-command-193.test --php=8.4'
     Then the command should succeed
     And STDOUT should contain "WordPress 6.1 doesn't support PHP 8.4; update WordPress to at least 6.7 first"
     # A PHP version WordPress hasn't declared support for can't be confirmed.
+    When I run 'bin/ee site php-compat bh-site-command-193.test --php=8.6 --format=json --output={TMP}/report-193.json'
+    Then the command should succeed
+    And the JSON field "wordpress.supports" in STDOUT should be null
+    And the JSON field "safe_to_upgrade" in STDOUT should be null
+    And the JSON file "{TMP}/report-193.json" should hold every field of the STDOUT JSON except "report,report_bytes"
     When I run 'bin/ee site php-compat bh-site-command-193.test --php=8.6'
     Then the command should succeed
     And STDOUT should contain "WordPress hasn't declared support for PHP 8.6 yet"
