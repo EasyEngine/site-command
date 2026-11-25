@@ -149,10 +149,10 @@ class Site_PHP_Compat {
 	/** @var bool Whether cleanup() took a --cancel request that arrived after the scan's last check. */
 	protected $late_cancel = false;
 
-	/** @var string|null Host directory the scan looked in, for the no_code_found text; null when app/ is missing. */
+	/** @var string|null Host directory the scan looked in, for the no_code_found text (set by resolve_layout(), before any scan). */
 	protected $looked_in;
 
-	/** @var string|null The site's nginx config path, for the no_code_found text; null when app/ is missing. */
+	/** @var string|null The site's nginx config path, for the no_code_found text (set by resolve_layout(), before any scan). */
 	protected $nginx_conf;
 
 	/** @var bool Whether this is a WordPress scan (its WordPress directory, core left out) rather than all of htdocs. */
@@ -166,6 +166,9 @@ class Site_PHP_Compat {
 
 	/** @var string|null Real path of the wp-config.php WordPress loads when that makes EE's app/wp-config.php unused (shape (c)). */
 	protected $ee_config_unused_by;
+
+	/** @var string[] Real paths of config files accepted only because nothing loads them: never valid link targets. */
+	protected $unused_configs = [];
 
 	/** @var bool Whether the last lock_site() couldn't open the site directory (gone during a delete). */
 	protected $lock_unopenable = false;
@@ -446,7 +449,7 @@ class Site_PHP_Compat {
 		}
 		// R48: a site directory that can't be opened is being deleted (delete removes it before the record); never scan unlocked.
 		if ( $this->lock_unopenable ) {
-			return $this->doc( 'tool_error', self::SITE_GONE );
+			return $this->doc( 'tool_error', is_dir( $site_data->site_fs_path ) ? "the site's directory {$site_data->site_fs_path} can't be opened for locking" : self::SITE_GONE );
 		}
 		$parent = $this->temp_parent();
 		if ( null !== $parent ) {
@@ -1050,6 +1053,7 @@ class Site_PHP_Compat {
 		}
 		$this->wp_version          = null;
 		$this->ee_config_unused_by = null;
+		$this->unused_configs      = [];
 		$this->current_php         = isset( $site_data->php_version ) && preg_match( '/^\d+\.\d+$/D', (string) $site_data->php_version ) ? (string) $site_data->php_version : null;
 		if ( null !== $layout['abspath'] ) {
 			// Core isn't scanned: its version decides whether it supports the target PHP.
@@ -1236,20 +1240,27 @@ class Site_PHP_Compat {
 
 		// WordPress takes ABSPATH's wp-config.php first: one in the parent (EE's app/wp-config.php beside an imported tree)
 		// is never loaded, so it is no code outside WordPress either.
+		$validated = $read;
 		if ( dirname( $file['real'] ) === $abspath ) {
 			$parent = $this->site_file( $code, ltrim( substr( dirname( $abspath ), strlen( $code ) ), '/' ) . '/wp-config.php', self::PHP_SOURCE_MAX );
-			if ( 'ok' === $parent['state'] ) {
-				$read[] = $parent['real'];
+			if ( 'ok' === $parent['state'] && ! in_array( $parent['real'], $validated, true ) ) {
+				$read[]                 = $parent['real'];
+				$this->unused_configs[] = $parent['real'];
 			}
 		}
 		// (c) EE's app/wp-config.php is unused when WordPress's own lookup (its root, else the real parent) loads another file.
+		// Not when app/ is the served-path parent but not the real one (htdocs -> releases/2): `wp --path` there loads it.
 		$real_root = substr( $abspath, strlen( $code ) + 1 );
 		$parent    = dirname( $real_root );
 		$ee_config = "$code/wp-config.php";
 		$stat      = @lstat( $ee_config ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is handled.
-		if ( in_array( $config[0], [ "$real_root/wp-config.php", ( '.' === $parent ? '' : "$parent/" ) . 'wp-config.php' ], true ) && $file['real'] !== $ee_config && false !== $stat && 0100000 === ( $stat['mode'] & 0170000 ) ) {
+		$cli_loads = '.' === dirname( $root ) && '.' !== $parent;
+		if ( ! $cli_loads && in_array( $config[0], [ "$real_root/wp-config.php", ( '.' === $parent ? '' : "$parent/" ) . 'wp-config.php' ], true ) && $file['real'] !== $ee_config && false !== $stat && 0100000 === ( $stat['mode'] & 0170000 ) ) {
 			$read[]                    = $ee_config;
 			$this->ee_config_unused_by = $file['real'];
+			if ( ! in_array( $ee_config, $validated, true ) ) {
+				$this->unused_configs[] = $ee_config;
+			}
 		}
 
 		return $read;
@@ -1297,8 +1308,9 @@ class Site_PHP_Compat {
 						return false;
 					}
 					$real = self::resolve_in( $code, substr( $path, strlen( $code ) + 1 ) );
-					// A link to a file already read and validated (releases/wp-config.php -> ../wp-config.php): no other code.
-					if ( null !== $real && in_array( $real, $allowed, true ) ) {
+					// A link to a file already read and validated (releases/wp-config.php -> ../wp-config.php): no other code. A config
+					// accepted only because nothing loads it was never validated, and a link would load it.
+					if ( null !== $real && in_array( $real, $allowed, true ) && ! in_array( $real, $this->unused_configs, true ) ) {
 						return false;
 					}
 					if ( $inside ) {
@@ -1402,12 +1414,13 @@ class Site_PHP_Compat {
 		$count              = 0;
 		$seen               = [];
 		$searchable         = [ $code => self::uid33_may( @lstat( $code ), 0100 ) ]; // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is handled.
-		$covered            = function ( $path, array $stat, $phar ) use ( $code, $rules ) {
+		$covered            = function ( $path, array $stat, $phar, $exemptable ) use ( $code, $rules ) {
 			$ino = $stat['dev'] . ':' . $stat['ino'];
 			if ( ( ! $phar && isset( $rules['checked'][ $ino ] ) ) || isset( $rules['nc_files'][ $ino ] ) || null !== self::under_any( $path, $code, $rules['nc_dirs'] ) ) {
 				return true;
 			}
-			return call_user_func( $rules['exempt'], $path );
+			// The exempt shapes are the files themselves: code reaching one through a link is ordinary code.
+			return $exemptable && call_user_func( $rules['exempt'], $path );
 		};
 		$walk               = $this->walk_tree(
 			$code,
@@ -1428,9 +1441,11 @@ class Site_PHP_Compat {
 					}
 					$phar = 1 === preg_match( $rules['phar'], $name ) || 1 === preg_match( $rules['phar'], basename( $target ) );
 					$path = $target;
+					$link = true;
 				} elseif ( 'file' !== $type ) {
 					return false;
 				} else {
+					$link = false;
 					$phar = 1 === preg_match( $rules['phar'], $name );
 					if ( ! $phar && ! preg_match( $rules['code_name'], $name ) && ! $this->manifest_sniffs( $path, $name, $stat, $searchable[ dirname( $path ) ], $rules ) ) {
 						return false;
@@ -1438,7 +1453,7 @@ class Site_PHP_Compat {
 				}
 				// A file reached again (through a link, or a hard link) counts once.
 				$ino = $stat['dev'] . ':' . $stat['ino'];
-				if ( isset( $seen[ $ino ] ) || $covered( $path, $stat, $phar ) ) {
+				if ( isset( $seen[ $ino ] ) || $covered( $path, $stat, $phar, ! $link ) ) {
 					return false;
 				}
 				$seen[ $ino ] = true;
@@ -3810,13 +3825,7 @@ class Site_PHP_Compat {
 	 */
 	protected function no_code_text() {
 		$text = "No PHP code found to check in {$this->site}.";
-		if ( null === $this->looked_in ) {
-			return $text;
-		}
-		$dir = self::clean( $this->looked_in );
-		if ( null === $this->nginx_conf ) {
-			return "$text $dir doesn't exist.";
-		}
+		$dir  = self::clean( $this->looked_in );
 		if ( ! $this->wp_layout ) {
 			return "$text Looked for PHP files in $dir.";
 		}
