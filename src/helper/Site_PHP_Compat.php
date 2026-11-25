@@ -98,6 +98,12 @@ class Site_PHP_Compat {
 		'4.7' => [ '5.2', '7.1' ],
 	];
 
+	/** Dot-directories of the www-data home in /var/www (app/): tool caches, never site code. */
+	const HOME_DOTDIRS = [ '.wp-cli', '.composer', '.cache', '.config', '.local', '.npm', '.ssh' ];
+
+	/** The include targets of EE's nginx.conf, main.conf and admin-tools.conf, current and historical (dockerfiles nginx, site-type templates). */
+	const NGINX_INCLUDES = [ 'mime.types', 'fastcgi_params', 'fastcgi.conf', '/usr/local/openresty/nginx/conf/conf.d/main.conf', '/usr/local/openresty/nginx/conf/custom/*.conf', 'custom/*.conf', 'user/*.conf', '/etc/nginx/custom/*.conf', '/etc/nginx/conf.d/*.conf', '/etc/nginx/main.conf', '/etc/nginx/default.conf', '/etc/nginx/sites-enabled/*', '/version.conf' ];
+
 	/** Longest php-compat lists the site's files for (PHP outside WordPress, links, .user.ini files). */
 	const WALK_SECONDS = 120;
 
@@ -148,6 +154,9 @@ class Site_PHP_Compat {
 
 	/** @var array|null WordPress's version ( version, branch ) read from the scanned root's wp-includes/version.php. */
 	protected $wp_version;
+
+	/** @var bool Whether the record/nginx root mismatch was already reported. */
+	protected $warned_root = false;
 
 	/** @var string|null The PHP version the site runs now (its record), major.minor; null when unknown. */
 	protected $current_php;
@@ -900,7 +909,8 @@ class Site_PHP_Compat {
 			'--mount', "type=bind,src=$code,dst=/var/www,readonly"
 		);
 		if ( 'estimate' === $mode && null !== $this->estimate_label ) {
-			array_push( $args, '--label', 'ee-php-compat-estimate=' . $this->estimate_label );
+			// The site label lets `ee site delete` stop a running estimate.
+			array_push( $args, '--label', 'ee-php-compat-estimate=' . $this->estimate_label, '--label', 'ee-php-compat-estimate-site=' . $this->site );
 		}
 		if ( 'estimate' === $mode ) {
 			// The byte model misses PHPCS's per-file cost on dense many-file trees (2x short seen): more per batch, wider top end.
@@ -1184,6 +1194,15 @@ class Site_PHP_Compat {
 			return self::clean( str_replace( "$code/", $app, $error ) );
 		}
 
+		// WordPress takes ABSPATH's wp-config.php first: one in the parent (EE's app/wp-config.php beside an imported tree)
+		// is never loaded, so it is no code outside WordPress either.
+		if ( dirname( $file['real'] ) === $abspath ) {
+			$parent = $this->site_file( $code, ltrim( substr( dirname( $abspath ), strlen( $code ) ), '/' ) . '/wp-config.php', self::PHP_SOURCE_MAX );
+			if ( 'ok' === $parent['state'] ) {
+				$read[] = $parent['real'];
+			}
+		}
+
 		return $read;
 	}
 
@@ -1214,9 +1233,11 @@ class Site_PHP_Compat {
 		}
 		$user_ini = [];
 		$found    = null;
+		$outside  = [];
+		$linked   = [];
 		$error    = $this->walk_tree(
 			$code,
-			function ( $path, $name, $type ) use ( $code, $top, $root, $abspath, $allowed, $releases, $live, &$user_ini, &$found ) {
+			function ( $path, $name, $type ) use ( $code, $top, $root, $abspath, $allowed, $releases, $live, &$user_ini, &$found, &$outside, &$linked ) {
 				$inside = null !== $abspath && 0 === strpos( $path . '/', $abspath . '/' );
 				if ( '.user.ini' === $name ) {
 					$user_ini[] = [ $path, $type ];
@@ -1240,6 +1261,10 @@ class Site_PHP_Compat {
 							$found = "$path links to another WordPress install ($real)";
 							return 'stop';
 						}
+						// The scanner follows it: what lies there counts as inside (e.g. shared uploads of a Deployer release).
+						if ( null !== $real && is_dir( $real ) && 0 !== strpos( $real . '/', $abspath . '/' ) ) {
+							$linked[] = $real;
+						}
 						return false;
 					}
 					$found = "$path is a link outside the WordPress directory";
@@ -1253,7 +1278,9 @@ class Site_PHP_Compat {
 						}
 						return true;
 					}
-					if ( '.' === $name[0] ) {
+					// The www-data home in /var/www (wp-cli packages, composer cache) is not site code; other dot-directories are
+					// walked like any other (nginx serves e.g. .well-known).
+					if ( dirname( $path ) === $code && in_array( $name, self::HOME_DOTDIRS, true ) ) {
 						return false;
 					}
 					// Old releases beside the live one are out of scope only when nginx doesn't serve them (root at current/ or deeper).
@@ -1267,14 +1294,27 @@ class Site_PHP_Compat {
 					return true;
 				}
 				if ( ! $inside && self::php_name( $name ) && ! in_array( $path, $allowed, true ) ) {
-					$found = "$path is PHP outside the WordPress directory" . ( null === $abspath ? ' (there is no WordPress this check recognises)' : '' );
-					return 'stop';
+					// Decided after the walk: a link from inside WordPress to its directory may still turn up.
+					$outside[] = $path;
+					return count( $outside ) >= 1000 ? 'stop' : false;
 				}
 				return false;
 			}
 		);
 		if ( null !== $error ) {
 			return "can't look through the site's files: $error";
+		}
+		if ( null === $found ) {
+			foreach ( $outside as $path ) {
+				$covered = false;
+				foreach ( $linked as $target ) {
+					$covered = $covered || 0 === strpos( $path, $target . '/' );
+				}
+				if ( ! $covered ) {
+					$found = "$path is PHP outside the WordPress directory" . ( null === $abspath ? ' (there is no WordPress this check recognises)' : '' );
+					break;
+				}
+			}
 		}
 
 		if ( null === $found ) {
@@ -1356,7 +1396,14 @@ class Site_PHP_Compat {
 	protected function prepend_check( $site_data, $code, array $user_ini, $layout ) {
 		$conf  = $site_data->site_fs_path . '/config/php';
 		$files = [];
-		foreach ( array_merge( [ "$conf/php/php.ini" ], (array) glob( "$conf/php/conf.d/*.ini" ) ) as $file ) {
+		// php-fpm-fcgi.ini replaces php.ini for FPM when it exists; PHP's conf.d scan loads dot-files too.
+		$scanned = array_map(
+			function ( $name ) use ( $conf ) {
+				return "$conf/php/conf.d/$name";
+			},
+			preg_grep( '/\.ini$/', (array) @scandir( "$conf/php/conf.d" ) ) // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- missing is fine.
+		);
+		foreach ( array_merge( [ "$conf/php/php.ini", "$conf/php/php-fpm-fcgi.ini" ], $scanned ) as $file ) {
 			$files[ $file ] = 'ini';
 		}
 		foreach ( array_merge( [ "$conf/php-fpm.conf" ], (array) glob( "$conf/php-fpm.d/*.conf" ) ) as $file ) {
@@ -1375,8 +1422,8 @@ class Site_PHP_Compat {
 			if ( false === $text ) {
 				return "can't read $shown, which may set a file PHP runs before WordPress";
 			}
-			foreach ( self::php_settings( $text, $kind ) as list( $key, $value ) ) {
-				if ( ! $this->php_setting_ok( $code, $key, $value, $layout ) ) {
+			foreach ( self::php_settings( $text, $kind ) as list( $key, $value, $quoted ) ) {
+				if ( ! $this->php_setting_ok( $code, $key, $value, $layout, $quoted ) ) {
 					return "$shown sets $key to " . self::clean( '' === $value ? '""' : $value ) . ', which this check can\'t confirm';
 				}
 			}
@@ -1393,38 +1440,47 @@ class Site_PHP_Compat {
 	 * @param string $text Its text.
 	 * @param string $kind ini or fpm.
 	 *
-	 * @return array[] [ key, value (unquoted) ] each.
+	 * @return array[] [ key, value (unquoted), whether it was quoted ] each.
 	 */
 	public static function php_settings( $text, $kind ) {
+		// PHP's ini scanner ends a line at \r\n, \n or a bare \r; a UTF-8 BOM before the first key is skipped.
+		$text    = str_replace( [ "\r\n", "\r" ], "\n", preg_replace( '/^\xEF\xBB\xBF/', '', $text ) );
 		$keys    = '(auto_prepend_file|auto_append_file|opcache\.preload|include_path|user_ini\.filename|zend\.multibyte|zend\.script_encoding)';
 		$pattern = 'fpm' === $kind
-			? '/^[ \t]*(?:php(?:_admin)?_(?:value|flag)\[' . $keys . '\]|(include|security\.limit_extensions))[ \t]*=[ \t]*([^\r\n]*)$/mi'
-			: '/^[ \t]*' . $keys . '()[ \t]*=[ \t]*([^\r\n]*)$/mi';
+			? '/^[ \t]*(?:php(?:_admin)?_(?:value|flag)[ \t]*\[[ \t]*["\']?' . $keys . '["\']?[ \t]*\]|(include|security\.limit_extensions))[ \t]*=[ \t]*([^\n]*)$/mi'
+			: '/^[ \t]*' . $keys . '()[ \t]*=[ \t]*([^\n]*)$/mi';
 		$out     = [];
 		preg_match_all( $pattern, $text, $all, PREG_SET_ORDER );
 		foreach ( $all as $m ) {
-			$value = trim( $m[3] );
-			if ( preg_match( '/^"([^"]*)"|^\'([^\']*)\'/', $value, $q ) ) {
-				$value = isset( $q[2] ) ? $q[2] : $q[1];
+			$value  = trim( $m[3] );
+			$quoted = false;
+			if ( preg_match( '/^(["\'])(.*?)\1(.*)$/', $value, $q ) ) {
+				$rest = trim( $q[3] );
+				// PHP joins adjacent parts ("/a".php): anything but a comment after the quote keeps the raw text, never matched.
+				$value  = '' === $rest || ';' === $rest[0] ? $q[2] : $value;
+				$quoted = true;
 			} else {
 				$value = trim( preg_replace( '/[ \t]*;.*$/', '', $value ) );
 			}
-			$out[] = [ strtolower( '' !== $m[1] ? $m[1] : $m[2] ), $value ];
+			$out[] = [ strtolower( '' !== $m[1] ? $m[1] : $m[2] ), $value, $quoted ];
 		}
 
 		return $out;
 	}
+
 
 	/**
 	 * @param string     $code   Real path of the site's app/.
 	 * @param string     $key    Setting.
 	 * @param string     $value  Its value.
 	 * @param array|null $layout wp_layout_of() result, or null for a php site.
+	 * @param bool       $quoted Whether the value was quoted.
 	 *
 	 * @return bool
 	 */
-	protected function php_setting_ok( $code, $key, $value, $layout ) {
-		$off = in_array( strtolower( $value ), [ '', 'none', 'off', 'no', 'false', 'null', '0' ], true );
+	protected function php_setting_ok( $code, $key, $value, $layout, $quoted = false ) {
+		// Only the bare keywords mean "nothing" to PHP; a quoted "none", or 0, is a file name.
+		$off = '' === $value || ! $quoted && in_array( strtolower( $value ), [ 'none', 'off', 'no', 'false', 'null' ], true );
 		switch ( $key ) {
 			case 'include':
 				// php-fpm.conf of EE's images: relative before PHP 8.6, absolute from 8.6.
@@ -1452,8 +1508,7 @@ class Site_PHP_Compat {
 			return false;
 		}
 		if ( null === $layout ) {
-			$htdocs = self::resolve_in( $code, 'htdocs' );
-			return null !== $htdocs && 0 === strpos( $file['real'], "$htdocs/" ) && self::php_name( $file['real'] );
+			return $this->scanned_by_php_scan( $code, $file['real'] );
 		}
 
 		// Any loader the scan reads (Wordfence's wordfence-waf.php, NinjaFirewall's, …).
@@ -1472,7 +1527,7 @@ class Site_PHP_Compat {
 		$dir   = $site_data->site_fs_path . '/config/nginx';
 		$files = array_merge( (array) glob( "$dir/*" ), (array) glob( "$dir/conf.d/*.conf" ), (array) glob( "$dir/custom/*.conf" ) );
 		foreach ( $files as $file ) {
-			if ( is_dir( $file ) && ! is_link( $file ) || preg_match( '/\.(?:default|types)$|^(?:koi-|win-|uwsgi_params|scgi_params)/', basename( $file ) ) && 'fastcgi_params' !== basename( $file ) ) {
+			if ( is_dir( $file ) && ! is_link( $file ) || dirname( $file ) === $dir && preg_match( '/\.(?:default|types)$|^(?:koi-|win-|uwsgi_params|scgi_params)/', basename( $file ) ) ) {
 				continue;
 			}
 			$text = is_file( $file ) && filesize( $file ) <= self::CONFIG_MAX ? @file_get_contents( $file ) : false; // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is handled.
@@ -1513,10 +1568,10 @@ class Site_PHP_Compat {
 				return "sets {$m[1]} to $value";
 			}
 		}
-		// nginx's own config directory (old images used /etc/nginx) is EE's; anything the site's code can write is not.
-		preg_match_all( '/(?:^|[;{}])\s*include\s+([^;\s]+)\s*;/', $text, $all, PREG_SET_ORDER );
+		// Only what EE's own nginx files include, in every version EE has shipped.
+		preg_match_all( '/(?:^|[;{}])\s*include\s+([^;]+?)\s*;/', $text, $all, PREG_SET_ORDER );
 		foreach ( $all as $m ) {
-			if ( preg_match( '#/var/www|\.\.|\$|^["\']#', $m[1] ) ) {
+			if ( ! in_array( $m[1], self::NGINX_INCLUDES, true ) ) {
 				return "includes {$m[1]}";
 			}
 		}
@@ -1554,7 +1609,7 @@ class Site_PHP_Compat {
 					return "could not read $file; enable the site to check mounted code";
 				}
 				if ( $mounts ) {
-					return "$file may mount code or change how PHP starts, which this check can only see while the site runs; enable the site and run it again";
+					return "$file may change the site's php service, which this check can only see while the site runs; enable the site and run it again";
 				}
 			}
 
@@ -1673,10 +1728,10 @@ class Site_PHP_Compat {
 	}
 
 	/**
-	 * Whether a compose file may mount anything below /var/www, read without a YAML parser (the release phar has none).
-	 * Only lines that can't name such a mount are passed over: short volume entries (`- src:dst[:mode]`) and `target:`
-	 * keys are judged by their destination, `source:` lines are fine; any other line that mentions /var/www, and any `$`
-	 * (interpolation), counts as one.
+	 * Whether a compose file may change the php service of a stopped site, read without a YAML parser (the release phar has
+	 * none): any `php` key (block or flow style, quoted or not), any merge key or anchor use, any `extends` or `include`, and
+	 * any interpolation count. Only a running container shows what PHP really gets, so this never tries to tell harmless
+	 * php settings from others.
 	 *
 	 * @param string $file Compose file.
 	 *
@@ -1687,35 +1742,11 @@ class Site_PHP_Compat {
 		if ( false === $text ) {
 			return null;
 		}
-		foreach ( preg_split( '/\r\n|\r|\n/', $text ) as $line ) {
-			$line = trim( $line );
-			if ( '' === $line || '#' === $line[0] ) {
-				continue;
-			}
-			// Interpolation, and keys that pull mounts in from elsewhere.
-			if ( false !== strpos( $line, '$' ) || preg_match( '/^-?\s*(?:extends|include|volumes_from|command|entrypoint)\s*:|PHPRC|PHP_INI_SCAN_DIR/', $line ) ) {
-				return true;
-			}
-			if ( false === stripos( $line, 'www' ) || preg_match( '/^-?\s*source:\s/', $line ) ) {
-				continue;
-			}
-			$target = null;
-			if ( preg_match( '/^-?\s*target:\s*([\'"]?)([^\'"#\s]+)\1\s*$/', $line, $m ) ) {
-				$target = $m[2];
-			} elseif ( preg_match( '/^-\s*([\'"]?)([^\'"#\s:]+):([^\'"#\s:]+)(?::(?:ro|rw|z|Z|cached|delegated|consistent)(?:,[a-z]+)*)?\1\s*$/', $line, $m ) ) {
-				$target = $m[3];
-			} elseif ( preg_match( '/^-\s*[A-Za-z_][A-Za-z0-9_]*=/', $line ) ) {
-				// An environment entry (`- NAME=value`), not a volume.
-				continue;
-			}
-			// A destination spelt another way (`//`, `/./`, `/../`, a backslash) may still be below /var/www.
-			if ( null === $target || preg_match( '#//|/\.\.?(/|$)|\\\\#', $target ) || 0 === strpos( rtrim( $target, '/' ) . '/', '/var/www/' ) ) {
-				return true;
-			}
-		}
+		$text = preg_replace( '/(^|\s)#[^\r\n]*/', '$1', $text );
 
-		return false;
+		return 1 === preg_match( '/(?:^|[\s{,])["\']?php["\']?\s*:|<<\s*:|\*[A-Za-z0-9_-]|\b(?:extends|include)\s*:|\$/m', $text );
 	}
+
 
 	/**
 	 * The root nginx serves (main.conf), or the public directory in EE's record when there is no main.conf.
@@ -1743,7 +1774,9 @@ class Site_PHP_Compat {
 		if ( null === $root || ! preg_match( self::ROOT_PATTERN, $root ) || preg_match( '/(?:^|[;{}])\s*alias\s/', $text ) ) {
 			return "!can't tell which directory nginx serves: $conf has no single plain root";
 		}
-		if ( $root !== $db ) {
+		if ( $root !== $db && ! $this->warned_root ) {
+			// resolve_layout() runs twice (early, then under the lock): say it once.
+			$this->warned_root = true;
 			EE::warning( sprintf( "EE's record of %s has %s as its public directory, but nginx serves %s (root in %s). Checking what nginx serves.", $this->site, $db, $root, $conf ) );
 		}
 
@@ -1821,6 +1854,35 @@ class Site_PHP_Compat {
 		}
 
 		return [];
+	}
+
+	/**
+	 * Whether a php site's scan reads this file as code: in htdocs, a code extension, outside node_modules and .git, and
+	 * not in an old release beside the live one behind a `current` link (the scanner's oldReleases()).
+	 *
+	 * @param string $code Real path of the site's app/.
+	 * @param string $real Real host path of the file.
+	 *
+	 * @return bool
+	 */
+	protected function scanned_by_php_scan( $code, $real ) {
+		$htdocs = self::resolve_in( $code, 'htdocs' );
+		if ( null === $htdocs || 0 !== strpos( $real, "$htdocs/" ) || ! self::php_name( basename( $real ) ) ) {
+			return false;
+		}
+		$parts = explode( '/', substr( $real, strlen( $htdocs ) + 1 ) );
+		if ( array_intersect( $parts, [ 'node_modules', '.git' ] ) ) {
+			return false;
+		}
+		$served = null === $this->scan_path ? null : self::resolve_in( $code, ltrim( substr( $this->scan_path, strlen( '/var/www' ) ), '/' ) );
+		if ( null !== $served && 'releases' === basename( dirname( $served ) ) ) {
+			$releases = dirname( $served );
+			if ( 0 === strpos( $real, "$releases/" ) && 0 !== strpos( $real, "$served/" ) ) {
+				return false;
+			}
+		}
+
+		return true;
 	}
 
 	/**
@@ -3459,7 +3521,12 @@ class Site_PHP_Compat {
 		$this->delete_lock = $kept;
 		$parent            = $this->temp_parent();
 		if ( null !== $parent && ! $this->wait_for_estimate( $parent ) ) {
-			return 'an estimate of the site is still running';
+			// An estimate only reads the site: stop its container and go on, never refuse the delete.
+			$ps = $this->docker( [ 'docker', 'ps', '-aq', '--no-trunc', '--filter', 'label=ee-php-compat-estimate-site=' . $this->site ], 60 );
+			foreach ( 0 === $ps['code'] ? preg_split( '/\s+/', trim( $ps['stdout'] ), -1, PREG_SPLIT_NO_EMPTY ) : [] as $id ) {
+				$this->docker( [ 'docker', 'rm', '-f', $id ], 60 );
+			}
+			EE::warning( "Stopped the php-compat estimate of {$this->site}; the delete goes on." );
 		}
 		if ( null !== $parent ) {
 			$files = [ "$parent/.cancel/{$this->site}", "$parent/.cancel-lock/{$this->site}", "$parent/.estimate-lock/{$this->site}" ];
@@ -3536,10 +3603,10 @@ class Site_PHP_Compat {
 	}
 
 	/**
-	 * @return int Seconds `ee site delete` waits for a running estimate: its whole time limit.
+	 * @return int Seconds `ee site delete` waits for a running estimate to end on its own before it stops it.
 	 */
 	protected function estimate_wait() {
-		return self::ESTIMATE_TIMEOUT + self::PROCESS_MARGIN;
+		return 10;
 	}
 
 	/**

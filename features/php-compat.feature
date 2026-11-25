@@ -321,7 +321,7 @@ Feature: Check the PHP compatibility of a site's code
     And I run 'bin/ee site php-compat bh-site-command-190.test --php=8.4 --format=json'
     Then the command should succeed
     And the JSON field "status" in STDOUT should be "tool_error"
-    And the JSON field "detail" in STDOUT should contain "user-docker-compose/mount.yml may mount code or change how PHP starts, which this check can only see while the site runs"
+    And the JSON field "detail" in STDOUT should contain "user-docker-compose/mount.yml may change the site's php service, which this check can only see while the site runs"
 
   @wp
   Scenario: WordPress in its own directory is found through the index.php nginx serves
