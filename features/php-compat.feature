@@ -188,24 +188,24 @@ Feature: Check the PHP compatibility of a site's code
     Then the command should succeed
     And the JSON field "status" in STDOUT should be "tool_error"
     And the JSON field "safe_to_upgrade" in STDOUT should be null
-    And the JSON field "detail" in STDOUT should contain "WordPress loads plugins and themes from {SITES_DIR}/bh-site-command-188.test/app/htdocs/content (WP_CONTENT_DIR in {SITES_DIR}/bh-site-command-188.test/app/wp-config.php); this check can't scan that layout yet"
+    And the JSON field "detail" in STDOUT should contain "{SITES_DIR}/bh-site-command-188.test/app/wp-config.php sets WP_CONTENT_DIR to {SITES_DIR}/bh-site-command-188.test/app/htdocs/content"
     And the docker container "ee-php-compat-bh-site-command-188.test" should not exist
     When I run 'bin/ee site php-compat bh-site-command-188.test --php=8.4'
     Then the command should succeed
-    And STDOUT should match "/^The check of bh-site-command-188\.test for PHP 8\.4 didn't finish: WordPress loads plugins and themes from /"
+    And STDOUT should match "/^The check of bh-site-command-188\.test for PHP 8\.4 didn't finish: \S+\/app\/wp-config\.php sets WP_CONTENT_DIR to /"
     And STDOUT should not contain "Safe to upgrade"
 
   @wp
   Scenario: With nothing to check the message names the directory checked, and a release layout under htdocs is found
     Given the compat-scanner image is available
     And the site "bh-site-command-189.test" exists, created with "--type=wp"
-    # Nothing at all to check: WordPress moved out of htdocs, and no wp-config.php.
-    When I run 'mkdir {SITES_DIR}/bh-site-command-189.test/app/off && mv {SITES_DIR}/bh-site-command-189.test/app/htdocs/* {SITES_DIR}/bh-site-command-189.test/app/wp-config.php {SITES_DIR}/bh-site-command-189.test/app/off/'
+    # Nothing at all to check: WordPress moved out of app/ altogether.
+    When I run 'mkdir {SITES_DIR}/bh-site-command-189.test/off && mv {SITES_DIR}/bh-site-command-189.test/app/htdocs/* {SITES_DIR}/bh-site-command-189.test/app/wp-config.php {SITES_DIR}/bh-site-command-189.test/off/'
     And I run 'cd {SITES_DIR}/bh-site-command-189.test && {EE} site php-compat --php=8.4'
     Then the command should succeed
     And STDOUT should contain "No PHP code found to check in bh-site-command-189.test. Looked in {SITES_DIR}/bh-site-command-189.test/app/htdocs: its PHP code except WordPress core, uploads, caches and other skipped directories. The check follows the directory nginx serves (root in {SITES_DIR}/bh-site-command-189.test/config/nginx/conf.d/main.conf)"
-    When I run 'mv {SITES_DIR}/bh-site-command-189.test/app/off/wp-config.php {SITES_DIR}/bh-site-command-189.test/app/ && mv {SITES_DIR}/bh-site-command-189.test/app/off/* {SITES_DIR}/bh-site-command-189.test/app/htdocs/ && mv {SITES_DIR}/bh-site-command-189.test/app/htdocs/wp-content {SITES_DIR}/bh-site-command-189.test/app/htdocs/wp-content-off'
-    # A CI/CD deploy: WordPress in releases/1, current links to it, wp-cli.yml points there, the record still says htdocs.
+    When I run 'mv {SITES_DIR}/bh-site-command-189.test/off/* {SITES_DIR}/bh-site-command-189.test/app/htdocs/ && rmdir {SITES_DIR}/bh-site-command-189.test/off && mv {SITES_DIR}/bh-site-command-189.test/app/htdocs/wp-content {SITES_DIR}/bh-site-command-189.test/app/htdocs/wp-content-off'
+    # A CI/CD deploy: WordPress and its wp-config.php in releases/1, current links to it, wp-cli.yml points there, the record still says htdocs.
     When I run 'cd {SITES_DIR}/bh-site-command-189.test/app/htdocs && mkdir -p releases/1 && for f in *; do [ "$f" = releases ] || mv "$f" releases/1/; done && mv releases/1/wp-content-off releases/1/wp-content && ln -s /var/www/htdocs/releases/1 current && printf "path: current/\n" > wp-cli.yml'
     And I write "<?php\n/**\n * Plugin Name: Compat Fixture\n */\neach( $a );\n" to the file "{SITES_DIR}/bh-site-command-189.test/app/htdocs/releases/1/wp-content/plugins/compat-fixture/compat-fixture.php"
     And I make everything under "{SITES_DIR}/bh-site-command-189.test/app/htdocs/releases" readable by everyone
@@ -279,14 +279,14 @@ Feature: Check the PHP compatibility of a site's code
     And I run 'bin/ee site php-compat bh-site-command-190.test --php=8.4 --format=json'
     Then the command should succeed
     And the JSON field "status" in STDOUT should be "tool_error"
-    And the JSON field "detail" in STDOUT should contain "user-docker-compose/mount.yml mounts code below /var/www, which this check can only see while the site runs"
+    And the JSON field "detail" in STDOUT should contain "user-docker-compose/mount.yml may mount code or change how PHP starts, which this check can only see while the site runs"
 
   @wp
   Scenario: WordPress in its own directory is found through the index.php nginx serves
     Given the compat-scanner image is available
     And the site "bh-site-command-192.test" exists, created with "--type=wp"
-    # Core and wp-content in htdocs/wp, loaded by htdocs/index.php; no wp-cli.yml.
-    When I run 'cd {SITES_DIR}/bh-site-command-192.test/app/htdocs && mkdir wp && mv wp-admin wp-includes wp-content wp-*.php index.php license.txt readme.html xmlrpc.php wp/ && printf "<?php\ndefine( \"WP_USE_THEMES\", true );\nrequire __DIR__ . \"/wp/wp-blog-header.php\";\n" > index.php && chown -R 33:33 .'
+    # Core and wp-content in htdocs/wp, loaded by htdocs/index.php; wp-config.php one level up, where WordPress looks; no wp-cli.yml.
+    When I run 'cd {SITES_DIR}/bh-site-command-192.test/app/htdocs && mkdir wp && mv wp-admin wp-includes wp-content wp-*.php index.php license.txt readme.html xmlrpc.php wp/ && mv ../wp-config.php ./ && printf "<?php\ndefine( \"WP_USE_THEMES\", true );\nrequire __DIR__ . \"/wp/wp-blog-header.php\";\n" > index.php && chown -R 33:33 .'
     Then the command should succeed
     And I write "<?php\n/**\n * Plugin Name: Compat Fixture\n * Version: 1.0\n */\neach( $a );\n" to the file "{SITES_DIR}/bh-site-command-192.test/app/htdocs/wp/wp-content/plugins/compat-fixture/compat-fixture.php"
     And I make everything under "{SITES_DIR}/bh-site-command-192.test/app/htdocs/wp/wp-content/plugins/compat-fixture" readable by everyone
@@ -294,12 +294,18 @@ Feature: Check the PHP compatibility of a site's code
     Then the command should succeed
     And the JSON field "status" in STDOUT should be "ok"
     And the JSON field "safe_to_upgrade" in STDOUT should be "false"
-    # An index.php that loads WordPress from a place the check can't read gives no verdict.
+    # An index.php that isn't WordPress's own gives no verdict.
     When I run 'printf "<?php\n\$d = __DIR__ . \"/wp\";\nrequire \$d . \"/wp-blog-header.php\";\n" > {SITES_DIR}/bh-site-command-192.test/app/htdocs/index.php'
     And I run 'bin/ee site php-compat bh-site-command-192.test --php=8.4 --format=json'
     Then the command should succeed
     And the JSON field "status" in STDOUT should be "tool_error"
-    And the JSON field "detail" in STDOUT should contain "can't resolve where htdocs/index.php loads WordPress from"
+    And the JSON field "detail" in STDOUT should contain "htdocs/index.php isn't WordPress's own index.php"
+    # PHP beside WordPress that the scan of htdocs/wp wouldn't read gives no verdict either.
+    When I run 'printf "<?php\ndefine( \"WP_USE_THEMES\", true );\nrequire __DIR__ . \"/wp/wp-blog-header.php\";\n" > {SITES_DIR}/bh-site-command-192.test/app/htdocs/index.php && printf "<?php\neach( \$a );\n" > {SITES_DIR}/bh-site-command-192.test/app/htdocs/tool.php'
+    And I run 'bin/ee site php-compat bh-site-command-192.test --php=8.4 --format=json'
+    Then the command should succeed
+    And the JSON field "status" in STDOUT should be "tool_error"
+    And the JSON field "detail" in STDOUT should contain "htdocs/tool.php is PHP outside the WordPress directory"
 
   Scenario: An html site is refused
     Given the html site "bh-site-command-182.test" exists

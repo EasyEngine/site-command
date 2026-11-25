@@ -9,6 +9,8 @@ use Symfony\Component\Process\Process;
 use function EE\Utils\delem_log;
 use function EE\Utils\get_flag_value;
 
+require_once __DIR__ . '/Site_PHP_Compat_Layout.php';
+
 /**
  * `ee site php-compat`: runs the compat-scanner image against a site's code and prints its verdict or estimate.
  *
@@ -60,7 +62,14 @@ class Site_PHP_Compat {
 	// Size cap for PHP files read on the host (wp-config.php and what it includes, index.php): tokens take ~500x the bytes.
 	const PHP_SOURCE_MAX = 262144;
 	// Constants that move the code WordPress loads away from <root>/wp-content.
-	const DIR_CONSTANTS = [ 'WP_CONTENT_DIR', 'WP_PLUGIN_DIR', 'WPMU_PLUGIN_DIR' ];
+	/** Longest php-compat lists the site's files for (PHP outside WordPress, links, .user.ini files). */
+	const WALK_SECONDS = 120;
+
+	/** EE's own config/nginx/custom/admin-tools.conf (site-type-wp templates/config/nginx/admin-tools.conf.mustache). */
+	const ADMIN_TOOLS_CONF = "# ee-admin pages\nlocation ^~ /ee-admin/ {\n\troot /var/www/htdocs ;\n\tlocation ~ \\.php$ {\n\t\ttry_files \$uri =404;\n\t\tinclude fastcgi_params;\n\t\tfastcgi_pass php;\n\t}\n}\n";
+
+	/** WordPress's own files beside wp-admin/ and wp-includes/, which the scanner never reads (compat-scanner CORE_FILES). */
+	const CORE_FILES = [ 'index.php', 'wp-activate.php', 'wp-blog-header.php', 'wp-comments-post.php', 'wp-config-sample.php', 'wp-cron.php', 'wp-links-opml.php', 'wp-load.php', 'wp-login.php', 'wp-mail.php', 'wp-settings.php', 'wp-signup.php', 'wp-trackback.php', 'xmlrpc.php' ];
 
 	/** @var string Site name. */
 	protected $site = '';
@@ -880,7 +889,8 @@ class Site_PHP_Compat {
 	}
 
 	/**
-	 * Picks the scanner's path argument from the root nginx serves, and refuses a WordPress layout the scanner can't check.
+	 * Picks the scanner's path argument from the root nginx serves, and gives no verdict unless this check recognises the
+	 * whole layout (INTERFACE.md, "Allowlist (v4.16.0 r3)" and its revision): anything else is tool_error with the reason.
 	 *
 	 * @param object $site_data Site record.
 	 * @param string $code      Real path of the site's app/.
@@ -889,94 +899,309 @@ class Site_PHP_Compat {
 	 */
 	protected function resolve_layout( $site_data, $code ) {
 		$this->nginx_conf = $site_data->site_fs_path . self::NGINX_CONF;
+		$this->wp_layout  = false;
 		$served           = $this->served_root( $site_data );
-		if ( null === $served ) {
-			return $this->doc( 'tool_error', "can't tell which directory nginx serves: {$this->nginx_conf} has no single plain root" );
+		if ( '!' === $served[0] ) {
+			return $this->doc( 'tool_error', substr( $served, 1 ) );
 		}
 		$rel = ltrim( substr( $served, strlen( '/var/www' ) ), '/' );
 		$app = $site_data->site_fs_path . '/app/';
 
 		$this->scan_path = $served;
-		$prepend         = $this->prepended( $site_data, $code, $rel );
-		if ( null !== $prepend ) {
-			return $this->doc( 'tool_error', $prepend );
+		$detail          = $this->server_config_check( $site_data );
+		if ( null !== $detail ) {
+			return $this->doc( 'tool_error', $detail );
 		}
 		if ( 'wp' !== $site_data->site_type ) {
 			// The scanner checks all of htdocs for php sites, whatever the root nginx serves.
 			$this->looked_in = $app . 'htdocs';
-			return null;
+			$htdocs          = self::resolve_in( $code, 'htdocs' );
+			$user_ini        = [];
+			$error           = null === $htdocs ? null : $this->walk_tree(
+				$htdocs,
+				function ( $path, $name, $type ) use ( &$user_ini ) {
+					if ( '.user.ini' === $name ) {
+						$user_ini[] = [ $path, $type ];
+					}
+					return 'dir' === $type;
+				}
+			);
+			$detail = null !== $error ? "can't look through {$app}htdocs for .user.ini files: $error" : $this->prepend_check( $site_data, $code, $user_ini, null );
+			return null === $detail ? null : $this->doc( 'tool_error', $detail );
 		}
 
 		$this->wp_layout = true;
-		$root            = $this->wp_root( $code, $rel );
-		if ( is_string( $root ) && 0 === strpos( $root, '!' ) ) {
-			return $this->doc( 'tool_error', substr( $root, 1 ) );
+		$layout          = $this->wp_layout_of( $code, $rel, $app );
+		if ( is_string( $layout ) ) {
+			return $this->doc( 'tool_error', $layout );
 		}
-		if ( null === $root ) {
-			// No WordPress found here; a wp-config that moves its code elsewhere still rules out no_code_found.
-			$root = $rel;
-		}
+		$root            = $layout['root'];
 		$this->scan_path = '/var/www/' . $root;
 		$this->looked_in = $app . $root;
 		EE::debug( "php-compat: WordPress root $root (nginx root $served)" );
 
-		// WordPress in a subdirectory of what nginx serves: the scan covers that subdirectory only.
-		if ( 0 === strpos( $root, "$rel/" ) ) {
-			$outside = $this->php_outside( $code, $rel, $root );
-			if ( null !== $outside ) {
-				return $this->doc( 'tool_error', "nginx serves $app$rel, which holds PHP outside the WordPress directory $app$root (" . self::clean( $outside ) . "); this check can't scan that layout yet" );
-			}
-			// The served index.php isn't scanned there: it may only load WordPress.
-			$index = $this->read_site_file( $code, "$rel/index.php", self::PHP_SOURCE_MAX );
-			if ( null !== $index && ! self::only_loads_wordpress( $index ) ) {
-				return $this->doc( 'tool_error', "$app$rel/index.php does more than load WordPress, and it is outside the scanned directory $app$root; this check can't scan that layout yet" );
-			}
+		$allowed = [];
+		$index   = self::resolve_in( $code, "$rel/index.php" );
+		if ( null !== $index ) {
+			$allowed[] = $index;
 		}
+		if ( null !== $layout['abspath'] ) {
+			$config = $this->check_wp_config( $code, $root, $layout['abspath'], $app );
+			if ( is_string( $config ) ) {
+				return $this->doc( 'tool_error', $config );
+			}
+			$allowed = array_merge( $allowed, $config );
+		}
+		$walk = $this->app_walk( $code, $rel, $root, $layout['abspath'], $allowed );
+		if ( is_string( $walk ) ) {
+			return $this->doc( 'tool_error', str_replace( "$code/", $app, $walk ) );
+		}
+		$detail = $this->prepend_check( $site_data, $code, $walk, $layout );
 
-		$detail = $this->check_wp_dirs( $code, $root, $app, $rel );
 		return null === $detail ? null : $this->doc( 'tool_error', $detail );
 	}
 
 	/**
-	 * The first PHP entry in the served root outside the WordPress directory, besides index.php and wp-config.php.
+	 * Where WordPress is, in one of the accepted shapes: at the served root or below it, loaded by WordPress's own index.php;
+	 * or, with no served index.php, at its current/ or wp-cli.yml's path: (as backup finds it). The WordPress root's own
+	 * index.php must be WordPress's too.
 	 *
 	 * @param string $code Real path of the site's app/.
 	 * @param string $rel  Served root relative to app/.
-	 * @param string $root WordPress root relative to app/, below $rel.
+	 * @param string $app  The site's app/ with a trailing slash, for messages.
 	 *
-	 * @return string|null Its path relative to the served root; a link or an over-large tree counts too.
+	 * @return array|string [ root (relative to app/, as served), abspath (real WordPress root, or null when there is none) ],
+	 *                      or a tool_error detail.
 	 */
-	protected function php_outside( $code, $rel, $root ) {
-		$dir  = self::resolve_in( $code, $rel );
-		$wp   = self::resolve_in( $code, $root );
-		$skip = [ 'index.php', 'wp-config.php', explode( '/', substr( $root, strlen( $rel ) + 1 ) )[0] ];
-		$seen = 0;
-		foreach ( null === $dir || null === $wp ? [] : array_diff( (array) @scandir( $dir ), [ '.', '..', false ] ) as $entry ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- unreadable lists nothing.
-			if ( in_array( $entry, $skip, true ) ) {
-				continue;
+	protected function wp_layout_of( $code, $rel, $app ) {
+		$index = $this->site_file( $code, "$rel/index.php", self::PHP_SOURCE_MAX );
+		if ( 'bad' === $index['state'] ) {
+			return "can't read $app$rel/index.php: it {$index['detail']}";
+		}
+		$root = null;
+		if ( 'ok' === $index['state'] ) {
+			// __DIR__ is the real directory: a linked index.php elsewhere would load another WordPress.
+			if ( dirname( $index['real'] ) !== self::resolve_in( $code, $rel ) ) {
+				return "$app$rel/index.php is a link to " . self::clean( str_replace( "$code/", $app, $index['real'] ) ) . ', so it loads WordPress from another directory than nginx serves';
 			}
-			$path = "$dir/$entry";
-			if ( is_link( $path ) || ( is_file( $path ) && self::php_name( $entry ) ) ) {
-				return $entry;
+			$loader = Site_PHP_Compat_Layout::index_loader( $index['source'] );
+			if ( is_string( $loader ) ) {
+				return "$app$rel/index.php isn't WordPress's own index.php (" . self::clean( $loader ) . '); this check only gives a verdict when the served index.php just loads WordPress';
 			}
-			if ( ! is_dir( $path ) ) {
-				continue;
+			$root = '' === $loader['sub'] ? $rel : "$rel/{$loader['sub']}";
+			if ( null === $this->wp_abspath( $code, $root ) ) {
+				return "$app$rel/index.php loads WordPress from $app$root, which holds no WordPress";
 			}
-			try {
-				// The WordPress directory itself (e.g. releases/<n> behind current/) is what the scan covers.
-				$tree = new \RecursiveCallbackFilterIterator(
-					new \RecursiveDirectoryIterator( $path, \FilesystemIterator::SKIP_DOTS ),
-					function ( $item ) use ( $wp ) {
-						return $item->getPathname() !== $wp;
-					}
-				);
-				foreach ( new \RecursiveIteratorIterator( $tree ) as $item ) {
-					if ( ++$seen > 20000 || $item->isLink() || ( $item->isFile() && self::php_name( $item->getFilename() ) ) ) {
-						return $entry . '/' . substr( $item->getPathname(), strlen( $path ) + 1 );
-					}
+		} elseif ( null !== $this->wp_abspath( $code, $rel ) ) {
+			return "$app$rel holds WordPress but no index.php";
+		} else {
+			$candidates = array_slice( \EE\Site\Utils\get_wp_root_candidates( $rel ), 1 );
+			foreach ( array_unique( [ $rel, 'htdocs' ] ) as $dir ) {
+				$path = $this->wp_cli_path( $code, $dir );
+				if ( null !== $path && 0 === strpos( $path, "$rel/" ) ) {
+					$candidates[] = $path;
 				}
-			} catch ( \Exception $e ) {
-				return $entry;
+			}
+			foreach ( array_unique( $candidates ) as $candidate ) {
+				if ( null !== $this->wp_abspath( $code, $candidate ) ) {
+					$root = $candidate;
+					break;
+				}
+			}
+			if ( null === $root ) {
+				// No WordPress: fine when there is no PHP at all (the scanner then finds nothing to check).
+				return [ 'root' => $rel, 'abspath' => null ];
+			}
+		}
+		$abspath = $this->wp_abspath( $code, $root );
+		// The resolved WordPress root must be inside the resolved served root.
+		$top = self::resolve_in( $code, $rel );
+		if ( null === $top || 0 !== strpos( $abspath . '/', $top . '/' ) ) {
+			return "WordPress in $app$root resolves to " . self::clean( str_replace( "$code/", $app, $abspath ) ) . ", outside the directory nginx serves ($app$rel)";
+		}
+		if ( $root !== $rel ) {
+			$own = $this->site_file( $code, "$root/index.php", self::PHP_SOURCE_MAX );
+			$own = 'ok' === $own['state'] ? Site_PHP_Compat_Layout::index_loader( $own['source'] ) : 'it ' . ( 'bad' === $own['state'] ? $own['detail'] : 'is missing' );
+			if ( is_string( $own ) || '' !== $own['sub'] ) {
+				return "$app$root/index.php isn't WordPress's own index.php (" . self::clean( is_string( $own ) ? $own : 'it loads WordPress from elsewhere' ) . ')';
+			}
+		}
+
+		return [ 'root' => $root, 'abspath' => $abspath ];
+	}
+
+	/**
+	 * @param string $code Real path of the site's app/.
+	 * @param string $root Directory relative to app/.
+	 *
+	 * @return string|null Its real path when it holds WordPress (a regular wp-settings.php).
+	 */
+	protected function wp_abspath( $code, $root ) {
+		$settings = self::resolve_in( $code, "$root/wp-settings.php" );
+
+		return null !== $settings && is_file( $settings ) && ! is_link( $settings ) ? dirname( $settings ) : null;
+	}
+
+	/**
+	 * Reads the wp-config.php WordPress loads, and the files it loads, against the config grammar.
+	 *
+	 * @param string $code    Real path of the site's app/.
+	 * @param string $root    WordPress root relative to app/.
+	 * @param string $abspath Real WordPress root.
+	 * @param string $app     The site's app/ with a trailing slash, for messages.
+	 *
+	 * @return string[]|string Real paths of the config files read, or a tool_error detail.
+	 */
+	protected function check_wp_config( $code, $root, $abspath, $app ) {
+		$config = $this->wp_config_files( $code, $root, $abspath );
+		if ( ! $config ) {
+			return [];
+		}
+		$file = $this->site_file( $code, $config[0], self::PHP_SOURCE_MAX );
+		if ( 'ok' !== $file['state'] ) {
+			return "can't read $app{$config[0]}: " . ( 'bad' === $file['state'] ? $file['detail'] : 'it is gone' );
+		}
+		$read    = [ $file['real'] ];
+		$resolve = function ( $path ) use ( $code, $abspath, &$read ) {
+			if ( 0 !== strpos( $path, "$code/" ) ) {
+				return [ 'state' => 'bad', 'detail' => 'is outside the site\'s files' ];
+			}
+			$found = $this->site_file( $code, substr( $path, strlen( $code ) + 1 ), self::PHP_SOURCE_MAX );
+			if ( 'ok' === $found['state'] ) {
+				$read[]           = $found['real'];
+				$found['scanned'] = self::scanned_by_wp_scan( $found['real'], $abspath );
+			}
+			return $found;
+		};
+		$error   = Site_PHP_Compat_Layout::check_config(
+			$file['source'],
+			[
+				'root'    => $abspath,
+				'dir'     => dirname( $file['real'] ),
+				'file'    => $file['real'],
+				'boot'    => true,
+				'resolve' => $resolve,
+			]
+		);
+		if ( null !== $error ) {
+			// Messages name the site's app/ path, not the volume's.
+			return self::clean( str_replace( "$code/", $app, $error ) );
+		}
+
+		return $read;
+	}
+
+	/**
+	 * Walks all of app/ (no links followed, time-bounded) for what the scan of the WordPress root would miss: any code file
+	 * or link outside it (besides the served index.php, the config files read, its own `current` link, dot-directories and
+	 * old releases nginx doesn't serve), and inside it a link to one of its own ancestors or a nested WordPress install.
+	 *
+	 * @param string      $code    Real path of the site's app/.
+	 * @param string      $rel     Served root relative to app/.
+	 * @param string      $root    WordPress root relative to app/ (as served).
+	 * @param string|null $abspath Real WordPress root, or null when there is none.
+	 * @param string[]    $allowed Real paths of PHP files already checked.
+	 *
+	 * @return array|string The .user.ini files found ([ path, type ] each), or a tool_error detail (host paths).
+	 */
+	protected function app_walk( $code, $rel, $root, $abspath, array $allowed ) {
+		$top      = (string) self::resolve_in( $code, $rel );
+		// The live release: the WordPress root or its ancestor directly in a releases/ directory.
+		$releases = null;
+		for ( $dir = $abspath; null !== $dir && strlen( $dir ) > strlen( $code ); $dir = dirname( $dir ) ) {
+			if ( 'releases' === basename( dirname( $dir ) ) ) {
+				$releases = dirname( $dir );
+				break;
+			}
+		}
+		$user_ini = [];
+		$found    = null;
+		$error    = $this->walk_tree(
+			$code,
+			function ( $path, $name, $type ) use ( $code, $top, $root, $abspath, $allowed, $releases, &$user_ini, &$found ) {
+				$inside = null !== $abspath && 0 === strpos( $path . '/', $abspath . '/' );
+				if ( '.user.ini' === $name ) {
+					$user_ini[] = [ $path, $type ];
+				}
+				if ( 'link' === $type ) {
+					// The served root or the WordPress root may be a link (current -> releases/<n>).
+					if ( 0 === strpos( "$code/$root/", $path . '/' ) ) {
+						return false;
+					}
+					$real = self::resolve_in( $code, substr( $path, strlen( $code ) + 1 ) );
+					if ( $inside ) {
+						if ( null !== $real && 0 === strpos( dirname( $path ) . '/', $real . '/' ) ) {
+							$found = "$path links to its own ancestor " . $real;
+							return true;
+						}
+						return false;
+					}
+					$found = "$path is a link outside the WordPress directory";
+					return true;
+				}
+				if ( 'dir' === $type ) {
+					if ( $inside ) {
+						if ( $path !== $abspath && ( file_exists( "$path/wp-settings.php" ) || is_dir( "$path/wp-includes" ) ) ) {
+							$found = "$path holds another WordPress install";
+							return true;
+						}
+						return true;
+					}
+					if ( '.' === $name[0] ) {
+						return false;
+					}
+					// Old releases beside the live one, when nginx doesn't serve them.
+					return ! ( null !== $releases && dirname( $path ) === $releases && 0 !== strpos( $path . '/', $top . '/' ) );
+				}
+				if ( ! $inside && self::php_name( $name ) && ! in_array( $path, $allowed, true ) ) {
+					$found = "$path is PHP outside the WordPress directory" . ( null === $abspath ? ' (there is no WordPress this check recognises)' : '' );
+					return true;
+				}
+				return false;
+			}
+		);
+		if ( null !== $error ) {
+			return "can't look through the site's files: $error";
+		}
+
+		return null === $found ? $user_ini : self::clean( $found ) . '; this check can\'t scan that layout';
+	}
+
+	/**
+	 * Walks a directory tree without following links, bounded in time: $visit( $path, $name, file|dir|link|other ) returns
+	 * true to stop, and for a directory whether to go into it.
+	 *
+	 * @param string   $top   Real directory.
+	 * @param callable $visit See above.
+	 *
+	 * @return string|null Why the walk could not finish, or null.
+	 */
+	protected function walk_tree( $top, callable $visit ) {
+		$todo     = [ $top ];
+		$deadline = microtime( true ) + self::WALK_SECONDS;
+		while ( $todo ) {
+			$dir = array_pop( $todo );
+			if ( microtime( true ) > $deadline ) {
+				return 'it takes more than ' . self::WALK_SECONDS . ' s to list';
+			}
+			$entries = @scandir( $dir ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is handled.
+			if ( false === $entries ) {
+				return self::clean( $dir ) . ' can\'t be listed';
+			}
+			foreach ( $entries as $name ) {
+				if ( '.' === $name || '..' === $name ) {
+					continue;
+				}
+				$path = "$dir/$name";
+				$stat = @lstat( $path ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is handled.
+				$mode = false === $stat ? 0 : $stat['mode'] & 0170000;
+				$type = 0120000 === $mode ? 'link' : ( 0040000 === $mode ? 'dir' : ( 0100000 === $mode ? 'file' : 'other' ) );
+				$go   = $visit( $path, $name, $type );
+				if ( 'dir' === $type && $go ) {
+					$todo[] = $path;
+				} elseif ( 'dir' !== $type && true === $go ) {
+					return null;
+				}
 			}
 		}
 
@@ -986,31 +1211,193 @@ class Site_PHP_Compat {
 	/**
 	 * @param string $name File name.
 	 *
-	 * @return bool Whether PHP code may be in it (the extensions the scanner checks).
+	 * @return bool Whether the scanner reads it as PHP code (its CODE_EXTENSIONS, any case).
 	 */
 	protected static function php_name( $name ) {
-		return 1 === preg_match( '/\.(php[0-9]?|phtml|inc|module|install|theme)$/i', $name );
+		return 1 === preg_match( '/\.(?:php|inc|phtml|module|install|theme|engine|php5|php7)$/iD', $name );
 	}
 
 	/**
-	 * A file PHP runs before every request (auto_prepend_file in the served root's .user.ini or the site's php.ini files),
-	 * which can set what WordPress loads before wp-config.php does.
+	 * The PHP settings that load or change code outside the scan, wherever the site's PHP takes them from: the .user.ini
+	 * files found, the site's php.ini, conf.d/*.ini, php-fpm.conf and pool files. Every assignment counts.
 	 *
-	 * @param object $site_data Site record.
-	 * @param string $code      Real path of the site's app/.
-	 * @param string $rel       Served root relative to app/.
+	 * @param object     $site_data Site record.
+	 * @param string     $code      Real path of the site's app/.
+	 * @param array      $user_ini  .user.ini files found ([ path, type ] each).
+	 * @param array|null $layout    wp_layout_of() result, or null for a php site.
 	 *
 	 * @return string|null tool_error detail.
 	 */
-	protected function prepended( $site_data, $code, $rel ) {
-		$files = [ "$rel/.user.ini" => $this->read_site_file( $code, "$rel/.user.ini" ) ];
-		foreach ( (array) glob( $site_data->site_fs_path . '/config/php/php/conf.d/*.ini' ) as $ini ) {
-			$files[ $ini ] = is_file( $ini ) && filesize( $ini ) <= self::CONFIG_MAX ? (string) @file_get_contents( $ini ) : ''; // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- unreadable counts as empty.
+	protected function prepend_check( $site_data, $code, array $user_ini, $layout ) {
+		$conf  = $site_data->site_fs_path . '/config/php';
+		$files = [];
+		foreach ( array_merge( [ "$conf/php/php.ini" ], (array) glob( "$conf/php/conf.d/*.ini" ) ) as $file ) {
+			$files[ $file ] = 'ini';
 		}
-		foreach ( $files as $file => $text ) {
-			if ( null !== $text && preg_match( '/^[ \t]*auto_prepend_file[ \t]*=[ \t]*([^;\r\n]*)/mi', $text, $m ) && ! in_array( strtolower( trim( $m[1], " \t\"'" ) ), [ '', 'none' ], true ) ) {
-				return "$file sets auto_prepend_file, which runs before WordPress; this check can't tell what it changes";
+		foreach ( array_merge( [ "$conf/php-fpm.conf" ], (array) glob( "$conf/php-fpm.d/*.conf" ) ) as $file ) {
+			$files[ $file ] = 'fpm';
+		}
+		foreach ( $user_ini as list( $path, $type ) ) {
+			$files[ $path ] = 'file' === $type ? 'ini' : 'bad';
+		}
+		$app = $site_data->site_fs_path . '/app/';
+		foreach ( $files as $file => $kind ) {
+			if ( ! file_exists( $file ) && ! is_link( $file ) ) {
+				continue;
 			}
+			$shown = self::clean( str_replace( "$code/", $app, $file ) );
+			$text  = 'bad' === $kind || ! is_file( $file ) || filesize( $file ) > self::CONFIG_MAX ? false : @file_get_contents( $file ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is handled.
+			if ( false === $text ) {
+				return "can't read $shown, which may set a file PHP runs before WordPress";
+			}
+			foreach ( self::php_settings( $text, $kind ) as list( $key, $value ) ) {
+				if ( ! $this->php_setting_ok( $code, $key, $value, $layout ) ) {
+					return "$shown sets $key to " . self::clean( '' === $value ? '""' : $value ) . ', which this check can\'t confirm';
+				}
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Every assignment of the settings that load or change code (auto_prepend_file, auto_append_file, opcache.preload,
+	 * include_path, user_ini.filename, zend.multibyte, zend.script_encoding) and FPM's include= and
+	 * security.limit_extensions, in file order.
+	 *
+	 * @param string $text Its text.
+	 * @param string $kind ini or fpm.
+	 *
+	 * @return array[] [ key, value (unquoted) ] each.
+	 */
+	public static function php_settings( $text, $kind ) {
+		$keys    = '(auto_prepend_file|auto_append_file|opcache\.preload|include_path|user_ini\.filename|zend\.multibyte|zend\.script_encoding)';
+		$pattern = 'fpm' === $kind
+			? '/^[ \t]*(?:php(?:_admin)?_(?:value|flag)\[' . $keys . '\]|(include|security\.limit_extensions))[ \t]*=[ \t]*([^\r\n]*)$/mi'
+			: '/^[ \t]*' . $keys . '()[ \t]*=[ \t]*([^\r\n]*)$/mi';
+		$out     = [];
+		preg_match_all( $pattern, $text, $all, PREG_SET_ORDER );
+		foreach ( $all as $m ) {
+			$value = trim( $m[3] );
+			if ( preg_match( '/^"([^"]*)"|^\'([^\']*)\'/', $value, $q ) ) {
+				$value = isset( $q[2] ) ? $q[2] : $q[1];
+			} else {
+				$value = trim( preg_replace( '/[ \t]*;.*$/', '', $value ) );
+			}
+			$out[] = [ strtolower( '' !== $m[1] ? $m[1] : $m[2] ), $value ];
+		}
+
+		return $out;
+	}
+
+	/**
+	 * @param string     $code   Real path of the site's app/.
+	 * @param string     $key    Setting.
+	 * @param string     $value  Its value.
+	 * @param array|null $layout wp_layout_of() result, or null for a php site.
+	 *
+	 * @return bool
+	 */
+	protected function php_setting_ok( $code, $key, $value, $layout ) {
+		$off = in_array( strtolower( $value ), [ '', 'none', 'off', 'no', 'false', 'null', '0' ], true );
+		switch ( $key ) {
+			case 'include':
+				return 'etc/php-fpm.d/*.conf' === $value;
+			case 'security.limit_extensions':
+				return '.php' === $value;
+			case 'user_ini.filename':
+				return '' === $value || '.user.ini' === $value;
+			case 'zend.multibyte':
+				return $off;
+			case 'auto_prepend_file':
+				break;
+			default:
+				return $off;
+		}
+		if ( $off ) {
+			return true;
+		}
+		$path = Site_PHP_Compat_Layout::normalise( $value );
+		if ( '/' !== $value[0] || null === $path || 0 !== strpos( $path, '/var/www/' ) ) {
+			return false;
+		}
+		$file = $this->site_file( $code, substr( $path, strlen( '/var/www/' ) ), self::PHP_SOURCE_MAX );
+		if ( 'ok' !== $file['state'] ) {
+			return false;
+		}
+		if ( null === $layout ) {
+			$htdocs = self::resolve_in( $code, 'htdocs' );
+			return null !== $htdocs && 0 === strpos( $file['real'], "$htdocs/" ) && self::php_name( $file['real'] );
+		}
+
+		// Any loader the scan reads (Wordfence's wordfence-waf.php, NinjaFirewall's, …).
+		return self::scanned_by_wp_scan( $file['real'], $layout['abspath'] );
+	}
+
+	/**
+	 * nginx and PHP-FPM settings that could run other code than the scan reads: nginx's own files (config/nginx/, conf.d/,
+	 * custom/), and php-fpm.conf's and the pools' include= (in prepend_check()).
+	 *
+	 * @param object $site_data Site record.
+	 *
+	 * @return string|null tool_error detail.
+	 */
+	protected function server_config_check( $site_data ) {
+		$dir   = $site_data->site_fs_path . '/config/nginx';
+		$files = array_merge( (array) glob( "$dir/*" ), (array) glob( "$dir/conf.d/*.conf" ), (array) glob( "$dir/custom/*.conf" ) );
+		foreach ( $files as $file ) {
+			if ( is_dir( $file ) && ! is_link( $file ) || preg_match( '/\.(?:default|types)$|^(?:koi-|win-|uwsgi_params|scgi_params)/', basename( $file ) ) && 'fastcgi_params' !== basename( $file ) ) {
+				continue;
+			}
+			$text = is_file( $file ) && filesize( $file ) <= self::CONFIG_MAX ? @file_get_contents( $file ) : false; // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is handled.
+			if ( false === $text ) {
+				return "can't read $file, which may change what nginx runs";
+			}
+			$custom = 'custom' === basename( dirname( $file ) );
+			if ( $custom && 'admin-tools.conf' === basename( $file ) && self::ADMIN_TOOLS_CONF === str_replace( "\r\n", "\n", $text ) ) {
+				continue;
+			}
+			$why = self::nginx_refusal( $text, $file === $dir . '/conf.d/main.conf', $custom );
+			if ( null !== $why ) {
+				return "$file $why, which this check can't confirm";
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * What in an nginx file could make it run other code than the scan reads.
+	 *
+	 * @param string $text   File text.
+	 * @param bool   $main   Whether it is conf.d/main.conf (its single root is read by served_root()).
+	 * @param bool   $custom Whether it is in custom/.
+	 *
+	 * @return string|null
+	 */
+	public static function nginx_refusal( $text, $main, $custom ) {
+		$text = preg_replace( '/#[^\r\n]*/', '', $text );
+		if ( preg_match( '/\bPHP_(?:ADMIN_)?VALUE\b/i', $text ) ) {
+			return 'sets PHP_VALUE';
+		}
+		preg_match_all( '/(?:^|[;{}])\s*fastcgi_param\s+(SCRIPT_FILENAME|DOCUMENT_ROOT)\s+([^;]*);/i', $text, $all, PREG_SET_ORDER );
+		foreach ( $all as $m ) {
+			$value = trim( $m[2] );
+			if ( ! in_array( $value, 'DOCUMENT_ROOT' === strtoupper( $m[1] ) ? [ '$document_root' ] : [ '$request_filename', '$document_root$fastcgi_script_name' ], true ) ) {
+				return "sets {$m[1]} to $value";
+			}
+		}
+		preg_match_all( '/(?:^|[;{}])\s*include\s+([^;\s]+)\s*;/', $text, $all, PREG_SET_ORDER );
+		foreach ( $all as $m ) {
+			if ( ! in_array( $m[1], [ 'mime.types', 'fastcgi_params', 'fastcgi.conf', '/usr/local/openresty/nginx/conf/conf.d/main.conf', '/usr/local/openresty/nginx/conf/custom/*.conf' ], true ) ) {
+				return "includes {$m[1]}";
+			}
+		}
+		if ( ! $main && preg_match( '/(?:^|[;{}])\s*(root|alias)\s/', $text, $m ) ) {
+			return "sets $m[1]";
+		}
+		if ( $custom && preg_match( '/(?:^|[;{}])\s*fastcgi_pass\s/', $text ) ) {
+			return 'passes requests to PHP';
 		}
 
 		return null;
@@ -1040,18 +1427,29 @@ class Site_PHP_Compat {
 					return "could not read $file; enable the site to check mounted code";
 				}
 				if ( $mounts ) {
-					return "$file mounts code below /var/www, which this check can only see while the site runs; enable the site and run it again";
+					return "$file may mount code or change how PHP starts, which this check can only see while the site runs; enable the site and run it again";
 				}
 			}
 
 			return [];
 		}
-		$inspect = $this->docker( [ 'docker', 'inspect', '--format', '{{json .Mounts}}', $ids[0] ], 60 );
-		$mounts  = 0 === $inspect['code'] ? json_decode( trim( $inspect['stdout'] ), true ) : null;
-		if ( ! is_array( $mounts ) ) {
+		$inspect = $this->docker( [ 'docker', 'inspect', '--format', '{{json .}}', $ids[0] ], 60 );
+		$info    = 0 === $inspect['code'] ? json_decode( trim( $inspect['stdout'] ), true ) : null;
+		$mounts  = isset( $info['Mounts'] ) && is_array( $info['Mounts'] ) ? $info['Mounts'] : null;
+		if ( null === $mounts ) {
 			return 'could not read the mounts of the site\'s php container';
 		}
+		$detail = $this->container_config_check( $info );
+		if ( null !== $detail ) {
+			return $detail;
+		}
 		$admin = realpath( EE_ROOT_DIR . '/admin-tools' );
+		// EE's own mounts outside /var/www: PHP's config, its logs and admin-tools' data.
+		$known = [
+			'/usr/local/etc'              => realpath( $site_data->site_fs_path . '/config/php' ),
+			'/var/log/php'                => realpath( $site_data->site_fs_path . '/logs/php' ),
+			'/etc/easyengine/admin-tools' => realpath( $site_data->site_fs_path . '/config/admin-tools' ),
+		];
 		foreach ( $mounts as $mount ) {
 			$dst = isset( $mount['Destination'] ) ? rtrim( (string) $mount['Destination'], '/' ) : '';
 			$src = isset( $mount['Source'] ) ? (string) $mount['Source'] : '';
@@ -1062,8 +1460,14 @@ class Site_PHP_Compat {
 				}
 				continue;
 			}
-			if ( 0 !== strpos( $dst, '/var/www/' ) ) {
+			if ( isset( $known[ $dst ] ) ) {
+				if ( false === $known[ $dst ] || realpath( $src ) !== $known[ $dst ] ) {
+					return 'the site\'s php container gets ' . self::clean( $dst ) . ' from ' . self::clean( $src ) . ', not from EE\'s own directory for it';
+				}
 				continue;
+			}
+			if ( 0 !== strpos( $dst, '/var/www/' ) ) {
+				return 'the site\'s php container mounts ' . self::clean( $dst ) . ' from ' . self::clean( $src ) . ', code this check doesn\'t scan';
 			}
 			// EE's own admin tools (ee site admin-tools): not the site's code.
 			if ( '/var/www/htdocs/ee-admin' === $dst && false !== $admin && realpath( $src ) === $admin ) {
@@ -1074,7 +1478,7 @@ class Site_PHP_Compat {
 				return 'the site\'s php container mounts ' . self::clean( $dst ) . ' from ' . self::clean( $src ) . ', which this check can\'t mount';
 			}
 			// The WordPress root and its config are read on the host before the scan: only a mount inside wp-content leaves them as read.
-			if ( $this->wp_layout && ! preg_match( '#/wp-content(/|$)#', $dst ) ) {
+			if ( $this->wp_layout && 0 !== strpos( $dst . '/', $this->scan_path . '/wp-content/' ) ) {
 				return 'the site\'s php container mounts ' . self::clean( $dst ) . ' over the WordPress files, which this check reads before it scans';
 			}
 			EE::debug( "php-compat: also mounting $src at $dst" );
@@ -1082,6 +1486,41 @@ class Site_PHP_Compat {
 		}
 
 		return $this->extra_mounts;
+	}
+
+	/**
+	 * The php container must run as EE starts it: the image's command and entrypoint, and the image's environment plus
+	 * only EE's own variables (so no PHPRC or PHP_INI_SCAN_DIR loads other PHP settings).
+	 *
+	 * @param array $info docker inspect of the container.
+	 *
+	 * @return string|null tool_error detail.
+	 */
+	protected function container_config_check( array $info ) {
+		$image = isset( $info['Image'] ) ? (string) $info['Image'] : '';
+		$run   = '' === $image ? null : $this->docker( [ 'docker', 'image', 'inspect', '--format', '{{json .Config}}', $image ], 60 );
+		$own   = null !== $run && 0 === $run['code'] ? json_decode( trim( $run['stdout'] ), true ) : null;
+		if ( ! is_array( $own ) || ! isset( $info['Config'] ) || ! is_array( $info['Config'] ) ) {
+			return 'could not read how the site\'s php container is configured';
+		}
+		$config = $info['Config'];
+		foreach ( [ 'Cmd', 'Entrypoint' ] as $key ) {
+			if ( ( isset( $config[ $key ] ) ? $config[ $key ] : null ) !== ( isset( $own[ $key ] ) ? $own[ $key ] : null ) ) {
+				return "the site's php container runs another " . strtolower( $key ) . ' than its image, which this check can\'t confirm';
+			}
+		}
+		$image_env = [];
+		foreach ( isset( $own['Env'] ) ? (array) $own['Env'] : [] as $pair ) {
+			$image_env[ strtok( $pair, '=' ) ] = $pair;
+		}
+		foreach ( isset( $config['Env'] ) ? (array) $config['Env'] : [] as $pair ) {
+			$name = (string) strtok( $pair, '=' );
+			if ( isset( $image_env[ $name ] ) ? $image_env[ $name ] !== $pair : ! preg_match( '/^(?:WORDPRESS_DB_[A-Z_]+|DB_[A-Z_]+|MYSQL_[A-Z_]+|REDIS_HOST|USER_ID|GROUP_ID|VIRTUAL_HOST|NEWRELIC_[A-Z_]+)$/D', $name ) ) {
+				return 'the site\'s php container sets ' . self::clean( $name ) . ', which this check can\'t confirm';
+			}
+		}
+
+		return null;
 	}
 
 	/**
@@ -1104,10 +1543,11 @@ class Site_PHP_Compat {
 			if ( '' === $line || '#' === $line[0] ) {
 				continue;
 			}
-			if ( false !== strpos( $line, '$' ) ) {
+			// Interpolation, and keys that pull mounts in from elsewhere.
+			if ( false !== strpos( $line, '$' ) || preg_match( '/^-?\s*(?:extends|include|volumes_from|command|entrypoint)\s*:|PHPRC|PHP_INI_SCAN_DIR/', $line ) ) {
 				return true;
 			}
-			if ( false === strpos( $line, '/var/www' ) || preg_match( '/^-?\s*source:\s/', $line ) ) {
+			if ( false === stripos( $line, 'www' ) || preg_match( '/^-?\s*source:\s/', $line ) ) {
 				continue;
 			}
 			$target = null;
@@ -1119,7 +1559,8 @@ class Site_PHP_Compat {
 				// An environment entry (`- NAME=value`), not a volume.
 				continue;
 			}
-			if ( null === $target || 0 === strpos( rtrim( $target, '/' ) . '/', '/var/www/' ) ) {
+			// A destination spelt another way (`//`, `/./`, `/../`, a backslash) may still be below /var/www.
+			if ( null === $target || preg_match( '#//|/\.\.?(/|$)|\\\\#', $target ) || 0 === strpos( rtrim( $target, '/' ) . '/', '/var/www/' ) ) {
 				return true;
 			}
 		}
@@ -1128,26 +1569,30 @@ class Site_PHP_Compat {
 	}
 
 	/**
-	 * The root nginx serves (main.conf), or the public directory in EE's record when main.conf can't be read.
+	 * The root nginx serves (main.conf), or the public directory in EE's record when there is no main.conf.
 	 *
 	 * @param object $site_data Site record.
 	 *
-	 * @return string|null Path under /var/www/htdocs; null when main.conf is there but has no single plain root.
+	 * @return string Path under /var/www/htdocs, or `!<tool_error detail>`.
 	 */
 	protected function served_root( $site_data ) {
 		// `--public-dir=a//b` is stored as given; the scanner refuses `//`.
 		$db   = rtrim( preg_replace( '#/+#', '/', (string) $site_data->site_container_fs_path ), '/' );
 		$db   = '' === $db ? '/var/www/htdocs' : $db;
 		$conf = $this->nginx_conf;
-		$text = is_file( $conf ) && filesize( $conf ) <= self::CONFIG_MAX ? @file_get_contents( $conf ) : false; // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is handled.
-		if ( false === $text ) {
-			EE::debug( "php-compat: $conf can't be read; using the public directory $db" );
+		if ( ! file_exists( $conf ) && ! is_link( $conf ) ) {
+			EE::debug( "php-compat: there is no $conf; using the public directory $db" );
 			return $db;
 		}
-		// Exactly one root, as EE writes it; anything else is a config this check doesn't guess at.
-		$root = 1 === preg_match_all( '/^\s*root\s+([^\s;]+)\s*;/m', $text, $m ) ? rtrim( preg_replace( '#/+#', '/', $m[1][0] ), '/' ) : null;
-		if ( null === $root || ! preg_match( self::ROOT_PATTERN, $root ) ) {
-			return null;
+		$text = is_file( $conf ) && filesize( $conf ) <= self::CONFIG_MAX ? @file_get_contents( $conf ) : false; // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is handled.
+		if ( false === $text ) {
+			return "!can't read $conf, so can't tell which directory nginx serves";
+		}
+		$text = preg_replace( '/#[^\r\n]*/', '', $text );
+		// Exactly one root, as EE writes it, and no alias; anything else is a config this check doesn't guess at.
+		$root = 1 === preg_match_all( '/(?:^|[;{}])\s*root\s+([^\s;{}]+)\s*;/', $text, $m ) ? rtrim( preg_replace( '#/+#', '/', $m[1][0] ), '/' ) : null;
+		if ( null === $root || ! preg_match( self::ROOT_PATTERN, $root ) || preg_match( '/(?:^|[;{}])\s*alias\s/', $text ) ) {
+			return "!can't tell which directory nginx serves: $conf has no single plain root";
 		}
 		if ( $root !== $db ) {
 			EE::warning( sprintf( "EE's record of %s has %s as its public directory, but nginx serves %s (root in %s). Checking what nginx serves.", $this->site, $db, $root, $conf ) );
@@ -1156,130 +1601,6 @@ class Site_PHP_Compat {
 		return $root;
 	}
 
-	/**
-	 * WordPress root relative to app/: where the served index.php loads WordPress from, the served root or its current/ (as
-	 * backup finds it), else wp-cli.yml's path.
-	 *
-	 * @param string $code Real path of the site's app/.
-	 * @param string $rel  Served root relative to app/.
-	 *
-	 * @return string|null The root, null when none is found, or `!<detail>` when the served index.php loads WordPress from
-	 *                     somewhere this check can't follow.
-	 */
-	protected function wp_root( $code, $rel ) {
-		$loader     = $this->index_wp_root( $code, $rel );
-		$candidates = \EE\Site\Utils\get_wp_root_candidates( $rel );
-		if ( false === $loader ) {
-			return "!can't resolve where {$rel}/index.php loads WordPress from";
-		}
-		if ( null !== $loader ) {
-			// What is actually served is the only candidate: a stale copy elsewhere must not stand in for it.
-			$candidates = [ $loader ];
-		} else {
-			foreach ( array_unique( [ $rel, 'htdocs' ] ) as $dir ) {
-				$path = $this->wp_cli_path( $code, $dir );
-				if ( null !== $path ) {
-					$candidates[] = $path;
-				}
-			}
-		}
-		$candidates = array_values( array_unique( $candidates ) );
-		// In order; a WordPress directory may have no wp-content when WP_CONTENT_DIR moves it (refused later).
-		foreach ( $candidates as $candidate ) {
-			foreach ( [ 'wp-content', 'wp-settings.php' ] as $marker ) {
-				if ( null !== self::resolve_in( $code, $candidate . '/' . $marker ) ) {
-					return $candidate;
-				}
-			}
-		}
-
-		return null === $loader ? null : "!{$rel}/index.php loads WordPress from {$loader}, which holds no WordPress";
-	}
-
-	/**
-	 * The directory the served index.php loads WordPress (wp-blog-header.php or wp-load.php) from, read without running it.
-	 *
-	 * @param string $code Real path of the site's app/.
-	 * @param string $rel  Served root relative to app/.
-	 *
-	 * @return string|false|null Relative to app/; null when index.php doesn't load WordPress (or isn't there), false when it
-	 *                           may but not in a form this check reads, or can't be read.
-	 */
-	protected function index_wp_root( $code, $rel ) {
-		$index = self::resolve_in( $code, "$rel/index.php" );
-		if ( null === $index ) {
-			return null;
-		}
-		$source = $this->read_site_file( $code, "$rel/index.php", self::PHP_SOURCE_MAX );
-		$loads  = null === $source ? false : self::loaded_from( $source, 'wp-blog-header.php' );
-		if ( ! is_array( $loads ) ) {
-			return $loads;
-		}
-		list( $path, $from_dir ) = $loads;
-		if ( '/' === substr( $path, 0, 1 ) && ! $from_dir ) {
-			if ( 0 !== strpos( $path, '/var/www/' ) ) {
-				return false;
-			}
-			$path = substr( $path, strlen( '/var/www/' ) );
-		} else {
-			// __DIR__, or a relative path, which PHP-FPM resolves from the script's own directory: the real one. The served
-			// path stands in for it (keeping a current/ link for the scanner) only when it is that same directory and no `..`.
-			$real = dirname( substr( $index, strlen( $code ) + 1 ) );
-			$base = ! preg_match( '#(^|/)\.\.(/|$)#', $path ) && self::resolve_in( $code, $rel ) === dirname( $index ) ? $rel : $real;
-			$path = $base . '/' . $path;
-		}
-		$path = trim( preg_replace( '#/+#', '/', preg_replace( '#(^|/)\.(?=/|$)#', '$1', $path ) ), '/' );
-
-		return '' === $path ? false : $path;
-	}
-
-	/**
-	 * Where a PHP file loads WordPress (wp-blog-header.php or wp-load.php) from, read from its tokens: the string in front of
-	 * the name, with `__DIR__ .` or `dirname( __FILE__ ) .` before it or nothing.
-	 *
-	 * @param string $source PHP source.
-	 * @param string $file   Kept for callers; wp-blog-header.php and wp-load.php are both looked for.
-	 *
-	 * @return array|false|null [ directory part, whether it is from the file's own directory ]; false when it loads WordPress
-	 *                          in another form, or includes something this check can't resolve; null when it doesn't.
-	 */
-	public static function loaded_from( $source, $file = 'wp-blog-header.php' ) {
-		$php = self::analyse_php( $source );
-		if ( null !== $php['halt_reason'] ) {
-			return false;
-		}
-		$found = null;
-		foreach ( $php['includes'] as $include ) {
-			if ( $include['in_func'] ) {
-				continue;
-			}
-			$names = preg_match( '/wp-(blog-header|load)\b/i', $include['expr'] );
-			if ( ! $names && $include['static'] ) {
-				continue;
-			}
-			// Loading WordPress, or something this check can't name: only a plain, unconditional statement is read.
-			if ( null !== $found || ! $names || ! $include['alone'] || $include['overlong']
-				|| ! preg_match( '/^\(?(?:(__DIR__|dirname\(__FILE__\))\.)?([\'"])([^\'"$\\\\]*?)wp-(?:blog-header|load)\.php\2\)?$/i', $include['expr'], $m ) ) {
-				return false;
-			}
-			// PHP joins `__DIR__ . 'wp/…'` as written: a sibling, not a child.
-			if ( '' !== $m[1] && '' !== $m[3] && '/' !== $m[3][0] ) {
-				return false;
-			}
-			$found = [ $m[3], '' !== $m[1] ];
-		}
-
-		return $found;
-	}
-
-	/**
-	 * `path:` of <dir>/wp-cli.yml, relative to app/.
-	 *
-	 * @param string $code Real path of the site's app/.
-	 * @param string $dir  Directory relative to app/.
-	 *
-	 * @return string|null
-	 */
 	protected function wp_cli_path( $code, $dir ) {
 		$text = $this->read_site_file( $code, $dir . '/wp-cli.yml' );
 		$text = null === $text ? null : str_replace( [ "\r\n", "\r" ], "\n", $text );
@@ -1301,109 +1622,9 @@ class Site_PHP_Compat {
 	}
 
 	/**
-	 * Refuses a verdict when the config WordPress loads moves its code where the scanner doesn't look: reads wp-config.php,
-	 * the files it includes (as far as they can be named without running anything) and the served index.php.
-	 *
-	 * @param string $code Real path of the site's app/.
-	 * @param string $root WordPress root relative to app/.
-	 * @param string $app  The site's app/ path with a trailing slash, for messages.
-	 * @param string $rel  Served root relative to app/.
-	 *
-	 * @return string|null tool_error detail, or null when the scan covers what WordPress loads.
-	 */
-	protected function check_wp_dirs( $code, $root, $app, $rel ) {
-		$abspath = self::resolve_in( $code, $root );
-		$content = $root . '/wp-content';
-		$queue   = [];
-		foreach ( $this->wp_config_files( $code, $root, $abspath ) as $file ) {
-			$queue[] = [ $file, false, true ];
-		}
-		// The served index.php runs before WordPress too; its own includes are WordPress', not followed here.
-		$index = self::resolve_in( $code, "$rel/index.php" );
-		if ( null !== $index ) {
-			$queue[] = [ substr( $index, strlen( $code ) + 1 ), false, false ];
-		}
-		$values   = [];
-		$seen     = [];
-		$included = [];
-		while ( $queue ) {
-			list( $file, $conditional, $follow ) = array_shift( $queue );
-			if ( isset( $seen[ $file ] ) ) {
-				continue;
-			}
-			$seen[ $file ] = true;
-			if ( count( $seen ) > 50 ) {
-				return "the config of WordPress includes more files than this check follows (from $app$file)";
-			}
-			$source = $this->read_site_file( $code, $file, self::PHP_SOURCE_MAX );
-			if ( null === $source ) {
-				return "can't read $app$file, so this check can't tell which plugins and themes WordPress loads";
-			}
-			$php = self::analyse_php( $source );
-			if ( null !== $php['unresolved'] ) {
-				return "can't resolve {$php['unresolved']} in $app$file, so this check can't tell which plugins and themes WordPress loads. It follows only define( 'WP_CONTENT_DIR', <__DIR__, dirname( __FILE__ ), dirname( __DIR__ ), ABSPATH or WP_CONTENT_DIR> . '<path>' ) or a /var/www path, before wp-settings.php is loaded";
-			}
-			foreach ( $php['defines'] as $name => $expr ) {
-				if ( $conditional ) {
-					return "can't resolve $name in $app$file: that file is loaded only under a condition";
-				}
-				if ( isset( $values[ $name ] ) ) {
-					return "can't resolve $name in $app$file: it is defined more than once";
-				}
-				$values[ $name ] = [ $expr, $file ];
-			}
-			foreach ( $follow ? $php['includes'] : [] as $include ) {
-				if ( $include['in_func'] || $include['after_boot'] || $include['boot'] ) {
-					continue;
-				}
-				$target = $include['overlong'] ? null : $this->dir_value( $code, $include['expr'], $file, $abspath, $content, true );
-				if ( null === $target ) {
-					return "can't follow the include `" . self::clean( substr( $include['expr'], 0, 80 ) ) . "` in $app$file, so this check can't tell which plugins and themes WordPress loads";
-				}
-				$real = self::resolve_in( $code, $target );
-				if ( null !== $real && is_file( $real ) ) {
-					// A missing file only warns (include) or stops the site (require): either way it defines nothing.
-					$queue[]    = [ substr( $real, strlen( $code ) + 1 ), $conditional || ! $include['alone'], true ];
-					$included[] = $real;
-				}
-			}
-		}
-
-		// What the config includes is code the site runs: only what the scanner reads (its directory, minus what it skips) is covered.
-		foreach ( array_unique( $included ) as $real ) {
-			if ( ! self::scanned_by_wp_scan( $real, $abspath ) ) {
-				$file = substr( $real, strlen( $code ) + 1 );
-				return "WordPress's config loads $app$file, which is outside the scanned directory $app$root (or in a part the scan skips); this check can't scan that layout yet";
-			}
-		}
-
-		foreach ( self::DIR_CONSTANTS as $name ) {
-			if ( ! isset( $values[ $name ] ) ) {
-				continue;
-			}
-			list( $expr, $file ) = $values[ $name ];
-			$dir = $this->dir_value( $code, $expr, $file, $abspath, $content );
-			if ( null === $dir ) {
-				return "can't resolve $name in $app$file";
-			}
-			$real = self::resolve_in( $code, $dir );
-			if ( null === $real ) {
-				return "$name in $app$file points to $app$dir, which doesn't exist";
-			}
-			$default = 'WP_CONTENT_DIR' === $name ? $content : $content . ( 'WP_PLUGIN_DIR' === $name ? '/plugins' : '/mu-plugins' );
-			if ( self::resolve_in( $code, $default ) === $real ) {
-				continue;
-			}
-			$what = 'WP_CONTENT_DIR' === $name ? 'plugins and themes' : ( 'WP_PLUGIN_DIR' === $name ? 'plugins' : 'must-use plugins' );
-			return "WordPress loads $what from $app$dir ($name in $app$file); this check can't scan that layout yet";
-		}
-
-		return null;
-	}
-
-	/**
-	 * Whether a wp scan of the WordPress directory reads this file: inside it, outside core and the directories the scanner
-	 * skips by name (uploads, cache, upgrade, languages, upgrade-temp-backup at a content root's top; node_modules, .git).
+	 * Whether a wp scan of the WordPress directory reads this file as code: inside it, a code extension, outside core and
+	 * the directories the scanner skips (uploads, cache, upgrade, languages, upgrade-temp-backup at a content root's top;
+	 * node_modules, .git anywhere), as compat-scanner's listFiles() does.
 	 *
 	 * @param string      $real    Real host path of the file.
 	 * @param string|null $abspath Real WordPress root.
@@ -1411,494 +1632,105 @@ class Site_PHP_Compat {
 	 * @return bool
 	 */
 	protected static function scanned_by_wp_scan( $real, $abspath ) {
-		if ( null === $abspath || 0 !== strpos( $real, $abspath . '/' ) ) {
+		if ( null === $abspath || 0 !== strpos( $real, $abspath . '/' ) || ! self::php_name( basename( $real ) ) ) {
 			return false;
 		}
 		$parts = explode( '/', substr( $real, strlen( $abspath ) + 1 ) );
 		if ( in_array( $parts[0], [ 'wp-admin', 'wp-includes' ], true ) || array_intersect( $parts, [ 'node_modules', '.git' ] ) ) {
 			return false;
 		}
-		// A content root's top-level skips: wp-content/uploads/…, and the same under any other directory's first level.
+		if ( 1 === count( $parts ) && in_array( $parts[0], self::CORE_FILES, true ) ) {
+			return false;
+		}
+
 		return ! ( count( $parts ) > 2 && in_array( $parts[1], [ 'uploads', 'cache', 'upgrade', 'languages', 'upgrade-temp-backup' ], true ) );
 	}
 
 	/**
-	 * Whether a served index.php does nothing but load WordPress: literal defines and one require/include of
-	 * wp-blog-header.php or wp-load.php.
+	 * The wp-config.php WordPress loads: in its directory, else the parent without wp-settings.php (the real parent, as
+	 * WordPress looks; the served parent too, as the scanner looks). A file there that can't be read counts.
 	 *
-	 * @param string $source PHP source.
+	 * @param string $code    Real path of the site's app/.
+	 * @param string $root    WordPress root relative to app/ (as served).
+	 * @param string $abspath Real WordPress root.
 	 *
-	 * @return bool
-	 */
-	public static function only_loads_wordpress( $source ) {
-		$code = '';
-		foreach ( @token_get_all( $source ) as $token ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- a broken file still tokenises.
-			if ( is_array( $token ) && in_array( $token[0], [ T_WHITESPACE, T_COMMENT, T_DOC_COMMENT, T_OPEN_TAG ], true ) ) {
-				continue;
-			}
-			if ( is_array( $token ) && in_array( $token[0], [ T_CLOSE_TAG, T_INLINE_HTML ], true ) ) {
-				// Only trailing whitespace may follow the code.
-				if ( '' !== trim( $token[1], " \t\r\n?>" ) ) {
-					return false;
-				}
-				continue;
-			}
-			$code .= ( '' !== $code && is_array( $token ) && T_STRING === $token[0] && preg_match( '/\w$/', $code ) ) ? ' ' . $token[1] : ( is_array( $token ) ? $token[1] : $token );
-		}
-		$quoted  = "(?:'[^'\\\\]*'|\"[^\"\\\\\$]*\")";
-		$literal = "(?:true|false|null|-?\\d+|$quoted)";
-		$define  = "@?\\\\?define\\((?:'[A-Za-z0-9_]+'|\"[A-Za-z0-9_]+\"),$literal\\);";
-		$load    = "(?:require|include)(?:_once)?\\(?(?:(?:__DIR__|dirname\\(__FILE__\\))\\.)?(?:'[^'\\\\\$]*wp-(?:blog-header|load)\\.php'|\"[^\"\\\\\$]*wp-(?:blog-header|load)\\.php\")\\)?;";
-
-		return 1 === preg_match( "/^(?:$define)*$load(?:$define)*\$/i", $code );
-	}
-
-	/**
-	 * The wp-config.php WordPress loads: in its directory, else the parent without wp-settings.php. Relative to app/.
-	 *
-	 * @param string      $code    Real path of the site's app/.
-	 * @param string      $root    WordPress root relative to app/.
-	 * @param string|null $abspath Real WordPress root.
-	 *
-	 * @return string[]
+	 * @return string[] Its path relative to app/, or nothing.
 	 */
 	protected function wp_config_files( $code, $root, $abspath ) {
-		if ( null === $abspath ) {
-			return [];
-		}
-		$real_root = substr( $abspath, strlen( $code ) + 1 );
-		$config    = null;
-		if ( null !== self::resolve_in( $code, $real_root . '/wp-config.php' ) ) {
-			$config = $real_root . '/wp-config.php';
-		} else {
-			// EE's own sites keep it in app/, above htdocs.
-			foreach ( array_unique( [ dirname( $real_root ), dirname( $root ) ] ) as $parent ) {
-				$parent = '.' === $parent ? '' : "$parent/";
-				if ( null !== self::resolve_in( $code, "{$parent}wp-config.php" ) && null === self::resolve_in( $code, "{$parent}wp-settings.php" ) ) {
-					$config = "{$parent}wp-config.php";
-					break;
-				}
+		$real_root  = substr( $abspath, strlen( $code ) + 1 );
+		$candidates = [ "$real_root/wp-config.php" ];
+		foreach ( array_unique( [ dirname( $real_root ), dirname( $root ) ] ) as $parent ) {
+			$parent = '.' === $parent ? '' : "$parent/";
+			if ( null === self::resolve_in( $code, "{$parent}wp-settings.php" ) ) {
+				$candidates[] = "{$parent}wp-config.php";
 			}
 		}
-		if ( null === $config ) {
-			return [];
+		foreach ( $candidates as $candidate ) {
+			if ( 'absent' !== $this->site_file( $code, $candidate, self::PHP_SOURCE_MAX )['state'] ) {
+				return [ $candidate ];
+			}
 		}
 
-		return [ substr( self::resolve_in( $code, $config ), strlen( $code ) + 1 ) ];
+		return [];
 	}
 
 	/**
-	 * Whether a require or include in the source names a file ending in $suffix (a string in its operand).
-	 *
-	 * @param string $source PHP source.
-	 * @param string $suffix End of the path, e.g. config/application.php (a whole path segment).
-	 *
-	 * @return bool
-	 */
-	public static function includes( $source, $suffix ) {
-		foreach ( self::analyse_php( $source )['includes'] as $include ) {
-			if ( $include['overlong'] ) {
-				return true;
-			}
-			foreach ( $include['strings'] as $path ) {
-				if ( $path === $suffix || substr( $path, -strlen( $suffix ) - 1 ) === "/$suffix" ) {
-					return true;
-				}
-			}
-		}
-
-		return false;
-	}
-
-	/**
-	 * Plain defines of the directory constants in a PHP file, read without running it.
-	 *
-	 * @param string $source PHP source.
-	 *
-	 * @return array|string Constant => value expression (whitespace and comments removed), or what the file does with a
-	 *                      directory constant that can't be read this way.
-	 */
-	public static function dir_defines( $source ) {
-		$php = self::analyse_php( $source );
-
-		return null === $php['unresolved'] ? $php['defines'] : $php['unresolved'];
-	}
-
-	/**
-	 * Reads a PHP file's tokens once, without running it: the plain defines of the directory constants, anything else it
-	 * does with them, and its includes.
-	 *
-	 * A define counts only as a statement of its own outside any block (braced or `if (…): … endif;`), or in its own
-	 * `if ( ! defined( 'X' ) )` guard, before wp-settings.php is loaded; after that load nothing changes them any more, so
-	 * the rest is passed over. After a load that may not run, a top-level return/exit or __halt_compiler, a define is
-	 * unresolved. `const X = …`, a computed define name, eval() and any other use of a name are unresolved too.
-	 *
-	 * @param string $source PHP source.
-	 *
-	 * @return array 'defines' (name => value expression), 'unresolved' (string|null), 'halt_reason' (string|null) and
-	 *               'includes' (each: expr, strings, static, alone, in_func, boot, after_boot, overlong).
-	 */
-	public static function analyse_php( $source ) {
-		$result = [
-			'defines'     => [],
-			'unresolved'  => null,
-			'halt_reason' => null,
-			'includes'    => [],
-		];
-		// Short open tags depend on the site's php.ini, not this one's: such a file can't be read reliably here.
-		if ( false === stripos( $source, '<?php' ) && false === strpos( $source, '<?=' ) && false !== strpos( $source, '<?' ) ) {
-			$result['unresolved']  = 'a short open tag (<?)';
-			$result['halt_reason'] = $result['unresolved'];
-			return $result;
-		}
-		$t = [];
-		foreach ( @token_get_all( $source ) as $token ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- a broken file still tokenises.
-			if ( ! is_array( $token ) ) {
-				$t[] = [ null, $token ];
-			} elseif ( ! in_array( $token[0], [ T_WHITESPACE, T_COMMENT, T_DOC_COMMENT ], true ) ) {
-				$t[] = [ $token[0], $token[1] ];
-			}
-		}
-		$n        = count( $t );
-		$includes = [ T_REQUIRE, T_REQUIRE_ONCE, T_INCLUDE, T_INCLUDE_ONCE ];
-		$opens    = [ T_IF, T_WHILE, T_FOR, T_FOREACH, T_SWITCH, T_DECLARE ];
-		$ends     = [ T_ENDIF, T_ENDWHILE, T_ENDFOR, T_ENDFOREACH, T_ENDSWITCH, T_ENDDECLARE ];
-		$bodies   = array_filter( [ T_FUNCTION, T_FN, T_CLASS, T_TRAIT, T_INTERFACE, defined( 'T_ENUM' ) ? T_ENUM : null ] );
-		$tags     = [ T_OPEN_TAG, T_OPEN_TAG_WITH_ECHO, T_CLOSE_TAG, T_INLINE_HTML ];
-
-		// Block depth, function/class bodies and statement starts, per token.
-		$depth  = [];
-		$func   = [];
-		$start  = [];
-		$level  = 0;
-		$stack  = [];
-		$parens = 0;
-		$header = null;
-		$body   = false;
-		for ( $i = 0; $i < $n; $i++ ) {
-			list( $type, $text ) = $t[ $i ];
-			$depth[ $i ]         = $level;
-			$func[ $i ]          = in_array( 'f', $stack, true );
-			$prev                = $i > 0 ? $t[ $i - 1 ] : [ T_OPEN_TAG, '' ];
-			$start[ $i ]         = in_array( $prev[0], $tags, true ) || ( null === $prev[0] && in_array( $prev[1], [ ';', '}', '{' ], true ) );
-			if ( in_array( $type, $bodies, true ) ) {
-				$body = true;
-			}
-			if ( in_array( $type, $opens, true ) ) {
-				$header = $parens;
-			} elseif ( null === $type && '(' === $text ) {
-				// Punctuation only: the text of a string piece (T_ENCAPSED_AND_WHITESPACE) can be `)` or `}` too.
-				$parens++;
-			} elseif ( null === $type && ')' === $text ) {
-				$parens--;
-				if ( $header === $parens ) {
-					$header = null;
-					if ( isset( $t[ $i + 1 ] ) && null === $t[ $i + 1 ][0] && ':' === $t[ $i + 1 ][1] ) {
-						$level++;
-						$stack[] = 'a';
-					}
-				}
-			} elseif ( in_array( $type, $ends, true ) ) {
-				$level--;
-				array_pop( $stack );
-			} elseif ( ( null === $type && '{' === $text ) || in_array( $type, [ T_CURLY_OPEN, T_DOLLAR_OPEN_CURLY_BRACES ], true ) ) {
-				$level++;
-				$stack[] = $body && null === $type ? 'f' : 'b';
-				$body    = false;
-			} elseif ( null === $type && '}' === $text ) {
-				$level--;
-				array_pop( $stack );
-			} elseif ( null === $type && ';' === $text ) {
-				$body = false;
-			}
-		}
-
-		// Includes, each operand ending where PHP ends the expression; the wp-settings.php load; top-level return/exit.
-		$booted = PHP_INT_MAX;
-		$maybe  = PHP_INT_MAX;
-		$halt   = PHP_INT_MAX;
-		$static = [ T_CONSTANT_ENCAPSED_STRING, T_DIR, T_FILE ];
-		for ( $i = 0; $i < $n; $i++ ) {
-			$type = $t[ $i ][0];
-			if ( in_array( $type, [ T_RETURN, T_EXIT, T_HALT_COMPILER ], true ) && 0 === $depth[ $i ] && $i < $halt ) {
-				$halt                  = $i;
-				$result['halt_reason'] = $t[ $i ][1];
-			}
-			if ( T_EVAL === $type && ! $func[ $i ] && null === $result['unresolved'] ) {
-				$result['unresolved'] = 'eval()';
-			}
-			if ( ! in_array( $type, $includes, true ) ) {
-				continue;
-			}
-			$expr     = '';
-			$strings  = [];
-			$is_fixed = true;
-			$nest     = 0;
-			$ternary  = 0;
-			$overlong = false;
-			for ( $j = $i + 1; $j < $n; $j++ ) {
-				list( $jt, $jx ) = $t[ $j ];
-				$open            = ( null === $jt && in_array( $jx, [ '(', '[', '{' ], true ) ) || in_array( $jt, [ T_CURLY_OPEN, T_DOLLAR_OPEN_CURLY_BRACES ], true );
-				$close           = null === $jt && in_array( $jx, [ ')', ']', '}' ], true );
-				if ( ( $close && 0 === $nest ) || ( 0 === $nest && ( in_array( $jt, [ T_CLOSE_TAG, T_INLINE_HTML, T_DOUBLE_ARROW ], true ) || ( null === $jt && in_array( $jx, [ ';', ',' ], true ) ) ) ) ) {
-					break;
-				}
-				if ( 0 === $nest && null === $jt && ':' === $jx ) {
-					if ( 0 === $ternary ) {
-						break;
-					}
-					$ternary--;
-				} elseif ( 0 === $nest && null === $jt && '?' === $jx ) {
-					$ternary++;
-				}
-				if ( $j - $i > 256 ) {
-					$overlong = true;
-					break;
-				}
-				$nest += $open ? 1 : ( $close ? -1 : 0 );
-				$expr .= $jx;
-				if ( T_CONSTANT_ENCAPSED_STRING === $jt ) {
-					$strings[] = substr( $jx, 1, -1 );
-				}
-				$named    = T_STRING === $jt && in_array( strtolower( $jx ), [ 'dirname', 'abspath' ], true );
-				$is_fixed = $is_fixed && ( in_array( $jt, $static, true ) || $named || ( null === $jt && in_array( $jx, [ '(', ')', '.' ], true ) ) );
-			}
-			$boot = false;
-			foreach ( $strings as $string ) {
-				$boot = $boot || 'wp-settings.php' === basename( $string );
-			}
-			$alone = $start[ $i ] && 0 === $depth[ $i ];
-			if ( $boot && ! $func[ $i ] ) {
-				$maybe = min( $maybe, $i );
-				if ( $alone ) {
-					$booted = min( $booted, $i );
-				}
-			}
-			$result['includes'][] = [
-				'index'    => $i,
-				'expr'     => $expr,
-				'strings'  => $strings,
-				'static'   => $is_fixed && ! $overlong,
-				'alone'    => $alone,
-				'in_func'  => $func[ $i ],
-				'boot'     => $boot,
-				'overlong' => $overlong,
-			];
-		}
-		foreach ( $result['includes'] as $k => $include ) {
-			$result['includes'][ $k ]['after_boot'] = $include['index'] > $booted || $include['index'] > $halt;
-		}
-		if ( null !== $result['unresolved'] ) {
-			return $result;
-		}
-
-		// Defines, defined() checks and every other mention of a directory constant, up to where WordPress has booted.
-		$names   = self::DIR_CONSTANTS;
-		$covered = [];
-		$at      = [];
-		$stop    = min( $maybe, $halt );
-		$end     = min( $n, $booted );
-		$sig     = function ( $k ) use ( $t ) {
-			return isset( $t[ $k ] ) ? $t[ $k ] : [ null, '' ];
-		};
-		for ( $i = 0; $i < $end; $i++ ) {
-			list( $type, $text ) = $t[ $i ];
-			if ( T_CONST === $type && T_STRING === $sig( $i + 1 )[0] && in_array( $sig( $i + 1 )[1], $names, true ) ) {
-				$result['unresolved'] = $sig( $i + 1 )[1];
-				return $result;
-			}
-			$before = $sig( $i - 1 );
-			$method = in_array( $before[0], [ T_OBJECT_OPERATOR, T_DOUBLE_COLON, T_FUNCTION, T_NEW ], true ) || ( defined( 'T_NULLSAFE_OBJECT_OPERATOR' ) && T_NULLSAFE_OBJECT_OPERATOR === $before[0] );
-			// PHP 8 reads `\define` as one name token.
-			$global = defined( 'T_NAME_FULLY_QUALIFIED' ) && T_NAME_FULLY_QUALIFIED === $type;
-			if ( ( T_STRING !== $type && ! $global ) || $method || '(' !== $sig( $i + 1 )[1] ) {
-				continue;
-			}
-			$call = ltrim( strtolower( $text ), '\\' );
-			if ( 'defined' === $call && T_CONSTANT_ENCAPSED_STRING === $sig( $i + 2 )[0] ) {
-				$covered[ $i + 2 ] = true;
-				continue;
-			}
-			if ( 'define' !== $call ) {
-				continue;
-			}
-			$arg = $sig( $i + 2 );
-			if ( T_CONSTANT_ENCAPSED_STRING !== $arg[0] || ! in_array( $sig( $i + 3 )[1], [ ',' ], true ) ) {
-				// define( $name, … ), define( 'A' . 'B', … ): the name can't be read here.
-				$result['unresolved'] = 'a define() whose name is not a plain string';
-				return $result;
-			}
-			$name = substr( $arg[1], 1, -1 );
-			if ( ! in_array( $name, $names, true ) ) {
-				continue;
-			}
-			$covered[ $i + 2 ] = true;
-			// The value runs to the `)` that closes the call; a trailing comma is allowed.
-			$nest  = 0;
-			$value = '';
-			for ( $j = $i + 4; $j < $n; $j++ ) {
-				list( $jt, $jx ) = $t[ $j ];
-				if ( null === $jt && ')' === $jx && 0 === $nest ) {
-					break;
-				}
-				$nest          += ( null === $jt && '(' === $jx ) ? 1 : ( ( null === $jt && ')' === $jx ) ? -1 : 0 );
-				$covered[ $j ] = true;
-				$value        .= $jx;
-			}
-			$value = rtrim( $value, ',' );
-			$after = $sig( $j + 1 );
-			// The statement starts at the define, or at an `@` or `\` in front of it.
-			$s     = in_array( $before[1], [ '@', '\\' ], true ) ? $i - 1 : $i;
-			$guard = self::guarded( $t, $depth, $start, $s, $name, $j + 1 );
-			$plain = $start[ $s ] && 0 === $depth[ $s ];
-			if ( ( ! $plain && ! $guard ) || $s > $stop || isset( $result['defines'][ $name ] ) || ! ( ( null === $after[0] && ';' === $after[1] ) || T_CLOSE_TAG === $after[0] ) ) {
-				$result['unresolved'] = $name;
-				return $result;
-			}
-			$result['defines'][ $name ] = $value;
-			$at[ $name ]                = $i;
-		}
-		for ( $i = 0; $i < $end; $i++ ) {
-			list( $type, $text ) = $t[ $i ];
-			if ( isset( $covered[ $i ] ) ) {
-				continue;
-			}
-			$before = $sig( $i - 1 );
-			$member = in_array( $before[0], [ T_OBJECT_OPERATOR, T_DOUBLE_COLON ], true ) || ( defined( 'T_NULLSAFE_OBJECT_OPERATOR' ) && T_NULLSAFE_OBJECT_OPERATOR === $before[0] );
-			$name   = T_STRING === $type && ! $member ? $text : ( T_CONSTANT_ENCAPSED_STRING === $type ? substr( $text, 1, -1 ) : null );
-			if ( null === $name || ! in_array( $name, $names, true ) ) {
-				continue;
-			}
-			// A use after the file's own plain define of that constant reads what it set.
-			if ( T_STRING === $type && isset( $at[ $name ] ) && $i > $at[ $name ] ) {
-				continue;
-			}
-			$result['unresolved'] = $name;
-			return $result;
-		}
-
-		return $result;
-	}
-
-	/**
-	 * Whether the define at $s sits in its own `if ( ! defined( 'X' ) )` guard: unbraced, or braced around it alone.
-	 *
-	 * @param array  $t     Tokens.
-	 * @param int[]  $depth Block depth per token.
-	 * @param bool[] $start Statement start per token.
-	 * @param int    $s     First token of the define statement.
-	 * @param string $name  Constant name.
-	 * @param int    $after Token after the define's `)`.
-	 *
-	 * @return bool
-	 */
-	protected static function guarded( array $t, array $depth, array $start, $s, $name, $after ) {
-		$braced = $s > 0 && null === $t[ $s - 1 ][0] && '{' === $t[ $s - 1 ][1];
-		$g      = $s - ( $braced ? 1 : 0 ) - 8;
-		$want   = [ [ T_IF ], '(', '!', [ T_STRING, 'defined' ], '(', [ T_CONSTANT_ENCAPSED_STRING ], ')', ')' ];
-		if ( $g < 0 ) {
-			return false;
-		}
-		foreach ( $want as $k => $w ) {
-			$tok = $t[ $g + $k ];
-			$ok  = is_array( $w ) ? $tok[0] === $w[0] && ( ! isset( $w[1] ) || strtolower( $tok[1] ) === $w[1] ) : ( null === $tok[0] && $tok[1] === $w );
-			if ( ! $ok ) {
-				return false;
-			}
-		}
-		if ( substr( $t[ $g + 5 ][1], 1, -1 ) !== $name || ! $start[ $g ] || 0 !== $depth[ $g ] ) {
-			return false;
-		}
-		// Braced: the block holds this define alone.
-		return ! $braced || ( isset( $t[ $after + 1 ] ) && null === $t[ $after + 1 ][0] && '}' === $t[ $after + 1 ][1] );
-	}
-
-	/**
-	 * A directory constant's (or include's) value relative to app/, from the plain forms dir_defines() returns.
-	 *
-	 * @param string      $code     Real path of the site's app/.
-	 * @param string      $expr     Value expression.
-	 * @param string      $file     File it is in, relative to app/ (real).
-	 * @param string|null $abspath  Real WordPress root.
-	 * @param string      $content  WP_CONTENT_DIR relative to app/.
-	 * @param bool        $relative Whether a relative string counts from the file's directory (an include path).
-	 *
-	 * @return string|null
-	 */
-	protected function dir_value( $code, $expr, $file, $abspath, $content, $relative = false ) {
-		$string = '\'[^\'\\\\]*\'|"[^"\\\\$]*"';
-		$expr   = preg_match( '/^\((.*)\)$/s', $expr, $outer ) ? $outer[1] : $expr;
-		if ( preg_match( "/^($string)$/", $expr, $m ) ) {
-			$path = substr( $m[1], 1, -1 );
-			if ( $relative && '' !== $path && '/' !== $path[0] ) {
-				$base = dirname( $file );
-				$base = '.' === $base ? '' : $base;
-			} elseif ( 0 !== strpos( $path . '/', '/var/www/' ) ) {
-				return null;
-			} else {
-				$base = '';
-				$path = substr( $path, strlen( '/var/www/' ) );
-			}
-		} elseif ( preg_match( "/^(__DIR__|dirname\\(__FILE__\\)|dirname\\(__DIR__\\)|dirname\\(dirname\\(__FILE__\\)\\)|ABSPATH|WP_CONTENT_DIR)\\.($string)$/i", $expr, $m ) ) {
-			$dir = dirname( $file );
-			// dirname() of app/ itself is outside the site.
-			if ( '.' === $dir && 0 === stripos( $m[1], 'dirname(' ) && 0 !== strcasecmp( $m[1], 'dirname(__FILE__)' ) ) {
-				return null;
-			}
-			$base = [
-				'__dir__'                    => $dir,
-				'dirname(__file__)'          => $dir,
-				'dirname(__dir__)'           => dirname( $dir ),
-				'dirname(dirname(__file__))' => dirname( $dir ),
-				'abspath'                    => null === $abspath ? null : substr( $abspath, strlen( $code ) + 1 ),
-				'wp_content_dir'             => $content,
-			][ strtolower( $m[1] ) ];
-			if ( null === $base ) {
-				return null;
-			}
-			$base = '.' === $base ? '' : $base;
-			$path = substr( $m[2], 1, -1 );
-			// PHP joins the strings as they are: only ABSPATH ends in `/`, so `__DIR__ . '-x'` is a sibling, not a child.
-			if ( 'abspath' !== strtolower( $m[1] ) && '' !== $path && '/' !== $path[0] ) {
-				return null;
-			}
-		} else {
-			return null;
-		}
-		// `..` stays for resolve_in(), which takes it after the links before it, as the kernel does.
-		$parts = array_filter(
-			explode( '/', $base . '/' . $path ),
-			function ( $part ) {
-				return '' !== $part && '.' !== $part;
-			}
-		);
-
-		return $parts ? implode( '/', $parts ) : null;
-	}
-
-	/**
-	 * A file under app/, read the way the scanner container sees it, never from outside app/, never more than $max bytes.
+	 * A file under app/ as the scanner container sees it, never from outside app/, never more than $max bytes, and only a
+	 * regular file (a FIFO is never opened).
 	 *
 	 * @param string $code Real path of the site's app/.
 	 * @param string $rel  Path relative to app/.
 	 * @param int    $max  Size cap.
 	 *
-	 * @return string|null
+	 * @return array [ state => absent ] when nothing is there; [ state => bad, detail ] when something is there that can't
+	 *               be read as a regular file inside app/; [ state => ok, real, source ].
+	 */
+	protected function site_file( $code, $rel, $max = self::CONFIG_MAX ) {
+		$real = self::resolve_in( $code, $rel );
+		if ( null === $real ) {
+			// Nothing at all, or something (a link on the way) that leaves app/ or can't be resolved.
+			if ( preg_match( '/[\x00-\x1F\x7F]/', $rel ) ) {
+				return [ 'state' => 'bad', 'detail' => 'its path has control characters' ];
+			}
+			for ( $path = rtrim( "$code/$rel", '/' ); strlen( $path ) > strlen( $code ); $path = dirname( $path ) ) {
+				if ( is_link( $path ) ) {
+					return [ 'state' => 'bad', 'detail' => 'is reached through a link that leaves the site\'s files or goes nowhere' ];
+				}
+			}
+			return file_exists( "$code/$rel" ) ? [ 'state' => 'bad', 'detail' => 'can\'t be resolved' ] : [ 'state' => 'absent' ];
+		}
+		$stat = @lstat( $real ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is handled.
+		if ( false === $stat || 0100000 !== ( $stat['mode'] & 0170000 ) ) {
+			return [ 'state' => 'bad', 'detail' => 'is not a regular file' ];
+		}
+		$handle = @fopen( $real, 'rb' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is handled.
+		if ( false === $handle ) {
+			return [ 'state' => 'bad', 'detail' => 'can\'t be opened' ];
+		}
+		$fstat = fstat( $handle );
+		$text  = $fstat && 0100000 === ( $fstat['mode'] & 0170000 ) && $fstat['ino'] === $stat['ino'] ? stream_get_contents( $handle, $max + 1 ) : false;
+		fclose( $handle );
+		if ( false === $text ) {
+			return [ 'state' => 'bad', 'detail' => 'changed while it was read' ];
+		}
+		if ( strlen( $text ) > $max ) {
+			return [ 'state' => 'bad', 'detail' => 'is larger than ' . self::size( $max ) . ', more than this check reads' ];
+		}
+
+		return [ 'state' => 'ok', 'real' => $real, 'source' => $text ];
+	}
+
+	/**
+	 * @param string $code Real path of the site's app/.
+	 * @param string $rel  Path relative to app/.
+	 * @param int    $max  Size cap.
+	 *
+	 * @return string|null The file's text; null when it isn't there or can't be read.
 	 */
 	protected function read_site_file( $code, $rel, $max = self::CONFIG_MAX ) {
-		$path = self::resolve_in( $code, $rel );
-		if ( null === $path ) {
-			return null;
-		}
-		$handle = @fopen( $path, 'rb' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- null when unreadable.
-		if ( false === $handle ) {
-			return null;
-		}
-		$stat = fstat( $handle );
-		$text = $stat && 0100000 === ( $stat['mode'] & 0170000 ) ? stream_get_contents( $handle, $max + 1 ) : false;
-		fclose( $handle );
+		$file = $this->site_file( $code, $rel, $max );
 
-		return false === $text || strlen( $text ) > $max ? null : $text;
+		return 'ok' === $file['state'] ? $file['source'] : null;
 	}
 
 	/**
