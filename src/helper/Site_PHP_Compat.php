@@ -149,6 +149,9 @@ class Site_PHP_Compat {
 	/** @var array|null WordPress's version ( version, branch ) read from the scanned root's wp-includes/version.php. */
 	protected $wp_version;
 
+	/** @var string|null The PHP version the site runs now (its record), major.minor; null when unknown. */
+	protected $current_php;
+
 	/** @var string|null Cancel request file a scan watches once it holds the site lock. */
 	protected $cancel_marker;
 
@@ -517,6 +520,10 @@ class Site_PHP_Compat {
 		if ( null !== $output ) {
 			// The report says what stdout says (gated verdict, scoped fields), with the full not_checked list and the components.
 			$raw = self::encode( $full + [ 'components' => $report['components'] ] );
+			// A value json_encode() refuses (INF in a key EE doesn't know): no report rather than an empty one.
+			if ( '' === $raw ) {
+				return $this->doc( 'tool_error', 'could not encode the report' );
+			}
 			if ( ! $this->write_report( $output, $raw ) ) {
 				return $this->doc( 'tool_error', "could not write the report to $output" );
 			}
@@ -1002,7 +1009,8 @@ class Site_PHP_Compat {
 		if ( null !== $index ) {
 			$allowed[] = $index;
 		}
-		$this->wp_version = null;
+		$this->wp_version  = null;
+		$this->current_php = isset( $site_data->php_version ) && preg_match( '/^\d+\.\d+$/D', (string) $site_data->php_version ) ? (string) $site_data->php_version : null;
 		if ( null !== $layout['abspath'] ) {
 			// Core isn't scanned: its version decides whether it supports the target PHP.
 			$file    = $this->site_file( $code, substr( $layout['abspath'], strlen( $code ) + 1 ) . '/wp-includes/version.php', self::PHP_SOURCE_MAX );
@@ -1085,7 +1093,11 @@ class Site_PHP_Compat {
 			return "WordPress in $app$root resolves to " . self::clean( str_replace( "$code/", $app, $abspath ) ) . ", outside the directory nginx serves ($app$rel)";
 		}
 		if ( $root !== $rel ) {
+			// Rule (b) for the WordPress root's own index.php too (a2, a3); in a1 it is the served one, checked above.
 			$own = $this->site_file( $code, "$root/index.php", self::PHP_SOURCE_MAX );
+			if ( 'ok' === $own['state'] && dirname( $own['real'] ) !== $abspath ) {
+				return "$app$root/index.php is a link to " . self::clean( str_replace( "$code/", $app, $own['real'] ) ) . ', so it loads WordPress from another directory';
+			}
 			$own = 'ok' === $own['state'] ? Site_PHP_Compat_Layout::index_loader( $own['source'] ) : 'it ' . ( 'bad' === $own['state'] ? $own['detail'] : 'is missing' );
 			if ( is_string( $own ) || '' !== $own['sub'] ) {
 				return "$app$root/index.php isn't WordPress's own index.php (" . self::clean( is_string( $own ) ? $own : 'it loads WordPress from elsewhere' ) . ')';
@@ -1151,8 +1163,19 @@ class Site_PHP_Compat {
 					if ( 0 === strpos( $path . '/', '/var/www/' ) ) {
 						$path = $code . substr( $path, strlen( '/var/www' ) );
 					}
-					$real = 0 === strpos( $path . '/', $code . '/' ) ? self::resolve_in( $code, ltrim( substr( $path, strlen( $code ) ), '/' ) ) : null;
-					return null === $real ? $path : $real;
+					if ( 0 !== strpos( $path . '/', $code . '/' ) ) {
+						return $path;
+					}
+					// The longest prefix that exists, resolved, then the rest (mu-plugins may not exist yet).
+					$rest = '';
+					for ( $prefix = $path; strlen( $prefix ) > strlen( $code ); $prefix = dirname( $prefix ) ) {
+						$real = self::resolve_in( $code, ltrim( substr( $prefix, strlen( $code ) ), '/' ) );
+						if ( null !== $real ) {
+							return $real . $rest;
+						}
+						$rest = '/' . basename( $prefix ) . $rest;
+					}
+					return $path;
 				},
 			]
 		);
@@ -1213,6 +1236,10 @@ class Site_PHP_Compat {
 							$found = "$path links to its own ancestor " . $real;
 							return 'stop';
 						}
+						if ( null !== $real && is_dir( $real ) && ( file_exists( "$real/wp-settings.php" ) || is_dir( "$real/wp-includes" ) ) ) {
+							$found = "$path links to another WordPress install ($real)";
+							return 'stop';
+						}
 						return false;
 					}
 					$found = "$path is a link outside the WordPress directory";
@@ -1232,7 +1259,7 @@ class Site_PHP_Compat {
 					// Old releases beside the live one are out of scope only when nginx doesn't serve them (root at current/ or deeper).
 					if ( null !== $releases && dirname( $path ) === $releases && $path !== $live ) {
 						if ( 0 === strpos( $path . '/', $top . '/' ) ) {
-							$found = "!nginx serves $top, which also exposes old releases (" . substr( $path, strlen( $top ) + 1 ) . "); set the site's public dir to current (`--public-dir=current`) or remove old releases";
+							$found = "!nginx serves $top, which also exposes old releases (" . substr( $path, strlen( $top ) + 1 ) . "); recreate (or clone) the site with `--public-dir=current`, or remove old releases";
 							return 'stop';
 						}
 						return false;
@@ -2731,7 +2758,7 @@ class Site_PHP_Compat {
 		$core                    = null;
 		if ( $this->wp_layout && null !== $this->wp_version ) {
 			// Core's files are never scanned; not_checked stays the scanner's own list (its type and reason values are a fixed set).
-			$core             = self::wp_supports( $this->wp_version['branch'], $this->target );
+			$core             = self::wp_supports( $this->wp_version['branch'], $this->target, $this->current_php );
 			$doc['wordpress'] = [
 				'version'            => self::clean( $this->wp_version['version'] ),
 				'supports'           => $core['supports'],
@@ -2784,13 +2811,14 @@ class Site_PHP_Compat {
 	 * Whether a WordPress branch supports a PHP version, by WP_PHP_SUPPORT.
 	 *
 	 * @param string $branch WordPress major.minor.
-	 * @param string $target PHP major.minor.
+	 * @param string      $target  PHP major.minor.
+	 * @param string|null $current PHP the site runs now, major.minor (only used for a branch newer than the table).
 	 *
 	 * @return array supports (true, false, or null when WordPress hasn't said), minimum (lowest WordPress branch supporting
 	 *               the target, or null), table_newest (the newest row, when the branch is newer than the table) and why
 	 *               (the reason to print, or null).
 	 */
-	public static function wp_supports( $branch, $target ) {
+	public static function wp_supports( $branch, $target, $current = null ) {
 		$minimum = null;
 		$highest = '0';
 		foreach ( self::WP_PHP_SUPPORT as $wp => list( $low, $high ) ) {
@@ -2809,12 +2837,17 @@ class Site_PHP_Compat {
 		$newest   = $branches[0];
 		$oldest   = end( $branches );
 		if ( version_compare( $branch, $newest, '>' ) ) {
-			// WordPress doesn't drop a newer PHP within its support window: a newer branch supports what the newest row does.
+			// WordPress doesn't drop a newer PHP within its support window, but may raise its floor: a newer branch supports
+			// what the newest row does only when moving up from the PHP the site runs now.
 			list( $low, $high ) = self::WP_PHP_SUPPORT[ $newest ];
 			if ( version_compare( $target, $low, '>=' ) && version_compare( $target, $high, '<=' ) ) {
-				return $result( true, "WordPress $branch is newer than this check's table; WordPress $newest supports PHP $target", $minimum, $newest );
+				if ( null !== $current && version_compare( $target, $current, '>=' ) ) {
+					return $result( true, "WordPress $branch is newer than this check's table; WordPress $newest supports PHP $target", $minimum, $newest );
+				}
+				return $result( null, "WordPress $branch is newer than this check's table, which can't tell whether it still supports PHP $target" . ( null === $current ? '' : ", below the PHP $current the site runs now" ), $minimum, $newest );
 			}
-			return $result( null, "WordPress $branch is newer than this check's table, and WordPress $newest doesn't support PHP $target", $minimum, $newest );
+			// Below the newest row's floor nothing says a newer WordPress still runs it: no minimum to name.
+			return $result( null, "WordPress $branch is newer than this check's table, and WordPress $newest doesn't support PHP $target", version_compare( $target, $low, '<' ) ? null : $minimum, $newest );
 		}
 		if ( ! isset( self::WP_PHP_SUPPORT[ $branch ] ) ) {
 			// Older than every row: it can't support a PHP newer than the oldest row does.
@@ -3010,7 +3043,7 @@ class Site_PHP_Compat {
 		}
 
 		$tail = sprintf( '%s. %s checked.', self::count_of( $doc['warnings'], 'warning' ), self::count_of( $doc['files_checked'], 'file' ) );
-		$core = isset( $doc['wordpress'] ) && null !== $this->wp_version ? self::wp_supports( $this->wp_version['branch'], $target ) : null;
+		$core = isset( $doc['wordpress'] ) && null !== $this->wp_version ? self::wp_supports( $this->wp_version['branch'], $target, $this->current_php ) : null;
 		$why  = null === $core ? null : $core['why'];
 		if ( false === $doc['safe_to_upgrade'] ) {
 			if ( $doc['errors'] > 0 ) {
@@ -3262,6 +3295,9 @@ class Site_PHP_Compat {
 	 */
 	public static function encode( array $doc ) {
 		$json = json_encode( $doc, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | self::JSON_UTF8 );
+		if ( false === $json ) {
+			return '';
+		}
 
 		return preg_replace_callback(
 			'/[' . self::UNSAFE_CHARS . ']/u',

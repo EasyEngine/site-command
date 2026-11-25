@@ -397,6 +397,9 @@ class Site_PHP_Compat_Layout {
 			$name = $upper;
 			$path    = self::path_value( $t, $args[1][0], end( $args[1] ) + 1, $env, $state['content'] );
 			$default = $env['root'] . '/' . self::DIR_DEFAULTS[ $name ];
+			if ( false === $path ) {
+				return "{$env['file']} sets $name with `..` (line {$t[ $at ][2]}); this check only accepts its default, $default, written without `..`";
+			}
 			if ( null === $path ) {
 				return "can't resolve $name in {$env['file']} (line {$t[ $at ][2]}); this check only accepts its default, $default";
 			}
@@ -582,7 +585,7 @@ class Site_PHP_Compat_Layout {
 
 	/**
 	 * The host path an expression of ABSPATH, __DIR__, dirname( __FILE__ ), WP_CONTENT_DIR and string literals joined by `.`
-	 * gives, or null when it is anything else.
+	 * gives, null when it is anything else, or false when a literal has a `..` segment.
 	 *
 	 * @return string|null
 	 */
@@ -612,6 +615,10 @@ class Site_PHP_Compat_Layout {
 			}
 			if ( null === $part ) {
 				return null;
+			}
+			// PHP follows each link before `..`; a textual collapse could call another directory the default.
+			if ( preg_match( '#(^|/)\.\.(/|$)#', $part ) ) {
+				return false;
 			}
 			$path .= $part;
 			$i     = $next;
