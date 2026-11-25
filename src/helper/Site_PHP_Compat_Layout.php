@@ -20,19 +20,39 @@ class Site_PHP_Compat_Layout {
 	const NEVER_DEFINED = [ 'WPINC', 'TEMPLATEPATH', 'STYLESHEETPATH', 'WP_LANG_DIR', 'PLUGINDIR', 'MUPLUGINDIR' ];
 
 	/** The only variables a config may assign (table prefix, multisite, EE's --cache and memcached object caches). */
-	const VARIABLES = [ 'table_prefix', 'base', 'redis_server', 'memcached_servers' ];
+	const VARIABLES = [ 'table_prefix', 'base', 'redis_server', 'memcached_servers', 'forwarded_ips', 'http_x_headers', 'xffaddrs', 'batcache' ];
 
 	/** The only $_SERVER keys a config may set: what proxy and HTTPS snippets set, never where the script is. */
 	const SERVER_KEYS = [ 'HTTPS', 'SERVER_PORT', 'REMOTE_ADDR', 'HTTP_HOST', 'SERVER_NAME', 'REQUEST_SCHEME', 'HTTP_X_FORWARDED_PROTO', 'HTTP_X_FORWARDED_FOR', 'HTTP_X_FORWARDED_HOST', 'HTTP_X_FORWARDED_PORT', 'HTTP_X_FORWARDED_SSL', 'HTTP_X_REAL_IP' ];
 
-	/** The only settings ini_set() may change in a config. */
-	const INI_KEYS = [ 'display_errors', 'display_startup_errors', 'log_errors', 'error_log', 'error_reporting', 'memory_limit', 'max_execution_time', 'max_input_time', 'max_input_vars', 'upload_max_filesize', 'post_max_size', 'default_socket_timeout', 'date.timezone', 'session.gc_maxlifetime' ];
+	/**
+	 * The only settings ini_set() may change in a config: none names a file, path, handler or callback PHP loads or runs
+	 * (so never include_path, auto_prepend_file, opcache.*, session.save_handler or unserialize_callback_func).
+	 * upload_max_size isn't a PHP setting, but a widely copied snippet sets it (ini_set() then just fails).
+	 */
+	const INI_KEYS = [ 'display_errors', 'display_startup_errors', 'log_errors', 'error_log', 'error_reporting', 'memory_limit', 'max_execution_time', 'max_input_time', 'max_input_vars', 'max_input_nesting_level', 'upload_max_filesize', 'upload_max_size', 'post_max_size', 'default_socket_timeout', 'date.timezone', 'html_errors', 'log_errors_max_len', 'ignore_repeated_errors', 'ignore_repeated_source', 'default_charset', 'output_buffering', 'zlib.output_compression', 'zlib.output_compression_level', 'pcre.backtrack_limit', 'pcre.recursion_limit', 'pcre.jit', 'session.gc_maxlifetime', 'session.gc_probability', 'session.gc_divisor', 'session.cookie_httponly', 'session.cookie_secure', 'session.cookie_samesite', 'session.cookie_lifetime', 'session.cookie_domain', 'session.cookie_path', 'session.use_only_cookies', 'session.use_strict_mode', 'session.use_trans_sid', 'session.name' ];
 
-	/** The only functions an expression may call: none has a side effect or loads code. */
-	const PURE_FUNCTIONS = [ 'defined', 'dirname', 'getenv', 'strpos', 'stripos', 'strtolower', 'strtoupper', 'in_array', 'explode', 'trim', 'file_exists', 'isset', 'empty', 'array' ];
+	/**
+	 * The only functions an expression may call: none loads code, takes a callback or can autoload a class (so never
+	 * constant(), filter_var() with FILTER_CALLBACK, preg_replace(), unserialize() or class_exists()), and each exists with
+	 * the same signature on every PHP version php-compat checks. umask() and filter_var() are checked further in expr().
+	 */
+	const PURE_FUNCTIONS = [ 'defined', 'dirname', 'basename', 'getenv', 'strpos', 'stripos', 'strrpos', 'strstr', 'stristr', 'strtolower', 'strtoupper', 'ucfirst', 'lcfirst', 'ucwords', 'in_array', 'explode', 'implode', 'join', 'trim', 'rtrim', 'ltrim', 'substr', 'strlen', 'str_replace', 'str_ireplace', 'str_pad', 'sprintf', 'md5', 'sha1', 'crc32', 'base64_encode', 'serialize', 'json_encode', 'urlencode', 'rawurlencode', 'parse_url', 'intval', 'floatval', 'strval', 'boolval', 'abs', 'round', 'floor', 'ceil', 'is_numeric', 'is_string', 'is_array', 'is_bool', 'array_merge', 'array_keys', 'array_values', 'array_key_exists', 'array_search', 'array_unique', 'array_slice', 'file_exists', 'is_file', 'is_dir', 'is_readable', 'php_sapi_name', 'phpversion', 'php_uname', 'gethostname', 'version_compare', 'extension_loaded', 'function_exists', 'umask', 'filter_var', 'isset', 'empty', 'array' ];
 
-	/** Statements (besides define/assignment/include) a config may make, each with any allowed expressions as arguments. */
-	const PURE_STATEMENTS = [ 'ini_set', 'error_reporting' ];
+	/**
+	 * Statements (besides define/assignment/include) a config may make, each with any allowed expressions as arguments:
+	 * they change settings of this request, never what PHP loads.
+	 */
+	const PURE_STATEMENTS = [ 'ini_set', 'error_reporting', 'set_time_limit', 'date_default_timezone_set', 'umask', 'header', 'mb_internal_encoding' ];
+
+	/** Significant tokens read per file; real configs have a few thousand. */
+	const MAX_TOKENS = 50000;
+
+	/** How deep `if` blocks may nest: deeper ones cost quadratic time to match. */
+	const MAX_NEST = 16;
+
+	/** Files one config check may follow, counting each once. */
+	const MAX_FILES = 32;
 
 	/** Files below the WordPress root that EE's own --vip config loads, and how each is checked. */
 	const VIP_FILES = [
@@ -566,6 +586,14 @@ class Site_PHP_Compat_Layout {
 				$word = strtolower( $text );
 				if ( $call && ! in_array( $word, self::PURE_FUNCTIONS, true ) ) {
 					return "{$env['file']} line $line calls $text(), which this check doesn't accept in a config";
+				}
+				$close = $call && in_array( $word, [ 'umask', 'filter_var' ], true ) ? self::matching( $t, $i + 1, $to ) : null;
+				$args  = null === $close ? null : self::call_args( $t, $i, $close + 1 );
+				// umask() only reads the mask; filter_var() only validates or sanitises (FILTER_CALLBACK runs code).
+				if ( 'umask' === $word && $call && [] !== $args || 'filter_var' === $word && ( null === $args || count( $args ) < 2 || count( $args ) > 3
+					|| 1 !== count( $args[1] ) || T_STRING !== $t[ $args[1][0] ][0] || ! preg_match( '/^FILTER_(?:VALIDATE|SANITIZE|DEFAULT|UNSAFE_RAW)/', $t[ $args[1][0] ][1] )
+					|| isset( $args[2] ) && ( 1 !== count( $args[2] ) || T_STRING !== $t[ $args[2][0] ][0] || ! preg_match( '/^FILTER_(?:FLAG_|NULL_ON_FAILURE$)/', $t[ $args[2][0] ][1] ) ) ) ) {
+					return "{$env['file']} line $line calls $text() in a form this check doesn't accept in a config";
 				}
 				if ( ! $call && T_STRING !== $id ) {
 					return self::unknown( $t, $i, $env );
