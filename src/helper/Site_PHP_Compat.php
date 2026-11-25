@@ -1042,6 +1042,10 @@ class Site_PHP_Compat {
 			return $this->doc( 'tool_error', $layout );
 		}
 		$root            = $layout['root'];
+		$detail          = $this->wp_cli_config_check( $code, [ $rel, $root, null === $layout['abspath'] ? $root : substr( $layout['abspath'], strlen( $code ) + 1 ) ], $app );
+		if ( null !== $detail ) {
+			return $this->doc( 'tool_error', $detail );
+		}
 		$this->scan_path = '/var/www/' . $root;
 		$this->looked_in = $app . $root;
 		EE::debug( "php-compat: WordPress root $root (nginx root $served)" );
@@ -1309,13 +1313,24 @@ class Site_PHP_Compat {
 					if ( 0 === strpos( "$code/$root/", $path . '/' ) ) {
 						return false;
 					}
-					$real = self::resolve_in( $code, substr( $path, strlen( $code ) + 1 ) );
+					$real = self::resolve_in( $code, substr( $path, strlen( $code ) + 1 ), $why );
 					// A link to a file already read and validated (releases/wp-config.php -> ../wp-config.php): no other code. A config
 					// accepted only because nothing loads it was never validated, and a link would load it.
 					if ( null !== $real && in_array( $real, $allowed, true ) && ! in_array( $real, $this->unused_configs, true ) ) {
 						return false;
 					}
 					if ( $inside ) {
+						// The scanner follows links the way the kernel does; one this check can't follow the same way is refused.
+						// A plain dangling link (nothing there for the kernel either) is harmless.
+						if ( null === $real && 'missing' !== $why ) {
+							$found = "$path is a link this check can't follow the way the container does";
+							return 'stop';
+						}
+						// Core is judged by its version, not scanned: code reached through a link into it would go unchecked.
+						if ( null !== $real && ( 0 === strpos( $real . '/', "$abspath/wp-admin/" ) || 0 === strpos( $real . '/', "$abspath/wp-includes/" ) ) ) {
+							$found = "$path links into WordPress core ($real), which this check doesn't scan";
+							return 'stop';
+						}
 						if ( null !== $real && 0 === strpos( dirname( $path ) . '/', $real . '/' ) ) {
 							$found = "$path links to its own ancestor " . $real;
 							return 'stop';
@@ -1437,7 +1452,14 @@ class Site_PHP_Compat {
 						return false;
 					}
 					$target = self::resolve_in( $code, substr( $path, strlen( $code ) + 1 ) );
-					$stat   = null === $target ? false : @lstat( $target ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is handled.
+					if ( null === $target ) {
+						// The kernel may follow what resolve_in() can't (/var/www/../www, /proc/self/root): read only if reported.
+						if ( ! isset( $rules['nc_paths'][ '/var/www' . substr( $path, strlen( $code ) ) ] ) && null === self::under_any( $path, $code, $rules['nc_dirs'] ) && ++$count <= self::NOT_CHECKED_STDOUT ) {
+							$unlisted[] = self::cut( self::clean( '/var/www' . substr( $path, strlen( $code ) ) ) );
+						}
+						return false;
+					}
+					$stat   = @lstat( $target ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is handled.
 					if ( false === $stat || 0100000 !== ( $stat['mode'] & 0170000 ) ) {
 						return false;
 					}
@@ -1598,6 +1620,7 @@ class Site_PHP_Compat {
 		$checked  = [];
 		$nc_files = [];
 		$nc_dirs  = [];
+		$nc_paths = [];
 		foreach ( $m['checked'] as $path ) {
 			$stat = self::manifest_stat( $code, $path );
 			if ( false !== $stat && 0100000 === ( $stat['mode'] & 0170000 ) ) {
@@ -1609,6 +1632,10 @@ class Site_PHP_Compat {
 			if ( null !== $host ) {
 				$nc_dirs[ $host ] = true;
 				continue;
+			}
+			if ( '/' !== substr( $path, -1 ) ) {
+				// As listed: a link that dangles or leaves /var/www is named by its own path.
+				$nc_paths[ $path ] = true;
 			}
 			$stat = '/' === substr( $path, -1 ) ? false : self::manifest_stat( $code, $path );
 			if ( false !== $stat && 0100000 === ( $stat['mode'] & 0170000 ) ) {
@@ -1689,6 +1716,7 @@ class Site_PHP_Compat {
 			'checked'    => $checked,
 			'nc_files'   => $nc_files,
 			'nc_dirs'    => $nc_dirs,
+			'nc_paths'   => $nc_paths,
 			'skipped'    => $skipped,
 			'code_name'  => '/\.(?:' . implode( '|', $names ) . ')\z/' . ( $m['extensions_case_insensitive'] ? 'i' : '' ),
 			'phar'       => $m['phar_regex'],
@@ -2446,6 +2474,50 @@ class Site_PHP_Compat {
 	}
 
 	/**
+	 * WP-CLI configs WordPress can be run with: wp-cli.yml and wp-cli.local.yml in each directory from app/ down to the served
+	 * root and the WordPress root (WP-CLI looks upwards from where it runs), and the www-data home's .wp-cli/config.yml. A
+	 * `require:` there loads code (an exempt config, an old release) and `_: inherit:` pulls in another config, so any file
+	 * that mentions either is refused; one that can't be read is refused too (no YAML parser in the phar).
+	 *
+	 * @param string   $code Real path of the site's app/.
+	 * @param string[] $dirs Directories relative to app/ (served root, WordPress root as passed and as resolved).
+	 * @param string   $app  The site's app/ with a trailing slash, for messages.
+	 *
+	 * @return string|null tool_error detail.
+	 */
+	protected function wp_cli_config_check( $code, array $dirs, $app ) {
+		$files = [ '.wp-cli/config.yml' ];
+		foreach ( $dirs as $dir ) {
+			for ( $dir = trim( (string) $dir, '/' ); ; $dir = dirname( $dir ) ) {
+				$dir     = '.' === $dir ? '' : $dir;
+				$files[] = ltrim( "$dir/wp-cli.yml", '/' );
+				$files[] = ltrim( "$dir/wp-cli.local.yml", '/' );
+				if ( '' === $dir ) {
+					break;
+				}
+			}
+		}
+		foreach ( array_unique( $files ) as $file ) {
+			// Missing (also below a link such as current/) is no config; a path the container could follow elsewhere is refused.
+			if ( null === self::resolve_in( $code, $file, $why ) ) {
+				if ( 'missing' === $why ) {
+					continue;
+				}
+				return "can't read $app$file, a WP-CLI config: it is reached through a link this check can't follow the way the container does";
+			}
+			$found = $this->site_file( $code, $file );
+			if ( 'ok' !== $found['state'] ) {
+				return "can't read $app$file, a WP-CLI config: {$found['detail']}";
+			}
+			if ( preg_match( '/require|inherit/i', $found['source'] ) ) {
+				return "$app$file can make WP-CLI load more code (`require:` or `inherit`), which this check doesn't follow";
+			}
+		}
+
+		return null;
+	}
+
+	/**
 	 * Whether a php site's scan reads this file as code: in htdocs, a code extension, outside node_modules and .git, and
 	 * not in an old release beside the live one behind a `current` link (the scanner's oldReleases()).
 	 *
@@ -2536,12 +2608,15 @@ class Site_PHP_Compat {
 	/**
 	 * Resolves a path under app/ as the container sees it: a link to /var/www/... points into app/.
 	 *
-	 * @param string $code Real path of the site's app/.
-	 * @param string $rel  Path relative to app/.
+	 * @param string      $code Real path of the site's app/.
+	 * @param string      $rel  Path relative to app/.
+	 * @param string|null $why  Set on null: 'missing' (the kernel can't follow it either) or 'escape' (it leaves app/, or
+	 *                          this can't tell where the kernel would take it, e.g. /var/www/../www or /proc/self/root).
 	 *
 	 * @return string|null Real host path inside app/, or null when it doesn't exist or leaves app/.
 	 */
-	public static function resolve_in( $code, $rel ) {
+	public static function resolve_in( $code, $rel, &$why = null ) {
+		$why = 'escape';
 		// Path text from the site's files: a NUL or another control character is never a real path here.
 		if ( preg_match( '/[\x00-\x1F\x7F]/', $rel ) ) {
 			return null;
@@ -2579,10 +2654,13 @@ class Site_PHP_Compat {
 			}
 			// Only a directory can be passed through, as in the kernel.
 			if ( ! file_exists( $path ) || ( $todo && ! is_dir( $path ) ) ) {
+				$why = 'missing';
 				return null;
 			}
 			$done[] = $part;
 		}
+
+		$why = null;
 
 		return rtrim( $code . '/' . implode( '/', $done ), '/' );
 	}
