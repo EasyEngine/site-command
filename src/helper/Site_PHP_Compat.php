@@ -1249,12 +1249,14 @@ class Site_PHP_Compat {
 			}
 		}
 		// (c) EE's app/wp-config.php is unused when WordPress's own lookup (its root, else the real parent) loads another file.
-		// Not when app/ is the served-path parent but not the real one (htdocs -> releases/2): `wp --path` there loads it.
+		// Not when app/ is the served-path parent but not the real one (htdocs -> releases/2) and the root has no config of its
+		// own: `wp --path` there falls back to app/wp-config.php. A root config that is a link counts if it reaches a regular file.
 		$real_root = substr( $abspath, strlen( $code ) + 1 );
 		$parent    = dirname( $real_root );
 		$ee_config = "$code/wp-config.php";
 		$stat      = @lstat( $ee_config ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is handled.
-		$cli_loads = '.' === dirname( $root ) && '.' !== $parent;
+		$own       = self::resolve_in( $code, "$real_root/wp-config.php" );
+		$cli_loads = '.' === dirname( $root ) && '.' !== $parent && ! ( null !== $own && is_file( $own ) );
 		if ( ! $cli_loads && in_array( $config[0], [ "$real_root/wp-config.php", ( '.' === $parent ? '' : "$parent/" ) . 'wp-config.php' ], true ) && $file['real'] !== $ee_config && false !== $stat && 0100000 === ( $stat['mode'] & 0170000 ) ) {
 			$read[]                    = $ee_config;
 			$this->ee_config_unused_by = $file['real'];
