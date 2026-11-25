@@ -29,7 +29,10 @@ class Site_PHP_Compat_Layout {
 	/** Constants core puts into the name of a file it loads (locale file, filesystem class, theme): a plain name only. */
 	const NAME_VALUES = [ 'WPLANG', 'FS_METHOD', 'WP_DEFAULT_THEME' ];
 
-	/** The only variables a config may assign (table prefix, multisite, EE's --cache and memcached object caches). */
+	/**
+	 * The only variables a config may assign (table prefix, multisite, EE's --cache and memcached object caches, the locals of
+	 * reverse-proxy snippets), besides WP Engine's `$wpe_*` leftovers, which only its own plugin reads.
+	 */
 	const VARIABLES = [ 'table_prefix', 'base', 'redis_server', 'memcached_servers', 'forwarded_ips', 'http_x_headers', 'xffaddrs', 'batcache' ];
 
 	/** The only $_SERVER keys a config may set: what proxy and HTTPS snippets set, never where the script is. */
@@ -428,7 +431,7 @@ class Site_PHP_Compat_Layout {
 					return self::unknown( $t, $i, $env, 'sets a $_SERVER key this check doesn\'t accept' );
 				}
 				$eq = $i + 4;
-			} elseif ( ! in_array( $name, self::VARIABLES, true ) ) {
+			} elseif ( ! in_array( $name, self::VARIABLES, true ) && 0 !== strpos( $name, 'wpe_' ) ) {
 				return self::unknown( $t, $i, $env, "assigns \${$name}, which this check doesn't accept" );
 			}
 			if ( ! isset( $t[ $eq ] ) || '=' !== $t[ $eq ][0] || $eq + 1 >= $end ) {
