@@ -110,6 +110,16 @@ class Site_PHP_Compat {
 	// tool_error detail when the site's directory or app/ is missing or its lock can't be opened (a delete in progress).
 	const SITE_GONE = 'the site is being deleted or its files are missing';
 
+	// WP-CLI's project configs (any directory) and the www-data user's own, relative to app/.
+	const WP_CLI_CONFIGS = [ 'wp-cli.yml', 'wp-cli.local.yml' ];
+	const WP_CLI_HOME    = '.wp-cli/config.yml';
+
+	// The only keys a WP-CLI config may set: none of them loads code.
+	const WP_CLI_KEYS = [ 'path', 'url', 'user', 'color', 'quiet', 'debug' ];
+
+	// Exact link targets that are a sink, never code.
+	const DEV_SINKS = [ '/dev/null', '/dev/stdout', '/dev/stderr' ];
+
 	// Directory names the scanner searches by name only (its manifest's sniff.skipped_dirs); the sniff doesn't apply below them.
 	const SCANNER_SKIP_NAMES = [ 'uploads', 'cache', 'upgrade', 'upgrade-temp-backup', 'node_modules', '.git' ];
 
@@ -167,8 +177,14 @@ class Site_PHP_Compat {
 	/** @var string|null Real path of the wp-config.php WordPress loads when that makes EE's app/wp-config.php unused (shape (c)). */
 	protected $ee_config_unused_by;
 
+	/** @var string[] WP-CLI configs found in the site's files, relative to app/. */
+	protected $wp_cli_files = [];
+
 	/** @var string[] Real paths of config files accepted only because nothing loads them: never valid link targets. */
 	protected $unused_configs = [];
+
+	/** @var int Second the scan started (scan_start_time()); a file with a ctime from then on may not be what the scanner read. */
+	protected $scan_start = PHP_INT_MAX;
 
 	/** @var bool Whether the last lock_site() couldn't open the site directory (gone during a delete). */
 	protected $lock_unopenable = false;
@@ -501,6 +517,8 @@ class Site_PHP_Compat {
 
 		// From here until cleanup() confirms it is gone, /out may be in use by this container.
 		$this->active_container = $name;
+		// Files changed from here on may differ from what the scanner read (cross_check() compares ctime).
+		$this->scan_start       = $this->scan_start_time();
 		$run                    = $this->docker( $this->docker_run_args( 'scan', $image, $site_data, $code, $out, $timeout ), $timeout + self::PROCESS_MARGIN, true );
 		if ( $run['timed_out'] ) {
 			return $this->doc( 'tool_error', "timed out after $timeout s" );
@@ -1031,8 +1049,26 @@ class Site_PHP_Compat {
 					return 'dir' === $type;
 				}
 			);
-			$this->cross_layout = [ 'wp' => false, 'scan' => $code, 'top' => self::resolve_in( $code, $rel ), 'abspath' => null, 'index' => null ];
+			self::resolve_in( $code, $rel, $why, $hops );
+			self::resolve_in( $code, 'htdocs', $why, $more );
+			$this->cross_layout = [ 'wp' => false, 'scan' => $code, 'top' => self::resolve_in( $code, $rel ), 'abspath' => null, 'index' => null, 'links' => array_merge( $hops, $more ) ];
 			$detail             = null !== $error ? "can't look through {$app}htdocs for .user.ini files: $error" : $this->prepend_check( $site_data, $code, $user_ini, null );
+			if ( null !== $detail ) {
+				return $this->doc( 'tool_error', $detail );
+			}
+			// WP-CLI configs anywhere in app/ but old releases (not served) and the www-data home's tool dirs.
+			$old                = $this->old_release_dirs( $code );
+			$this->wp_cli_files = [];
+			$error              = $this->walk_tree(
+				$code,
+				function ( $path, $name, $type ) use ( $code, $old ) {
+					if ( in_array( $name, self::WP_CLI_CONFIGS, true ) ) {
+						$this->wp_cli_files[] = substr( $path, strlen( $code ) + 1 );
+					}
+					return 'dir' === $type && ! isset( $old[ $path ] ) && ! ( dirname( $path ) === $code && in_array( $name, self::HOME_DOTDIRS, true ) );
+				}
+			);
+			$detail = null !== $error ? "can't look through {$app} for WP-CLI configs: $error" : $this->wp_cli_config_check( $code, $this->cross_layout['top'], $app );
 			return null === $detail ? null : $this->doc( 'tool_error', $detail );
 		}
 
@@ -1042,10 +1078,6 @@ class Site_PHP_Compat {
 			return $this->doc( 'tool_error', $layout );
 		}
 		$root            = $layout['root'];
-		$detail          = $this->wp_cli_config_check( $code, [ $rel, $root, null === $layout['abspath'] ? $root : substr( $layout['abspath'], strlen( $code ) + 1 ) ], $app );
-		if ( null !== $detail ) {
-			return $this->doc( 'tool_error', $detail );
-		}
 		$this->scan_path = '/var/www/' . $root;
 		$this->looked_in = $app . $root;
 		EE::debug( "php-compat: WordPress root $root (nginx root $served)" );
@@ -1073,6 +1105,9 @@ class Site_PHP_Compat {
 			}
 			$allowed = array_merge( $allowed, $config );
 		}
+		self::resolve_in( $code, $rel, $why, $hops );
+		self::resolve_in( $code, $root, $why, $more );
+		$layout_links       = array_merge( $hops, $more );
 		$this->cross_layout = [
 			'wp'      => true,
 			'scan'    => self::resolve_in( $code, $root ),
@@ -1082,10 +1117,16 @@ class Site_PHP_Compat {
 			'index'   => $root !== $rel ? $index : null,
 			// (c): the config WordPress loads instead of EE's app/wp-config.php.
 			'config'  => $this->ee_config_unused_by,
+			'links'   => $layout_links,
 		];
-		$walk = $this->app_walk( $code, $rel, $root, $layout['abspath'], $allowed );
+		$this->wp_cli_files = [];
+		$walk               = $this->app_walk( $code, $rel, $root, $layout['abspath'], $allowed );
 		if ( is_string( $walk ) ) {
 			return $this->doc( 'tool_error', str_replace( "$code/", $app, $walk ) );
+		}
+		$detail = $this->wp_cli_config_check( $code, $layout['abspath'], $app );
+		if ( null !== $detail ) {
+			return $this->doc( 'tool_error', $detail );
 		}
 		$detail = $this->prepend_check( $site_data, $code, $walk, $layout );
 
@@ -1308,7 +1349,19 @@ class Site_PHP_Compat {
 				if ( '.user.ini' === $name ) {
 					$user_ini[] = [ $path, $type ];
 				}
+				if ( in_array( $name, self::WP_CLI_CONFIGS, true ) ) {
+					$this->wp_cli_files[] = substr( $path, strlen( $code ) + 1 );
+				}
 				if ( 'link' === $type ) {
+					// A log or output file sent to /dev/null, stdout or stderr: exact targets only, never a code name.
+					if ( ! self::php_name( $name ) && in_array( (string) @readlink( $path ), self::DEV_SINKS, true ) ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is no sink.
+						return false;
+					}
+					// Core holds no links, and the cross-check doesn't walk core: any link in it is refused.
+					if ( null !== $abspath && ( 0 === strpos( $path, "$abspath/wp-admin/" ) || 0 === strpos( $path, "$abspath/wp-includes/" ) ) ) {
+						$found = "$path is a link inside WordPress core, which this check doesn't scan";
+						return 'stop';
+					}
 					// The served root or the WordPress root may be a link (current -> releases/<n>).
 					if ( 0 === strpos( "$code/$root/", $path . '/' ) ) {
 						return false;
@@ -1415,7 +1468,15 @@ class Site_PHP_Compat {
 	 *               no walk ran), walk_error (string|null), error (string|null: why there is no positive verdict besides unlisted).
 	 */
 	protected function cross_check( $code, $out ) {
-		$result = [ 'manifest' => false, 'unlisted' => [], 'unlisted_more' => 0, 'walk' => null, 'walk_error' => null, 'error' => null ];
+		$result = [
+			'manifest'      => false,
+			'unlisted'      => [],
+			'unlisted_more' => 0,
+			'walk'          => null,
+			'walk_error'    => null,
+			'changed'       => 0,
+			'error'         => null,
+		];
 		$m      = $this->read_manifest( $out );
 		if ( ! is_array( $m ) ) {
 			$result['error'] = $m;
@@ -1429,71 +1490,134 @@ class Site_PHP_Compat {
 		$result['manifest'] = true;
 		$unlisted           = [];
 		$count              = 0;
+		$changed            = 0;
 		$seen               = [];
+		$start              = $this->scan_start;
 		$searchable         = [ $code => self::uid33_may( @lstat( $code ), 0100 ) ]; // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is handled.
-		$covered            = function ( $path, array $stat, $phar, $exemptable ) use ( $code, $rules ) {
-			$ino = $stat['dev'] . ':' . $stat['ino'];
-			if ( ( ! $phar && isset( $rules['checked'][ $ino ] ) ) || isset( $rules['nc_files'][ $ino ] ) || null !== self::under_any( $path, $code, $rules['nc_dirs'] ) ) {
-				return true;
+		$unread             = function ( $path ) use ( $code, &$unlisted, &$count ) {
+			if ( ++$count <= self::NOT_CHECKED_STDOUT ) {
+				$unlisted[] = self::cut( self::clean( '/var/www' . substr( $path, strlen( $code ) ) ) );
 			}
-			// The exempt shapes are the files themselves: code reaching one through a link is ordinary code.
-			return $exemptable && call_user_func( $rules['exempt'], $path );
+		};
+		$reported           = function ( $path ) use ( $code, $rules ) {
+			return isset( $rules['nc_paths'][ '/var/www' . substr( $path, strlen( $code ) ) ] ) || null !== self::under_any( $path, $code, $rules['nc_dirs'] );
 		};
 		$walk               = $this->walk_tree(
 			$code,
-			function ( $path, $name, $type, $stat = false ) use ( $code, $rules, $covered, &$searchable, &$seen, &$unlisted, &$count ) {
+			function ( $path, $name, $type, $stat = false ) use ( $code, $rules, $start, $unread, $reported, &$searchable, &$seen, &$changed ) {
 				if ( 'dir' === $type ) {
+					// Not read by the scanner and covered as a whole (a not_checked entry, an old release, core): nothing to sniff.
+					if ( isset( $rules['nc_dirs'][ $path ] ) || isset( $rules['skip_walk'][ $path ] ) ) {
+						return false;
+					}
 					$searchable[ $path ] = $searchable[ dirname( $path ) ] && self::uid33_may( $stat, 0100 );
 					return true;
 				}
-				if ( 'link' === $type ) {
-					// A code-named link runs its target as code, whatever the target is called.
-					if ( ! preg_match( $rules['code_name'], $name ) && ! preg_match( $rules['phar'], $name ) ) {
+				$link = 'link' === $type;
+				if ( $link ) {
+					// The served root's own links (current -> releases/2) are the layout itself.
+					if ( isset( $rules['layout_links'][ $path ] ) ) {
 						return false;
 					}
-					$target = self::resolve_in( $code, substr( $path, strlen( $code ) + 1 ) );
-					if ( null === $target ) {
-						// The kernel may follow what resolve_in() can't (/var/www/../www, /proc/self/root): read only if reported.
-						if ( ! isset( $rules['nc_paths'][ '/var/www' . substr( $path, strlen( $code ) ) ] ) && null === self::under_any( $path, $code, $rules['nc_dirs'] ) && ++$count <= self::NOT_CHECKED_STDOUT ) {
-							$unlisted[] = self::cut( self::clean( '/var/www' . substr( $path, strlen( $code ) ) ) );
+					$named  = 1 === preg_match( $rules['code_name'], $name ) || 1 === preg_match( $rules['phar'], $name );
+					if ( ! $named && in_array( (string) @readlink( $path ), self::DEV_SINKS, true ) ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is no sink.
+						return false;
+					}
+					$target = self::resolve_in( $code, substr( $path, strlen( $code ) + 1 ), $why );
+					// Outside the scanner's roots nothing follows a directory link or an unresolvable one for it (the home dirs).
+					if ( null === self::under_any( $path, $code, $rules['roots'] ) && ( null === $target || is_dir( $target ) ) ) {
+						if ( ! $reported( $path ) ) {
+							$unread( $path );
 						}
 						return false;
 					}
-					$stat   = @lstat( $target ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is handled.
+					if ( null === $target ) {
+						// The kernel may follow what resolve_in() can't (/var/www/../www, /proc/self/root): read only if reported.
+						// A plain dangling link is nothing for the kernel either, unless it has a code name the scanner reports.
+						if ( ( 'escape' === $why || $named ) && ! $reported( $path ) ) {
+							$unread( $path );
+						}
+						return false;
+					}
+					// A directory link (any name) into or around an exempt place reaches code nobody read: never exempt through a link.
+					if ( is_dir( $target ) ) {
+						if ( self::touches( $target, $rules['exempt_places'] ) && ! $reported( $path ) ) {
+							$unread( $path );
+						}
+						return false;
+					}
+					$stat = @lstat( $target ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is handled.
 					if ( false === $stat || 0100000 !== ( $stat['mode'] & 0170000 ) ) {
 						return false;
 					}
+					// A file link runs its target as code when either name is a code name (as the scanner reads it).
 					$phar = 1 === preg_match( $rules['phar'], $name ) || 1 === preg_match( $rules['phar'], basename( $target ) );
+					if ( ! $named && ! $phar && ! preg_match( $rules['code_name'], basename( $target ) ) ) {
+						// Any other file in an exempt place, reached through a link, counts unless the scanner read or reported it.
+						$tino = $stat['dev'] . ':' . $stat['ino'];
+						if ( self::touches( $target, $rules['exempt_places'] ) && ! isset( $rules['checked'][ $tino ] ) && ! isset( $rules['nc_files'][ $tino ] ) && ! $reported( $path ) ) {
+							$unread( $path );
+						}
+						return false;
+					}
 					$path = $target;
-					$link = true;
 				} elseif ( 'file' !== $type ) {
 					return false;
 				} else {
-					$link = false;
 					$phar = 1 === preg_match( $rules['phar'], $name );
-					if ( ! $phar && ! preg_match( $rules['code_name'], $name ) && ! $this->manifest_sniffs( $path, $name, $stat, $searchable[ dirname( $path ) ], $rules ) ) {
-						return false;
+					if ( ! $phar && ! preg_match( $rules['code_name'], $name ) ) {
+						// Outside the scanner's roots and the served root only code names count (accepted residual R-SNIFF-OUT).
+						if ( null === self::under_any( $path, $code, $rules['sniff_roots'] ) || call_user_func( $rules['exempt'], $path ) || $reported( $path ) ) {
+							return false;
+						}
+						if ( ! $this->manifest_sniffs( $path, $name, $stat, $searchable[ dirname( $path ) ], $rules ) ) {
+							return false;
+						}
 					}
 				}
-				// A file reached again (through a link, or a hard link) counts once.
+				// A file already reported (reached again through a link or a hard link) counts once. Only reported files are
+				// marked: an exempt file's inode reached through a link must still be judged as the link's code.
 				$ino = $stat['dev'] . ':' . $stat['ino'];
-				if ( isset( $seen[ $ino ] ) || $covered( $path, $stat, $phar, ! $link ) ) {
+				if ( isset( $seen[ $ino ] ) ) {
+					return false;
+				}
+				// Changed since the scan started: not what the scanner read. A cache's data-only file in a skipped dir is fine.
+				if ( $stat['ctime'] >= $start ) {
+					if ( ! $phar && null !== self::under_any( $path, $code, $rules['skipped'] ) && self::data_only( $path ) ) {
+						return false;
+					}
+					++$changed;
+					$seen[ $ino ] = true;
+					$unread( $path );
+					return false;
+				}
+				if ( ( ! $phar && isset( $rules['checked'][ $ino ] ) ) || isset( $rules['nc_files'][ $ino ] ) || $reported( $path ) ) {
+					return false;
+				}
+				// The exempt shapes are the files themselves: code reaching one through a link is ordinary code.
+				if ( ! $link && call_user_func( $rules['exempt'], $path ) ) {
 					return false;
 				}
 				$seen[ $ino ] = true;
-				if ( ++$count <= self::NOT_CHECKED_STDOUT ) {
-					$unlisted[] = self::cut( self::clean( '/var/www' . substr( $path, strlen( $code ) ) ) );
-				}
+				$unread( $path );
 				return false;
 			}
 		);
+		$result['changed'] = $changed;
 		$result['walk'] = null === $walk ? 'ok' : 'failed';
 		if ( null !== $walk ) {
-			$result['walk_error'] = self::cut( $walk );
+			$result['walk_error'] = self::cut( str_replace( "$code/", '/var/www/', $walk ) );
 			$result['error']      = "can't list the site's files to compare with what the scanner read: $walk";
 		}
 		$result['unlisted']      = $unlisted;
 		$result['unlisted_more'] = max( 0, $count - self::NOT_CHECKED_STDOUT );
+		// Relative to app/, for the positive line (exempt shape (a) leaves them unread).
+		$result['old_releases'] = array_map(
+			function ( $dir ) use ( $code ) {
+				return substr( $dir, strlen( $code ) + 1 );
+			},
+			array_keys( $rules['old'] )
+		);
 
 		return $result;
 	}
@@ -1621,13 +1745,37 @@ class Site_PHP_Compat {
 		$nc_files = [];
 		$nc_dirs  = [];
 		$nc_paths = [];
+		// One realpath() and lstat() per entry: bounded, and a signal or --cancel still gets an answer.
+		$seconds  = $this->manifest_seconds();
+		$deadline = microtime( true ) + $seconds;
+		$n        = 0;
+		$tick     = function () use ( &$n, $deadline, $seconds ) {
+			if ( 0 !== ( $n++ % 1000 ) ) {
+				return null;
+			}
+			if ( function_exists( 'pcntl_signal_dispatch' ) ) {
+				null === $this->dispatch ? pcntl_signal_dispatch() : call_user_func( $this->dispatch );
+			}
+			if ( $this->cancel_requested() ) {
+				return "the scanner's list of the files it read can't be used: a cancel was requested";
+			}
+			return microtime( true ) > $deadline ? "the scanner's list of the files it read can't be used: it takes more than $seconds s to read" : null;
+		};
 		foreach ( $m['checked'] as $path ) {
+			$stop = $tick();
+			if ( null !== $stop ) {
+				return $stop;
+			}
 			$stat = self::manifest_stat( $code, $path );
 			if ( false !== $stat && 0100000 === ( $stat['mode'] & 0170000 ) ) {
 				$checked[ $stat['dev'] . ':' . $stat['ino'] ] = true;
 			}
 		}
 		foreach ( $m['not_checked'] as $path ) {
+			$stop = $tick();
+			if ( null !== $stop ) {
+				return $stop;
+			}
 			$host = self::manifest_dir( $code, $path );
 			if ( null !== $host ) {
 				$nc_dirs[ $host ] = true;
@@ -1710,6 +1858,37 @@ class Site_PHP_Compat {
 			},
 			$m['code_extensions']
 		);
+		// Places exempt by shape: a link reaching into one (or holding one) is never exempt. Walked dirs that are covered whole.
+		$places    = [];
+		$skip_walk = $old;
+		foreach ( array_keys( $old ) as $dir ) {
+			$places[ $dir ] = true;
+		}
+		if ( null !== $abspath ) {
+			foreach ( $core_dirs as $dir ) {
+				$places[ "$abspath/$dir" ]    = true;
+				$skip_walk[ "$abspath/$dir" ] = true;
+			}
+			foreach ( $core_files as $file ) {
+				$places[ "$abspath/$file" ] = false;
+			}
+		}
+		foreach ( [ $unused_config, $index ] as $file ) {
+			if ( null !== $file ) {
+				$places[ $file ] = false;
+			}
+		}
+		// Where the content sniff applies: the scanner's roots and the served root (accepted residual R-SNIFF-OUT outside).
+		$sniff_roots = [];
+		foreach ( array_merge( $roots, [ $layout['top'] ] ) as $dir ) {
+			if ( null !== $dir ) {
+				$sniff_roots[ $dir ] = true;
+			}
+		}
+		$layout_links = [];
+		foreach ( isset( $layout['links'] ) ? $layout['links'] : [] as $link ) {
+			$layout_links[ $link ] = true;
+		}
 
 		return [
 			'code'       => $code,
@@ -1722,7 +1901,38 @@ class Site_PHP_Compat {
 			'phar'       => $m['phar_regex'],
 			'sniff'      => $m['sniff'],
 			'exempt'     => $exempt,
+			'old'        => $old,
+			'exempt_places' => $places,
+			'skip_walk'  => $skip_walk,
+			'sniff_roots' => $sniff_roots,
+			'roots'      => array_fill_keys( array_filter( $roots ), true ),
+			'layout_links' => $layout_links,
 		];
+	}
+
+	/**
+	 * Whether a real path is, holds or lies in one of the places: true values are directories, false values files.
+	 *
+	 * @param string $real   Real host path.
+	 * @param array  $places Real host paths as keys.
+	 *
+	 * @return bool
+	 */
+	protected static function touches( $real, array $places ) {
+		foreach ( $places as $place => $is_dir ) {
+			if ( $real === $place || ( $is_dir && 0 === strpos( $real, $place . '/' ) ) || 0 === strpos( $place, $real . '/' ) ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * @return int The time bound of reading the scanner's manifest into lookups.
+	 */
+	protected function manifest_seconds() {
+		return self::WALK_SECONDS;
 	}
 
 	/**
@@ -1845,14 +2055,21 @@ class Site_PHP_Compat {
 		if ( ! $searchable || ! self::uid33_may( $stat, 0400 ) ) {
 			return false;
 		}
-		$handle = @fopen( $path, 'rb' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- unreadable fails closed.
+		// Non-blocking (a FIFO swapped in never hangs) and the same file the walk saw; anything else counts as code.
+		$handle = @fopen( $path, 'rbn' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- unreadable fails closed.
 		if ( false === $handle ) {
 			return true;
 		}
-		$head = (string) fread( $handle, min( $sniff['bytes'], 1048576 ) );
+		$fstat = fstat( $handle );
+		if ( false === $fstat || 0100000 !== ( $fstat['mode'] & 0170000 ) || false === $stat || $fstat['dev'] !== $stat['dev'] || $fstat['ino'] !== $stat['ino'] ) {
+			fclose( $handle );
+			return true;
+		}
+		$head = fread( $handle, min( $sniff['bytes'], 1048576 ) );
 		fclose( $handle );
 
-		return 1 === preg_match( $sniff['regex'], $head );
+		// A failed read or a PCRE error (false) is no proof the file isn't code.
+		return false === $head || 0 !== preg_match( $sniff['regex'], $head );
 	}
 
 	/**
@@ -1877,8 +2094,12 @@ class Site_PHP_Compat {
 			return $cross['error'];
 		}
 		$count = count( $cross['unlisted'] ) + $cross['unlisted_more'];
+		$text  = sprintf( '%s the scanner didn\'t read: %s%s', self::count_of( $count, 'code file' ), implode( ', ', $cross['unlisted'] ), $cross['unlisted_more'] > 0 ? ", and {$cross['unlisted_more']} more" : '' );
+		if ( ! empty( $cross['changed'] ) ) {
+			$text .= sprintf( ' (%s changed while the check ran; run it again when the site is quieter)', self::count_of( $cross['changed'], 'file' ) );
+		}
 
-		return sprintf( '%s the scanner didn\'t read: %s%s', self::count_of( $count, 'code file' ), implode( ', ', $cross['unlisted'] ), $cross['unlisted_more'] > 0 ? ", and {$cross['unlisted_more']} more" : '' );
+		return $text;
 	}
 
 	/**
@@ -1941,6 +2162,10 @@ class Site_PHP_Compat {
 			}
 			$entries = @scandir( $dir ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is handled.
 			if ( false === $entries ) {
+				// Removed after its parent was listed (a cache purge): nothing to walk. Any other failure fails the walk.
+				if ( $dir !== $top && self::gone( $dir ) ) {
+					continue;
+				}
 				return self::clean( $dir ) . ' can\'t be listed';
 			}
 			foreach ( $entries as $name ) {
@@ -1949,7 +2174,14 @@ class Site_PHP_Compat {
 				}
 				$path = "$dir/$name";
 				$stat = @lstat( $path ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is handled.
-				$mode = false === $stat ? 0 : $stat['mode'] & 0170000;
+				if ( false === $stat ) {
+					if ( self::gone( $path ) ) {
+						continue;
+					}
+					// E.g. a host path longer than PATH_MAX, which PHP in the container still reaches: fail closed.
+					return self::clean( $path ) . ' can\'t be read';
+				}
+				$mode = $stat['mode'] & 0170000;
 				$type = 0120000 === $mode ? 'link' : ( 0040000 === $mode ? 'dir' : ( 0100000 === $mode ? 'file' : 'other' ) );
 				$go   = $visit( $path, $name, $type, $stat );
 				if ( 'stop' === $go || ( 'dir' !== $type && true === $go ) ) {
@@ -1962,6 +2194,87 @@ class Site_PHP_Compat {
 		}
 
 		return null;
+	}
+
+	/**
+	 * Waits for the next whole second and returns it: ctime has whole seconds, so every file with a ctime before it was
+	 * last changed before the scanner started.
+	 *
+	 * @return int
+	 */
+	protected function scan_start_time() {
+		$start = (int) floor( microtime( true ) ) + 1;
+		while ( microtime( true ) < $start ) {
+			usleep( 20000 );
+		}
+
+		return $start;
+	}
+
+	/**
+	 * The scanner's data-only rule (compat-scanner dataOnly()), exactly: `<?php exit; ?>`, `die();`, `exit('…'); ?>` forms
+	 * with no later open tag, read to the end up to 8 MiB.
+	 *
+	 * @param string $path Host path.
+	 *
+	 * @return bool
+	 */
+	protected static function data_only( $path ) {
+		$fh = @fopen( $path, 'rbn' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is handled.
+		if ( false === $fh ) {
+			return false;
+		}
+		$st = fstat( $fh );
+		if ( false === $st || 0100000 !== ( $st['mode'] & 0170000 ) ) {
+			fclose( $fh );
+			return false;
+		}
+		$head = (string) fread( $fh, 512 );
+		$ok   = (bool) preg_match( '/\A(?:\xEF\xBB\xBF)?<\?php\s+(?:exit|die)\s*(?:\(\s*(?:\'[^\'\\\\]*\'|"[^"\\\\$]*"|\d+)?\s*\))?\s*;?\s*(__halt_compiler\s*\(\s*\)\s*;?\s*)?\?>/i', $head, $m );
+		if ( $ok && empty( $m[1] ) ) {
+			$rest = substr( $head, strlen( $m[0] ) );
+			$read = strlen( $head );
+			while ( true ) {
+				if ( preg_match( '/<\?(?:php(?:\s|\z)|=)/i', $rest ) ) {
+					$ok = false;
+					break;
+				}
+				$more = fread( $fh, 65536 );
+				if ( false === $more || ( '' === $more && ! feof( $fh ) ) ) {
+					$ok = false;
+					break;
+				}
+				if ( '' === $more ) {
+					break;
+				}
+				$read += strlen( $more );
+				if ( $read > 8388608 ) {
+					$ok = false;
+					break;
+				}
+				$rest = substr( $rest, -5 ) . $more;
+			}
+		}
+		fclose( $fh );
+
+		return $ok;
+	}
+
+	/**
+	 * Whether a path that just failed to list or lstat was removed meanwhile (not some other error).
+	 *
+	 * @param string $path Host path.
+	 *
+	 * @return bool
+	 */
+	protected static function gone( $path ) {
+		clearstatcache( true, $path );
+		if ( false !== @lstat( $path ) || strlen( $path ) >= 4096 ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is handled.
+			return false;
+		}
+		$list = @scandir( dirname( $path ) ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is handled.
+
+		return false === $list || ! in_array( basename( $path ), $list, true );
 	}
 
 	/**
@@ -2280,6 +2593,21 @@ class Site_PHP_Compat {
 			if ( $outside ) {
 				return 'the site\'s php container mounts ' . self::clean( $dst ) . ' at ' . self::clean( '/var/www' . substr( $at, strlen( $code ) ) ) . ', where the scanner doesn\'t look';
 			}
+			// A .user.ini there is seen only inside the container: its prepend/append settings would go unchecked.
+			$user_ini = null;
+			$error    = is_dir( $src ) ? $this->walk_tree(
+				realpath( $src ),
+				function ( $path, $name, $type ) use ( &$user_ini ) {
+					if ( '.user.ini' === $name ) {
+						$user_ini = $path;
+						return 'stop';
+					}
+					return 'dir' === $type;
+				}
+			) : null;
+			if ( null !== $error || null !== $user_ini ) {
+				return 'the site\'s php container mounts ' . self::clean( $dst ) . ' from ' . self::clean( $src ) . ( null !== $user_ini ? ', which holds a .user.ini (' . self::clean( $user_ini ) . ') this check doesn\'t read' : ", which can't be looked through: $error" );
+			}
 			EE::debug( "php-compat: also mounting $src at $dst" );
 			array_push( $this->extra_mounts, '--mount', "type=bind,src=$src,dst=$dst,readonly" );
 		}
@@ -2325,6 +2653,14 @@ class Site_PHP_Compat {
 			if ( ( isset( $config[ $key ] ) ? $config[ $key ] : null ) !== ( isset( $own[ $key ] ) ? $own[ $key ] : null ) ) {
 				return "the site's php container runs another " . strtolower( $key ) . ' than its image, which this check can\'t confirm';
 			}
+		}
+		// Both sides read files as PHP-FPM's stock user (uid 33, no other groups): another user or extra groups read others.
+		$user = isset( $own['User'] ) ? (string) $own['User'] : '';
+		if ( ( isset( $config['User'] ) ? (string) $config['User'] : '' ) !== $user ) {
+			return "the site's php container runs as another user than its image, which this check can't confirm";
+		}
+		if ( ! empty( $info['HostConfig']['GroupAdd'] ) ) {
+			return "the site's php container adds groups to its user, which this check can't confirm";
 		}
 		$image_env = [];
 		foreach ( isset( $own['Env'] ) ? (array) $own['Env'] : [] as $pair ) {
@@ -2474,31 +2810,20 @@ class Site_PHP_Compat {
 	}
 
 	/**
-	 * WP-CLI configs WordPress can be run with: wp-cli.yml and wp-cli.local.yml in each directory from app/ down to the served
-	 * root and the WordPress root (WP-CLI looks upwards from where it runs), and the www-data home's .wp-cli/config.yml. A
-	 * `require:` there loads code (an exempt config, an old release) and `_: inherit:` pulls in another config, so any file
-	 * that mentions either is refused; one that can't be read is refused too (no YAML parser in the phar).
+	 * WP-CLI configs (every wp-cli.yml and wp-cli.local.yml found in app/, and the www-data user's .wp-cli/config.yml) may
+	 * hold only blank lines, comments and top-level `key: scalar` lines for path, url, user, color, quiet and debug. `path`
+	 * must lead to the WordPress root this check scans (php sites: the served root). Anything else (exec, require, inherit,
+	 * aliases, blocks) can make WP-CLI run code this check doesn't follow; there's no YAML parser in the phar.
 	 *
-	 * @param string   $code Real path of the site's app/.
-	 * @param string[] $dirs Directories relative to app/ (served root, WordPress root as passed and as resolved).
-	 * @param string   $app  The site's app/ with a trailing slash, for messages.
+	 * @param string      $code Real path of the site's app/.
+	 * @param string|null $live Real path `path:` must lead to.
+	 * @param string      $app  The site's app/ with a trailing slash, for messages.
 	 *
 	 * @return string|null tool_error detail.
 	 */
-	protected function wp_cli_config_check( $code, array $dirs, $app ) {
-		$files = [ '.wp-cli/config.yml' ];
-		foreach ( $dirs as $dir ) {
-			for ( $dir = trim( (string) $dir, '/' ); ; $dir = dirname( $dir ) ) {
-				$dir     = '.' === $dir ? '' : $dir;
-				$files[] = ltrim( "$dir/wp-cli.yml", '/' );
-				$files[] = ltrim( "$dir/wp-cli.local.yml", '/' );
-				if ( '' === $dir ) {
-					break;
-				}
-			}
-		}
-		foreach ( array_unique( $files ) as $file ) {
-			// Missing (also below a link such as current/) is no config; a path the container could follow elsewhere is refused.
+	protected function wp_cli_config_check( $code, $live, $app ) {
+		foreach ( array_unique( array_merge( [ self::WP_CLI_HOME ], $this->wp_cli_files ) ) as $file ) {
+			// Missing (a dangling link included) is no config; one the container could reach elsewhere is refused.
 			if ( null === self::resolve_in( $code, $file, $why ) ) {
 				if ( 'missing' === $why ) {
 					continue;
@@ -2509,8 +2834,35 @@ class Site_PHP_Compat {
 			if ( 'ok' !== $found['state'] ) {
 				return "can't read $app$file, a WP-CLI config: {$found['detail']}";
 			}
-			if ( preg_match( '/require|inherit/i', $found['source'] ) ) {
-				return "$app$file can make WP-CLI load more code (`require:` or `inherit`), which this check doesn't follow";
+			$text = str_replace( [ "\r\n", "\r" ], "\n", $found['source'] );
+			$text = 0 === strpos( $text, "\xEF\xBB\xBF" ) ? substr( $text, 3 ) : $text;
+			foreach ( explode( "\n", $text ) as $n => $line ) {
+				if ( '' === trim( $line ) || '#' === substr( ltrim( $line ), 0, 1 ) ) {
+					continue;
+				}
+				// A plain YAML scalar: no flow/anchor/tag/alias start, `:` only when not followed by a blank, ` #` starts a comment.
+				$scalar = '(?:\'[^\']*\'|"[^"\\\\]*"|[^\s\'"{}\[\],&*!|>%@`#:](?:[^\s#:]|:(?=\S)|[ \t]+(?=[^\s#]))*)';
+				if ( ! preg_match( '/^(' . implode( '|', self::WP_CLI_KEYS ) . '):(?:[ \t]+(' . $scalar . '))?[ \t]*(?:[ \t]#.*)?$/D', $line, $m ) ) {
+					return sprintf( '%s%s line %d isn\'t a WP-CLI setting this check accepts (only %s, as plain values): %s', $app, $file, $n + 1, implode( ', ', self::WP_CLI_KEYS ), self::clean( substr( trim( $line ), 0, 60 ) ) );
+				}
+				if ( 'path' !== $m[1] ) {
+					continue;
+				}
+				$value = isset( $m[2] ) ? trim( $m[2], '\'"' ) : '';
+				if ( '' === $value ) {
+					continue;
+				}
+				// Relative to the config's own (real) directory, as WP-CLI reads it; /var/www/… is the site's app/.
+				$base = substr( dirname( $found['real'] ), strlen( $code ) + 1 );
+				if ( '/' === $value[0] ) {
+					$rel = 0 === strpos( $value . '/', '/var/www/' ) ? substr( $value, strlen( '/var/www/' ) ) : null;
+				} else {
+					$rel = ( false === $base || '' === $base ? '' : "$base/" ) . $value;
+				}
+				$to = null === $rel ? null : self::resolve_in( $code, $rel );
+				if ( null === $live || $to !== $live ) {
+					return sprintf( '%s%s sets path: %s, which isn\'t the WordPress this check scans', $app, $file, self::clean( $value ) );
+				}
 			}
 		}
 
@@ -2612,11 +2964,13 @@ class Site_PHP_Compat {
 	 * @param string      $rel  Path relative to app/.
 	 * @param string|null $why  Set on null: 'missing' (the kernel can't follow it either) or 'escape' (it leaves app/, or
 	 *                          this can't tell where the kernel would take it, e.g. /var/www/../www or /proc/self/root).
+	 * @param array|null  $passed Set to the links passed on the way (their real-location host paths).
 	 *
 	 * @return string|null Real host path inside app/, or null when it doesn't exist or leaves app/.
 	 */
-	public static function resolve_in( $code, $rel, &$why = null ) {
-		$why = 'escape';
+	public static function resolve_in( $code, $rel, &$why = null, &$passed = null ) {
+		$why    = 'escape';
+		$passed = [];
 		// Path text from the site's files: a NUL or another control character is never a real path here.
 		if ( preg_match( '/[\x00-\x1F\x7F]/', $rel ) ) {
 			return null;
@@ -2638,8 +2992,13 @@ class Site_PHP_Compat {
 			}
 			$path = $code . '/' . implode( '/', array_merge( $done, [ $part ] ) );
 			if ( is_link( $path ) ) {
+				$passed[] = $path;
 				$target = readlink( $path );
-				if ( false === $target || ++$hops > 40 || preg_match( '/[\x00-\x1F\x7F]/', $target ) ) {
+				if ( ++$hops > 40 ) {
+					$why = 'missing';
+					return null;
+				}
+				if ( false === $target || preg_match( '/[\x00-\x1F\x7F]/', $target ) ) {
 					return null;
 				}
 				if ( '/' === substr( $target, 0, 1 ) ) {
@@ -3503,6 +3862,7 @@ class Site_PHP_Compat {
 			'unlisted_more' => $this->cross['unlisted_more'],
 			'walk'          => $this->cross['walk'],
 			'walk_error'    => $this->cross['walk_error'],
+			'changed_during_scan' => $this->cross['changed'],
 		];
 		if ( $doc['errors'] > 0 || ( null !== $core && false === $core['supports'] ) ) {
 			$doc['safe_to_upgrade'] = false;
@@ -3816,20 +4176,45 @@ class Site_PHP_Compat {
 			if ( null !== $core ) {
 				$line .= ' ' . ( null === $why ? sprintf( 'WordPress %s supports PHP %s', $this->wp_version['branch'], $target ) : ucfirst( $why ) ) . '.';
 			}
+			// Exempt shape (a): what wasn't read, so the line never claims all of htdocs.
+			if ( ! $this->wp_layout && null !== $this->cross && ! empty( $this->cross['old_releases'] ) ) {
+				// looked_in is <site>/app/htdocs on php sites.
+				$app   = dirname( (string) $this->looked_in ) . '/';
+				$names = array_map(
+					function ( $dir ) use ( $app ) {
+						return self::clean( $app . $dir );
+					},
+					$this->cross['old_releases']
+				);
+				$line .= ' Old releases nginx doesn\'t serve aren\'t checked: ' . implode( ', ', $names ) . '.';
+			}
 			yield $line . ( $doc['warnings'] > 0 ? ' ' . self::count_of( $doc['warnings'], 'warning' ) . '.' : '' );
 		} else {
+			// WordPress's sentence leads only when WordPress itself is the reason (supports null); otherwise it follows.
+			$core_unknown = null !== $core && null === $core['supports'];
 			if ( $doc['files_not_checked'] > 0 ) {
-				$could = 1 === $doc['files_not_checked'] ? 'file couldn\'t' : 'files couldn\'t';
+				// An entry can be a whole directory (skipped uploads/, a dot dir, a nested install): count entries.
+				$dirs  = (bool) array_filter(
+					isset( $report['not_checked'] ) ? $report['not_checked'] : [],
+					function ( $entry ) {
+						return '/' === substr( (string) $entry['file'], -1 );
+					}
+				);
+				$noun  = $dirs ? 'file or directory' : 'file';
+				$could = 1 === $doc['files_not_checked'] ? "$noun couldn't" : ( $dirs ? 'files or directories' : 'files' ) . " couldn't";
 				yield sprintf( 'Can\'t confirm %s is safe for PHP %s: %d %s be checked. %s', $site, $target, $doc['files_not_checked'], $could, $tail );
 				if ( null !== $why ) {
 					yield ucfirst( $why ) . '.';
 				}
-			} elseif ( null !== $why ) {
+			} elseif ( $core_unknown ) {
 				yield sprintf( 'Can\'t confirm %s is safe for PHP %s: %s. %s', $site, $target, $why, $tail );
 			} else {
 				yield sprintf( 'Can\'t confirm %s is safe for PHP %s: %s. %s', $site, $target, self::cross_text( $this->cross ), $tail );
+				if ( null !== $why ) {
+					yield ucfirst( $why ) . '.';
+				}
 			}
-			if ( ( $doc['files_not_checked'] > 0 || null !== $why ) && ! self::cross_ok( $this->cross ) ) {
+			if ( ( $doc['files_not_checked'] > 0 || $core_unknown ) && ! self::cross_ok( $this->cross ) ) {
 				yield ucfirst( self::cross_text( $this->cross ) ) . '.';
 			}
 		}
