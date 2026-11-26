@@ -120,6 +120,24 @@ class Site_PHP_Compat {
 	// nginx-helper's bundled Predis (user decision): stock admin/predis.php and includes/class-nginx-helper.php by released
 	// version, verified from wordpress.org's zips. predis.php loads only via class-predis-purger.php, which the stock
 	// class-nginx-helper.php requires only when class Redis is missing; EE's php images ship phpredis.
+	const NGINX_HELPER_RELEASES = [
+		'2.2.0' => '3cb381a86e62310b821d4fe50e42de9180215ec95c8d95b6e39dd613016d7aac',
+		'2.2.1' => '172333813af04fda5019ef6b50b79ffc55eb9862a982b07208daf1394cc695e9',
+		'2.2.2' => '2f1cfa30d246412de08a34b256c3ee7e80a0d0f57d568406d861b81976d15cb8',
+		'2.2.3' => '31a12a66a28a2d4dbc67b8d9482faa1abfe1d17af5398a19f6a01dcfeae7dfa5',
+		'2.2.4' => '2807ff4a45f94e90bc357fbb75749127d34d566b15809b0bb948d6d53c9003cd',
+		'2.2.5' => '782a16ba3180b6278141e341d9592f0f8bcf6083faeca6d8b13402f041fe6df4',
+		'2.3.0' => 'aba8a708987030eb8fa2ddddaeddacd6164a62368414155dd009a42d7f382d2a',
+		'2.3.1' => 'b5508c8ff4f12c865f31fcbd456b01b20970f7e0bd24a4471accce0f2abaa9b4',
+		'2.3.2' => '33ebef47d56421dbb4c521fc4dda5cd53dde6137dae232061d81879cbdbc0733',
+		'2.3.3' => 'aa886e16bd93a406e361922323107ba251e1142e533f066b0bfad20d1da32aa3',
+		'2.3.4' => '0a9e1c709fe4534b68a36991b3f3890e7f3f17aad51081d017f25ab212dfc181',
+		'2.3.5' => '94ed9a06114e3d92f4d221d5dc146148aa84ee3a8f79304215966c14f606b512',
+		'2.4.0' => '7420855acc37c6c9da189a2e48759d95940ec07852b9f3f4b7719297da181024',
+		'2.4.1' => '4812f913cdd19ac9803e3782e6d32f8c51f01057a566c5c083b410a99528f412',
+	];
+
+	// The stock predis.php / class-nginx-helper.php pairs (documentation; NGINX_HELPER_RELEASES pins whole releases).
 	const NGINX_HELPER_PREDIS = [
 		'2.4.1' => [ 'c6393c3aeba2358a1ec9b206fda84c54ead3254184be914b08dce886acc6f670', '44fd41fb9275aef9764e1dfb06e47710986894ebafd4de861c2ec684d71aada5' ],
 		'2.4.0' => [ 'c6393c3aeba2358a1ec9b206fda84c54ead3254184be914b08dce886acc6f670', '2ec2f8579bebdb80024c3bfc2758e21caab7254a563c074cfa9624043c99dfa3' ],
@@ -187,6 +205,18 @@ class Site_PHP_Compat {
 
 	/** @var string|null Real path of the wp-config.php WordPress loads when that makes EE's app/wp-config.php unused (shape (c)). */
 	protected $ee_config_unused_by;
+
+	/** @var string The site's app/ with a trailing slash (resolve_layout()), for paths named in output. */
+	protected $app_path = '';
+
+	/** @var string[] Resolved host paths of the accepted extra mounts (extra_mounts()). */
+	protected $mount_points = [];
+
+	/** @var string[] The manifest's `checked` container paths, decoded (cross_check()). */
+	protected $manifest_checked = [];
+
+	/** @var string|null Real path of the wp-config.php WordPress loads, validated by check_wp_config(). */
+	protected $loaded_config;
 
 	/** @var string[] WP-CLI configs found in the site's files, relative to app/. */
 	protected $wp_cli_files = [];
@@ -510,6 +540,8 @@ class Site_PHP_Compat {
 		if ( null !== $pull ) {
 			return $this->doc( 'tool_error', $pull );
 		}
+		// From here on a changed file may not be what was validated or scanned (cross_check() compares ctime).
+		$this->scan_start = $this->scan_start_time();
 		// Read under the site lock and after the pull, so the layout checked is the one scanned.
 		$layout = $this->resolve_layout( $site_data, $code );
 		if ( null !== $layout ) {
@@ -534,8 +566,6 @@ class Site_PHP_Compat {
 
 		// From here until cleanup() confirms it is gone, /out may be in use by this container.
 		$this->active_container = $name;
-		// Files changed from here on may differ from what the scanner read (cross_check() compares ctime).
-		$this->scan_start       = $this->scan_start_time();
 		$run                    = $this->docker( $this->docker_run_args( 'scan', $image, $site_data, $code, $out, $timeout ), $timeout + self::PROCESS_MARGIN, true );
 		if ( $run['timed_out'] ) {
 			return $this->doc( 'tool_error', "timed out after $timeout s" );
@@ -582,12 +612,12 @@ class Site_PHP_Compat {
 			return $this->doc( 'tool_error', self::exit_detail( $run, 'without a valid report' ) );
 		}
 
-		// Exact-file exemption (user decision): nginx-helper's bundled Predis isn't loaded when phpredis is.
-		$this->ignored = [];
-		$this->ignore_unused_predis( $code, $doc, $report );
-
 		// The final gate: every code file in app/ is one the scanner read or reported, or an exact exempt shape.
 		$this->cross = $this->cross_check( $code, $out );
+
+		// Exact exemption (user decision): nginx-helper's bundled Predis isn't loaded when phpredis is.
+		$this->ignored = [];
+		$this->ignore_unused_predis( $code, $doc, $report );
 
 		// Last point a cancel wins: after it, the result stands and --output is written.
 		if ( $this->cancel_requested() ) {
@@ -1050,6 +1080,8 @@ class Site_PHP_Compat {
 		}
 		$rel = ltrim( substr( $served, strlen( '/var/www' ) ), '/' );
 		$app = $site_data->site_fs_path . '/app/';
+		// For messages and JSON paths named from the site's app/.
+		$this->app_path = $app;
 
 		$this->scan_path = $served;
 		$detail          = $this->server_config_check( $site_data );
@@ -1078,7 +1110,7 @@ class Site_PHP_Compat {
 				return $this->doc( 'tool_error', $detail );
 			}
 			$this->wp_cli_files = self::wp_cli_chain( $code, [ $rel, $this->cross_layout['top'] ] );
-			$detail             = $this->wp_cli_config_check( $code, $this->cross_layout['top'], $app );
+			$detail             = $this->wp_cli_config_check( $code, $this->cross_layout['top'], $app, $rel );
 			return null === $detail ? null : $this->doc( 'tool_error', $detail );
 		}
 
@@ -1098,6 +1130,7 @@ class Site_PHP_Compat {
 			$allowed[] = $index;
 		}
 		$this->wp_version          = null;
+		$this->loaded_config       = null;
 		$this->ee_config_unused_by = null;
 		$this->unused_configs      = [];
 		$this->current_php         = isset( $site_data->php_version ) && preg_match( '/^\d+\.\d+$/D', (string) $site_data->php_version ) ? (string) $site_data->php_version : null;
@@ -1134,7 +1167,7 @@ class Site_PHP_Compat {
 			return $this->doc( 'tool_error', str_replace( "$code/", $app, $walk ) );
 		}
 		$this->wp_cli_files = self::wp_cli_chain( $code, [ $rel, $root, null === $layout['abspath'] ? null : substr( $layout['abspath'], strlen( $code ) + 1 ), $this->cross_layout['top'] ] );
-		$detail             = $this->wp_cli_config_check( $code, $layout['abspath'], $app );
+		$detail             = $this->wp_cli_config_check( $code, $layout['abspath'], $app, $root );
 		if ( null !== $detail ) {
 			return $this->doc( 'tool_error', $detail );
 		}
@@ -1247,8 +1280,9 @@ class Site_PHP_Compat {
 		if ( 'ok' !== $file['state'] ) {
 			return "can't read $app{$config[0]}: " . ( 'bad' === $file['state'] ? $file['detail'] : 'it is gone' );
 		}
-		$read    = [ $file['real'] ];
-		$resolve = function ( $path ) use ( $code, $abspath, &$read ) {
+		$read                = [ $file['real'] ];
+		$this->loaded_config = $file['real'];
+		$resolve             = function ( $path ) use ( $code, $abspath, &$read ) {
 			if ( 0 !== strpos( $path, "$code/" ) ) {
 				return [ 'state' => 'bad', 'detail' => 'is outside the site\'s files' ];
 			}
@@ -1352,9 +1386,10 @@ class Site_PHP_Compat {
 		$found    = null;
 		$outside  = [];
 		$linked   = [];
+		$deferred = [];
 		$error    = $this->walk_tree(
 			$code,
-			function ( $path, $name, $type ) use ( $code, $top, $root, $abspath, $allowed, $releases, $live, &$user_ini, &$found, &$outside, &$linked ) {
+			function ( $path, $name, $type ) use ( $code, $top, $root, $abspath, $allowed, $releases, $live, &$user_ini, &$found, &$outside, &$linked, &$deferred ) {
 				$inside = null !== $abspath && 0 === strpos( $path . '/', $abspath . '/' );
 				if ( '.user.ini' === $name ) {
 					$user_ini[] = [ $path, $type ];
@@ -1375,7 +1410,7 @@ class Site_PHP_Compat {
 					}
 					$real = self::resolve_in( $code, substr( $path, strlen( $code ) + 1 ), $why );
 					// A release pointer beside current (previous -> releases/1) while nginx serves the live release: shape (a).
-					if ( null !== $releases && null !== $real && 0 === strpos( $top . '/', $live . '/' ) && dirname( $path ) === dirname( $releases ) && dirname( $real ) === $releases ) {
+					if ( null !== $releases && null !== $real && self::release_pointer( $path, $real, $releases ) && 0 === strpos( $top . '/', $live . '/' ) ) {
 						return false;
 					}
 					// A link to a file already read and validated (releases/wp-config.php -> ../wp-config.php): no other code. A config
@@ -1409,8 +1444,9 @@ class Site_PHP_Compat {
 						}
 						return false;
 					}
-					$found = "$path is a link outside the WordPress directory";
-					return 'stop';
+					// Decided after the walk: it may lie in a directory WordPress reaches through a link (shared wp-content).
+					$deferred[] = [ $path, $real, $why ];
+					return false;
 				}
 				if ( 'dir' === $type ) {
 					if ( $inside ) {
@@ -1446,6 +1482,30 @@ class Site_PHP_Compat {
 		if ( null !== $error ) {
 			return "can't look through the site's files: $error";
 		}
+		// A link in a tree WordPress links to is judged as inside it (the scanner follows it there); any other is refused.
+		foreach ( null === $found ? $deferred : [] as list( $path, $real, $why ) ) {
+			$within = false;
+			foreach ( $linked as $target ) {
+				$within = $within || 0 === strpos( $path, $target . '/' );
+			}
+			if ( ! $within ) {
+				$found = "$path is a link outside the WordPress directory";
+			} elseif ( null === $real && 'missing' !== $why ) {
+				$found = "$path is a link this check can't follow the way the container does";
+			} elseif ( null !== $real && ( 0 === strpos( $real . '/', "$abspath/wp-admin/" ) || 0 === strpos( $real . '/', "$abspath/wp-includes/" ) ) ) {
+				$found = "$path links into WordPress core ($real), which this check doesn't scan";
+			} elseif ( null !== $real && 0 === strpos( dirname( $path ) . '/', $real . '/' ) ) {
+				$found = "$path links to its own ancestor " . $real;
+			} elseif ( null !== $real && self::reaches_install( $code, $real, $abspath ) ) {
+				$found = "$path links into another WordPress install ($real)";
+			} elseif ( null !== $real && is_dir( $real ) && 0 !== strpos( $real . '/', $abspath . '/' ) ) {
+				// A further directory outside WordPress: its own contents weren't checked as reachable code here.
+				$found = "$path is a link outside the WordPress directory";
+			}
+			if ( null !== $found ) {
+				break;
+			}
+		}
 		if ( null === $found ) {
 			foreach ( $outside as $path ) {
 				$covered = false;
@@ -1479,7 +1539,8 @@ class Site_PHP_Compat {
 	 *               no walk ran), walk_error (string|null), error (string|null: why there is no positive verdict besides unlisted).
 	 */
 	protected function cross_check( $code, $out ) {
-		$result = [
+		$this->manifest_checked = [];
+		$result                 = [
 			'manifest'      => false,
 			'unlisted'      => [],
 			'unlisted_more' => 0,
@@ -1493,7 +1554,8 @@ class Site_PHP_Compat {
 			$result['error'] = $m;
 			return $result;
 		}
-		$rules = $this->manifest_rules( $code, $m );
+		$this->manifest_checked = $m['checked'];
+		$rules                  = $this->manifest_rules( $code, $m );
 		if ( is_string( $rules ) ) {
 			$result['error'] = $rules;
 			return $result;
@@ -1536,7 +1598,12 @@ class Site_PHP_Compat {
 					}
 					$target = self::resolve_in( $code, substr( $path, strlen( $code ) + 1 ), $why );
 					// A release pointer beside current (previous -> releases/1, Deployer's release -> releases/3): exact shape (a).
-					if ( null !== $rules['releases_dir'] && null !== $target && dirname( $path ) === dirname( $rules['releases_dir'] ) && dirname( $target ) === $rules['releases_dir'] ) {
+					if ( null !== $rules['releases_dir'] && null !== $target && self::release_pointer( $path, $target, $rules['releases_dir'] ) ) {
+						return false;
+					}
+					// php sites: a non-code-named link in a www-data home dot dir that leaves the site (.venv/bin/python) is nothing,
+					// as for the scanner (U13).
+					if ( ! $named && null === $target && 'escape' === $why && ! $rules['wp'] && '.' === substr( strtok( substr( $path, strlen( $code ) + 1 ), '/' ), 0, 1 ) ) {
 						return false;
 					}
 					// Outside the scanner's roots nothing follows a directory link or an unresolvable one for it (the home dirs).
@@ -1596,9 +1663,10 @@ class Site_PHP_Compat {
 				if ( isset( $seen[ $ino ] ) ) {
 					return false;
 				}
-				// Changed since the scan started: not what the scanner read. A cache's data-only file in a skipped dir is fine.
+				// Changed since the scan started: not what the scanner read. A data-only file (a cache, Wordfence's wflogs) is fine
+				// anywhere the scanner walks: it can't run code past its exit.
 				if ( $stat['ctime'] >= $start ) {
-					if ( ! $phar && null !== self::under_any( $path, $code, $rules['skipped'] ) && self::data_only( $path ) ) {
+					if ( ! $phar && null !== self::under_any( $path, $code, $rules['roots'] ) && self::data_only( $path ) ) {
 						return false;
 					}
 					++$changed;
@@ -1796,10 +1864,9 @@ class Site_PHP_Compat {
 				$nc_dirs[ $host ] = true;
 				continue;
 			}
-			if ( '/' !== substr( $path, -1 ) ) {
-				// As listed: a link that dangles or leaves /var/www is named by its own path.
-				$nc_paths[ $path ] = true;
-			}
+			// As listed: a link that dangles, leaves /var/www or leads into an exempt place is named by its own path (a directory
+			// link with a trailing slash).
+			$nc_paths[ rtrim( $path, '/' ) ] = true;
 			$stat = '/' === substr( $path, -1 ) ? false : self::manifest_stat( $code, $path );
 			if ( false !== $stat && 0100000 === ( $stat['mode'] & 0170000 ) ) {
 				$nc_files[ $stat['dev'] . ':' . $stat['ino'] ] = true;
@@ -1922,6 +1989,7 @@ class Site_PHP_Compat {
 			'sniff_roots' => $sniff_roots,
 			'roots'      => array_fill_keys( array_filter( $roots ), true ),
 			'releases_dir' => $this->releases_dir( $code ),
+			'wp'         => $layout['wp'],
 			'layout_links' => $layout_links,
 		];
 	}
@@ -1942,6 +2010,27 @@ class Site_PHP_Compat {
 		}
 
 		return false;
+	}
+
+	/**
+	 * @return string The site's app/ with a trailing slash.
+	 */
+	protected function app_dir() {
+		return $this->app_path;
+	}
+
+	/**
+	 * A release pointer beside current: a link named exactly `previous` or `release`, directly in the directory that holds
+	 * releases/, whose real target is a directory directly in releases/.
+	 *
+	 * @param string $path     Link path (its real location).
+	 * @param string $real     Its resolved target.
+	 * @param string $releases Real releases/ directory.
+	 *
+	 * @return bool
+	 */
+	protected static function release_pointer( $path, $real, $releases ) {
+		return in_array( basename( $path ), [ 'previous', 'release' ], true ) && dirname( $path ) === dirname( $releases ) && dirname( $real ) === $releases && is_dir( $real ) && ! is_link( $real );
 	}
 
 	/**
@@ -2260,35 +2349,53 @@ class Site_PHP_Compat {
 		if ( null === $at ) {
 			return;
 		}
-		// Exact files at their own paths: no link anywhere on the way.
-		$hash = function ( $path ) {
-			$stat = @lstat( $path ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is handled.
-			return false !== $stat && 0100000 === ( $stat['mode'] & 0170000 ) && realpath( $path ) === $path ? hash_file( 'sha256', $path ) : null;
-		};
-		$predis = $hash( "$dir/admin/predis.php" );
-		$guard  = $hash( "$dir/includes/class-nginx-helper.php" );
-		$stock  = false;
-		foreach ( self::NGINX_HELPER_PREDIS as $pair ) {
-			$stock = $stock || ( $predis === $pair[0] && $guard === $pair[1] );
+		// Nothing mounted over the plugin: the files hashed on the host must be the ones PHP runs.
+		$plugin = [];
+		$plugin[ $dir ] = true;
+		foreach ( $this->mount_points as $mount ) {
+			if ( self::touches( $mount, $plugin ) ) {
+				return;
+			}
 		}
-		if ( ! $stock ) {
+		// Exact files at their own paths (no link on the way), each with one name only (no second name elsewhere).
+		foreach ( [ "$dir/admin/predis.php", "$dir/includes/class-nginx-helper.php" ] as $path ) {
+			$stat = @lstat( $path ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is handled.
+			if ( false === $stat || 0100000 !== ( $stat['mode'] & 0170000 ) || 1 !== $stat['nlink'] || realpath( $path ) !== $path ) {
+				return;
+			}
+		}
+		// The whole plugin is a stock release: same file list, same contents (no other file of it loads predis.php).
+		if ( ! in_array( self::dir_manifest( $dir ), self::NGINX_HELPER_RELEASES, true ) ) {
 			return;
+		}
+		// No other code the scanner read mentions predis (another plugin requiring it), matched at a word start so that
+		// "PhpRedis" (wp-redis, EE's object cache drop-in) doesn't count.
+		foreach ( $this->manifest_checked as $checked ) {
+			if ( 0 === strpos( $checked, 'b64:' ) ) {
+				return;
+			}
+			$host = $code . substr( $checked, strlen( '/var/www' ) );
+			if ( 0 === strpos( $host, "$dir/" ) ) {
+				continue;
+			}
+			$text = @file_get_contents( $host ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- unreadable refuses.
+			if ( false === $text || 0 !== preg_match( '/(?<![a-z0-9_])predis/i', $text ) ) {
+				return;
+			}
 		}
 		$run = $this->docker( [ 'docker', 'exec', $this->php_container, 'php', '-r', 'echo extension_loaded( "redis" ) ? "yes" : "no";' ], 60 );
 		if ( 0 !== $run['code'] || 'yes' !== trim( $run['stdout'] ) ) {
 			return;
 		}
 		$component = $report['components'][ $at ];
-		$kept      = [];
 		$dropped   = 0;
-		foreach ( $component['findings'] as $finding ) {
+		foreach ( $component['findings'] as $i => $finding ) {
+			// Kept in the report, marked: the --output file still shows what was ignored.
 			if ( 'admin/predis.php' === $finding['file'] && 'ERROR' === $finding['type'] ) {
 				++$dropped;
-				continue;
+				$component['findings'][ $i ]['ignored'] = true;
 			}
-			$kept[] = $finding;
 		}
-		$component['findings'] = $kept;
 		$component['errors']  -= $dropped;
 		$report['components'][ $at ] = $component;
 		$doc['errors']              -= $dropped;
@@ -2296,10 +2403,48 @@ class Site_PHP_Compat {
 			--$doc['components_with_errors'];
 		}
 		$this->ignored[] = [
-			'file'   => '/var/www' . substr( "$dir/admin/predis.php", strlen( $code ) ),
+			'file'   => self::cut( self::clean( '/var/www' . substr( "$dir/admin/predis.php", strlen( $code ) ) ) ),
 			'reason' => "nginx-helper's bundled Predis isn't loaded: the redis extension is installed",
 			'count'  => $dropped,
 		];
+	}
+
+	/**
+	 * sha256 of a directory's file list: sorted "relative path<TAB>sha256" lines, newline-terminated. Anything other than
+	 * regular files and directories (a link, a FIFO) gives null.
+	 *
+	 * @param string $dir Real directory.
+	 *
+	 * @return string|null
+	 */
+	protected static function dir_manifest( $dir ) {
+		$lines = [];
+		$todo  = [ '' ];
+		while ( $todo ) {
+			$rel     = array_pop( $todo );
+			$entries = @scandir( '' === $rel ? $dir : "$dir/$rel" ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is handled.
+			if ( false === $entries ) {
+				return null;
+			}
+			foreach ( $entries as $name ) {
+				if ( '.' === $name || '..' === $name ) {
+					continue;
+				}
+				$path = '' === $rel ? $name : "$rel/$name";
+				$stat = @lstat( "$dir/$path" ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is handled.
+				$mode = false === $stat ? 0 : $stat['mode'] & 0170000;
+				if ( 0040000 === $mode ) {
+					$todo[] = $path;
+				} elseif ( 0100000 === $mode ) {
+					$lines[] = $path . "\t" . hash_file( 'sha256', "$dir/$path" );
+				} else {
+					return null;
+				}
+			}
+		}
+		sort( $lines, SORT_STRING );
+
+		return hash( 'sha256', implode( "\n", $lines ) . "\n" );
 	}
 
 	/**
@@ -2613,12 +2758,17 @@ class Site_PHP_Compat {
 	 */
 	protected function extra_mounts( $site_data, $code ) {
 		$this->extra_mounts  = [];
+		$this->mount_points  = [];
 		$this->php_container = null;
 		$ps                 = $this->docker( [ 'docker', 'ps', '-q', '--no-trunc', '--filter', 'label=io.easyengine.site=' . $this->site, '--filter', 'label=com.docker.compose.service=php' ], 60 );
 		if ( 0 !== $ps['code'] ) {
 			return 'could not list the site\'s php container: ' . self::first_line( $ps['stderr'] );
 		}
 		$ids = preg_split( '/\s+/', trim( $ps['stdout'] ), -1, PREG_SPLIT_NO_EMPTY );
+		// EE runs one php container per site; with more, which one serves a request (and what it mounts) is unknown.
+		if ( count( $ids ) > 1 ) {
+			return 'the site has more than one php container (' . count( $ids ) . '), which this check can\'t confirm';
+		}
 		$this->php_container = $ids ? $ids[0] : null;
 		if ( ! $ids ) {
 			// Not running (a disabled site): only its compose files say what it mounts.
@@ -2716,6 +2866,7 @@ class Site_PHP_Compat {
 			if ( null !== $error || null !== $user_ini ) {
 				return 'the site\'s php container mounts ' . self::clean( $dst ) . ' from ' . self::clean( $src ) . ( null !== $user_ini ? ', which holds a .user.ini (' . self::clean( $user_ini ) . ') this check doesn\'t read' : ", which can't be looked through: $error" );
 			}
+			$this->mount_points[] = $at;
 			EE::debug( "php-compat: also mounting $src at $dst" );
 			array_push( $this->extra_mounts, '--mount', "type=bind,src=$src,dst=$dst,readonly" );
 		}
@@ -2949,69 +3100,81 @@ class Site_PHP_Compat {
 	}
 
 	/**
-	 * WP-CLI configs (wp_cli_chain(), and the www-data user's .wp-cli/config.yml) may
-	 * hold only blank lines, comments and top-level `key: scalar` lines for path, url, user, color, quiet and debug. `path`
-	 * must lead to the WordPress root this check scans (php sites: the served root). Anything else (exec, require, inherit,
-	 * aliases, blocks) can make WP-CLI run code this check doesn't follow; there's no YAML parser in the phar.
+	 * WP-CLI configs (wp_cli_chain(), and the www-data user's .wp-cli/config.yml), exact shapes only (review of a1b8fb53):
+	 * each is a regular file, not a link; every line is blank, a comment starting with `#` in column 0, `key: value` with
+	 * key in WP_CLI_KEYS and value matching `[A-Za-z0-9_./:@-]+` (no quotes, anchors, aliases, flow, comments or spaces), or
+	 * an `apache_modules:` block list of module names. `path` must be one of the texts EE writes for this WordPress root
+	 * (`<dir>`, `<dir>/`, `/var/www/htdocs/<dir>`, with or without the slash; `/var/www/htdocs[/]` for htdocs), never a
+	 * number Spyc would coerce; relative to the file's directory it must lead to the live root, and the wp-config.php
+	 * WP-CLI then loads must be the one this check validated.
 	 *
 	 * @param string      $code Real path of the site's app/.
 	 * @param string|null $live Real path `path:` must lead to.
 	 * @param string      $app  The site's app/ with a trailing slash, for messages.
+	 * @param string      $root The WordPress root (php: the served root) relative to app/, as written.
 	 *
 	 * @return string|null tool_error detail.
 	 */
-	protected function wp_cli_config_check( $code, $live, $app ) {
+	protected function wp_cli_config_check( $code, $live, $app, $root ) {
+		$dir   = 'htdocs' === $root ? '' : ( 0 === strpos( $root, 'htdocs/' ) ? substr( $root, strlen( 'htdocs/' ) ) : null );
+		$texts = null === $dir ? [] : ( '' === $dir ? [ '/var/www/htdocs', '/var/www/htdocs/' ] : [ $dir, "$dir/", "/var/www/htdocs/$dir", "/var/www/htdocs/$dir/" ] );
 		foreach ( array_unique( array_merge( [ self::WP_CLI_HOME ], $this->wp_cli_files ) ) as $file ) {
-			// Missing (a dangling link included) is no config; one the container could reach elsewhere is refused.
-			if ( null === self::resolve_in( $code, $file, $why ) ) {
+			// The directory as the container resolves it; the file itself must be a regular file there, never a link.
+			$base = self::resolve_in( $code, dirname( $file ), $why );
+			if ( null === $base ) {
 				if ( 'missing' === $why ) {
 					continue;
 				}
 				return "can't read $app$file, a WP-CLI config: it is reached through a link this check can't follow the way the container does";
 			}
-			$found = $this->site_file( $code, $file );
+			$path = $base . '/' . basename( $file );
+			$stat = @lstat( $path ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is handled.
+			if ( false === $stat ) {
+				continue;
+			}
+			if ( 0100000 !== ( $stat['mode'] & 0170000 ) ) {
+				return "$app$file, a WP-CLI config, is a link or not a regular file, which this check doesn't accept";
+			}
+			$found = $this->site_file( $code, substr( $path, strlen( $code ) + 1 ) );
 			if ( 'ok' !== $found['state'] ) {
 				return "can't read $app$file, a WP-CLI config: {$found['detail']}";
 			}
-			$text = str_replace( [ "\r\n", "\r" ], "\n", $found['source'] );
-			$text = 0 === strpos( $text, "\xEF\xBB\xBF" ) ? substr( $text, 3 ) : $text;
 			$list = false;
-			foreach ( explode( "\n", $text ) as $n => $line ) {
-				if ( '' === trim( $line ) || '#' === substr( ltrim( $line ), 0, 1 ) ) {
+			foreach ( explode( "\n", str_replace( "\r\n", "\n", $found['source'] ) ) as $n => $line ) {
+				if ( '' === trim( $line, " \t" ) || '#' === substr( $line, 0, 1 ) ) {
 					continue;
 				}
-				// apache_modules: a block or flow list of plain module names (mod_rewrite); nothing else may be nested.
-				$item = '[A-Za-z0-9_.-]+';
-				if ( $list && preg_match( '/^[ \t]+-[ \t]+' . $item . '[ \t]*(?:[ \t]#.*)?$/D', $line ) ) {
+				// apache_modules: a block list of module names; nothing else may be nested.
+				if ( $list && preg_match( '/^ +- [A-Za-z0-9_.-]+$/D', $line ) ) {
 					continue;
 				}
-				$list = false;
-				if ( preg_match( '/^apache_modules:[ \t]*(?:\[[ \t]*(?:' . $item . '[ \t]*(?:,[ \t]*' . $item . '[ \t]*)*)?\])?[ \t]*(?:[ \t]#.*)?$/D', $line, $am ) ) {
-					$list = false === strpos( $line, '[' );
+				$list = 'apache_modules:' === $line;
+				if ( $list ) {
 					continue;
 				}
-				// A plain YAML scalar: no flow/anchor/tag/alias start, `:` only when not followed by a blank, ` #` starts a comment.
-				$scalar = '(?:\'[^\']*\'|"[^"\\\\]*"|[^\s\'"{}\[\],&*!|>%@`#:](?:[^\s#:]|:(?=\S)|[ \t]+(?=[^\s#]))*)';
-				if ( ! preg_match( '/^(' . implode( '|', self::WP_CLI_KEYS ) . '):(?:[ \t]+(' . $scalar . '))?[ \t]*(?:[ \t]#.*)?$/D', $line, $m ) ) {
-					return sprintf( '%s%s line %d isn\'t a WP-CLI setting this check accepts (only %s as plain values, and apache_modules): %s', $app, $file, $n + 1, implode( ', ', self::WP_CLI_KEYS ), self::clean( substr( trim( $line ), 0, 60 ) ) );
+				if ( ! preg_match( '/^(' . implode( '|', self::WP_CLI_KEYS ) . '): ([A-Za-z0-9_.\/:@-]+)$/D', $line, $m ) ) {
+					return sprintf( '%s%s line %d isn\'t a WP-CLI setting this check accepts (only %s as plain values, and an apache_modules list): %s', $app, $file, $n + 1, implode( ', ', self::WP_CLI_KEYS ), self::clean( substr( trim( $line ), 0, 60 ) ) );
 				}
 				if ( 'path' !== $m[1] ) {
 					continue;
 				}
-				$value = isset( $m[2] ) ? trim( $m[2], '\'"' ) : '';
-				if ( '' === $value ) {
-					continue;
+				$value = $m[2];
+				// Only the texts EE writes; Spyc would turn 1e1, 0x2 and the like into numbers.
+				$ok = in_array( $value, $texts, true ) && ! is_numeric( $value ) && ! preg_match( '/^0x/i', $value );
+				// Relative to the directory the file is in, as WP-CLI reads it; /var/www/… is the site's app/.
+				$text = '/' === $value[0] ? $value : '/var/www' . substr( $base, strlen( $code ) ) . '/' . $value;
+				$to   = $ok && 0 === strpos( $text . '/', '/var/www/' ) ? self::resolve_in( $code, substr( $text, strlen( '/var/www/' ) ) ) : null;
+				$ok   = $ok && null !== $live && $to === $live;
+				// The wp-config.php WP-CLI loads for that path (its own, else the textual parent's) must be the validated one.
+				if ( $ok && $this->wp_layout ) {
+					$own    = self::resolve_in( $code, substr( rtrim( $text, '/' ), strlen( '/var/www/' ) ) . '/wp-config.php' );
+					$parent = substr( dirname( rtrim( $text, '/' ) ), strlen( '/var/www' ) );
+					$up     = self::resolve_in( $code, ltrim( $parent . '/wp-config.php', '/' ) );
+					$loads  = null !== $own && is_file( $own ) ? $own : ( null !== $up && is_file( $up ) && null === self::resolve_in( $code, ltrim( $parent . '/wp-settings.php', '/' ) ) ? $up : null );
+					$ok     = null === $loads || $loads === $this->loaded_config;
 				}
-				// Relative to the config's own (real) directory, as WP-CLI reads it; /var/www/… is the site's app/.
-				$base = substr( dirname( $found['real'] ), strlen( $code ) + 1 );
-				if ( '/' === $value[0] ) {
-					$rel = 0 === strpos( $value . '/', '/var/www/' ) ? substr( $value, strlen( '/var/www/' ) ) : null;
-				} else {
-					$rel = ( false === $base || '' === $base ? '' : "$base/" ) . $value;
-				}
-				$to = null === $rel ? null : self::resolve_in( $code, $rel );
-				if ( null === $live || $to !== $live ) {
-					return sprintf( '%s%s sets path: %s, which isn\'t the WordPress this check scans', $app, $file, self::clean( $value ) );
+				if ( ! $ok ) {
+					return sprintf( '%s%s sets path: %s, which isn\'t a path this check accepts for the WordPress it scans', $app, $file, self::clean( $value ) );
 				}
 			}
 		}
@@ -3976,10 +4139,20 @@ class Site_PHP_Compat {
 	protected function scoped( array $doc, array $report ) {
 		// Only EE sets these; the scanner can't.
 		unset( $doc['checked'], $doc['not_checked'], $doc['wordpress'], $doc['cross_check'], $doc['ignored'] );
+		$excluded = [];
+		if ( null !== $this->cross && ! empty( $this->cross['old_releases'] ) ) {
+			// Exempt shape (a): never read; looked_in is <app>/htdocs (php) or the WordPress root, so name them from app/.
+			$app = $this->app_dir();
+			foreach ( array_slice( $this->cross['old_releases'], 0, self::NOT_CHECKED_STDOUT ) as $dir ) {
+				$excluded[] = self::cut( self::clean( $app . $dir ) );
+			}
+		}
 		$doc['checked']     = [
-			'dir'        => self::clean( (string) $this->looked_in ),
-			'components' => $doc['components_checked'],
-			'files'      => $doc['files_checked'],
+			'dir'                   => self::clean( (string) $this->looked_in ),
+			'components'            => $doc['components_checked'],
+			'files'                 => $doc['files_checked'],
+			// Old releases nginx doesn't serve (exempt shape (a)), never read; at most NOT_CHECKED_STDOUT names.
+			'excluded_old_releases' => $excluded,
 		];
 		$doc['not_checked'] = array_map(
 			function ( $entry ) {
@@ -4338,8 +4511,7 @@ class Site_PHP_Compat {
 
 			// Exempt shape (a): what wasn't read, so the line never claims all of htdocs.
 			if ( ! $this->wp_layout && null !== $this->cross && ! empty( $this->cross['old_releases'] ) ) {
-				// looked_in is <site>/app/htdocs on php sites.
-				$app   = dirname( (string) $this->looked_in ) . '/';
+				$app   = $this->app_dir();
 				$names = array_map(
 					function ( $dir ) use ( $app ) {
 						return self::clean( $app . $dir );
@@ -4388,7 +4560,7 @@ class Site_PHP_Compat {
 			if ( $component['errors'] > 0 ) {
 				yield sprintf( '%s: %s, %s', self::component_heading( $component ), self::count_of( $component['errors'], 'error' ), self::count_of( $component['warnings'], 'warning' ) );
 				foreach ( $component['findings'] as $finding ) {
-					if ( 'ERROR' !== $finding['type'] ) {
+					if ( 'ERROR' !== $finding['type'] || ! empty( $finding['ignored'] ) ) {
 						continue;
 					}
 					yield '  ' . self::clean( $finding['file'] ) . ':' . $finding['line'];
