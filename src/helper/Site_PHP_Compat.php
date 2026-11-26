@@ -215,6 +215,9 @@ class Site_PHP_Compat {
 	/** @var string[] The manifest's `checked` container paths, decoded (cross_check()). */
 	protected $manifest_checked = [];
 
+	/** @var string The `path:` text site-type-wp writes into htdocs/wp-cli.yml for this site ('' when it writes none). */
+	protected $ee_wp_cli_path = '';
+
 	/** @var string|null Real path of the wp-config.php WordPress loads, validated by check_wp_config(). */
 	protected $loaded_config;
 
@@ -1084,7 +1087,9 @@ class Site_PHP_Compat {
 		$this->app_path = $app;
 
 		$this->scan_path = $served;
-		$detail          = $this->server_config_check( $site_data );
+		// site-type-wp's own wp-cli.yml text: str_replace( '/var/www/htdocs/', '', trailingslashit( site_container_fs_path ) ).
+		$this->ee_wp_cli_path = str_replace( '/var/www/htdocs/', '', rtrim( (string) $site_data->site_container_fs_path, '/\\' ) . '/' );
+		$detail               = $this->server_config_check( $site_data );
 		if ( null !== $detail ) {
 			return $this->doc( 'tool_error', $detail );
 		}
@@ -3118,6 +3123,10 @@ class Site_PHP_Compat {
 	protected function wp_cli_config_check( $code, $live, $app, $root ) {
 		$dir   = 'htdocs' === $root ? '' : ( 0 === strpos( $root, 'htdocs/' ) ? substr( $root, strlen( 'htdocs/' ) ) : null );
 		$texts = null === $dir ? [] : ( '' === $dir ? [ '/var/www/htdocs', '/var/www/htdocs/' ] : [ $dir, "$dir/", "/var/www/htdocs/$dir", "/var/www/htdocs/$dir/" ] );
+		// Exactly what site-type-wp writes for this site's stored public dir (`--public-dir=a//b` gives `a//b/`).
+		if ( '' !== $this->ee_wp_cli_path ) {
+			$texts[] = $this->ee_wp_cli_path;
+		}
 		foreach ( array_unique( array_merge( [ self::WP_CLI_HOME ], $this->wp_cli_files ) ) as $file ) {
 			// The directory as the container resolves it; the file itself must be a regular file there, never a link.
 			$base = self::resolve_in( $code, dirname( $file ), $why );
