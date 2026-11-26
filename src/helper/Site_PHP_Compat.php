@@ -149,28 +149,13 @@ class Site_PHP_Compat {
 	// Exact link targets that are a sink, never code.
 	const DEV_SINKS = [ '/dev/null', '/dev/stdout', '/dev/stderr' ];
 
-	// Run by the php container's PHP (5.6 and later): what its PHP-FPM master (pid 1) is and loaded, and the newest change
-	// below /usr/local/etc (PHP's and FPM's config). Unreadable gives null.
-	const FPM_PROBE = <<<'PHP'
-$r = array( 'exe' => @readlink( '/proc/1/exe' ), 'cmdline' => base64_encode( (string) @file_get_contents( '/proc/1/cmdline' ) ), 'stat' => (string) @file_get_contents( '/proc/1/stat' ), 'btime' => preg_match( '/^btime (\d+)$/m', (string) @file_get_contents( '/proc/stat' ), $m ) ? (int) $m[1] : null, 'maps' => 1 === preg_match( '#\s/usr/local/lib/php/extensions/[^/\s]+/redis\.so$#m', (string) @file_get_contents( '/proc/1/maps' ) ), 'newest' => 0 );
-$todo = array( '/usr/local/etc' );
-while ( $todo ) {
-	$p = array_pop( $todo );
-	$s = @lstat( $p );
-	$e = false !== $s && 040000 === ( $s['mode'] & 0170000 ) ? @scandir( $p ) : array();
-	if ( false === $s || false === $e ) {
-		$r['newest'] = null;
-		break;
-	}
-	$r['newest'] = max( $r['newest'], $s['mtime'], $s['ctime'] );
-	foreach ( $e as $n ) {
-		if ( '.' !== $n && '..' !== $n ) {
-			$todo[] = "$p/$n";
-		}
-	}
-}
-echo json_encode( $r );
-PHP;
+	// Run by the php container's sh: what its PHP-FPM master (pid 1) is and loaded, its clock, and the newest change below
+	// /usr/local/etc (PHP's and FPM's config) to the nanosecond. The clock is read before the uptime, so the boot time it
+	// gives is never later than the real one. A listing error fails the exec.
+	const FPM_PROBE = <<<'SH'
+n=$(find /usr/local/etc -printf '%T@\n%C@\n') || exit 3
+printf 'exe %s\ncmdline %s\nmaps %s\nstat %s\nnow %s\nuptime %s\nnewest %s\n' "$(readlink /proc/1/exe)" "$(base64 -w0 /proc/1/cmdline)" "$(grep -c -E '[[:space:]]/usr/local/lib/php/extensions/[^/[:space:]]+/redis\.so$' /proc/1/maps)" "$(cat /proc/1/stat)" "$(date +%s.%N)" "$(cut -d' ' -f1 /proc/uptime)" "$(printf '%s\n' "$n" | sort -g | tail -n 1)"
+SH;
 
 	// php-fpm's process title for the image's stock command. It hides -c, -d and -n: container_config_check() pins those.
 	const FPM_MASTER_TITLE = "php-fpm: master process (/usr/local/etc/php-fpm.conf)\0";
@@ -2590,21 +2575,30 @@ PHP;
 	 * @return bool
 	 */
 	protected function fpm_master_has_redis() {
-		$run  = $this->docker( [ 'docker', 'exec', $this->php_container, 'php', '-r', self::FPM_PROBE ], 60 );
-		$info = 0 === $run['code'] ? json_decode( trim( $run['stdout'] ), true ) : null;
-		if ( ! is_array( $info ) || ! isset( $info['exe'], $info['cmdline'], $info['stat'], $info['btime'], $info['maps'], $info['newest'] ) || ! is_int( $info['btime'] ) || ! is_int( $info['newest'] ) ) {
-			return false;
+		$run  = $this->docker( [ 'docker', 'exec', $this->php_container, 'sh', '-c', self::FPM_PROBE ], 60 );
+		$info = [];
+		foreach ( 0 === $run['code'] ? explode( "\n", trim( $run['stdout'] ) ) : [] as $line ) {
+			$pair = explode( ' ', $line, 2 );
+			if ( 2 === count( $pair ) ) {
+				$info[ $pair[0] ] = $pair[1];
+			}
 		}
-		// Field 22 of /proc/1/stat (after the name, which may hold spaces): ticks after boot, USER_HZ 100 on Linux. Whole
-		// seconds round the start down and a change time up, so equal seconds count as changed after the start.
-		$after  = strrchr( (string) $info['stat'], ')' );
+		$time = '/\A\d+(?:\.\d+)?\z/';
+		foreach ( [ 'exe', 'cmdline', 'maps', 'stat', 'now', 'uptime', 'newest' ] as $key ) {
+			if ( ! isset( $info[ $key ] ) || ( in_array( $key, [ 'now', 'uptime', 'newest' ], true ) && ! preg_match( $time, $info[ $key ] ) ) ) {
+				return false;
+			}
+		}
+		// Field 22 of /proc/1/stat (after the name, which may hold spaces): ticks after boot, USER_HZ 100 on Linux. The
+		// estimate is within about 0.02 s of the real start, so a change less than 0.05 s before it counts as after.
+		$after  = strrchr( $info['stat'], ')' );
 		$fields = false === $after ? [] : preg_split( '/ +/', trim( substr( $after, 1 ) ) );
 		if ( ! isset( $fields[19] ) || ! ctype_digit( $fields[19] ) ) {
 			return false;
 		}
-		$start = $info['btime'] + intdiv( (int) $fields[19], 100 );
+		$start = (float) $info['now'] - (float) $info['uptime'] + (int) $fields[19] / 100;
 
-		return '/usr/local/sbin/php-fpm' === $info['exe'] && self::FPM_MASTER_TITLE === base64_decode( (string) $info['cmdline'], true ) && true === $info['maps'] && $info['newest'] < $start;
+		return '/usr/local/sbin/php-fpm' === $info['exe'] && self::FPM_MASTER_TITLE === base64_decode( $info['cmdline'], true ) && ctype_digit( $info['maps'] ) && (int) $info['maps'] > 0 && (float) $info['newest'] + 0.05 < $start;
 	}
 
 	/**
