@@ -149,12 +149,9 @@ class Site_PHP_Compat {
 	// Exact link targets that are a sink, never code.
 	const DEV_SINKS = [ '/dev/null', '/dev/stdout', '/dev/stderr' ];
 
-	// Run by the php container's sh: what its PHP-FPM master (pid 1) is and loaded, its clock, and the newest change below
-	// /usr/local/etc (PHP's and FPM's config) to the nanosecond. The clock is read before the uptime, so the boot time it
-	// gives is never later than the real one. A listing error fails the exec.
+	// Run by the php container's sh: what its PHP-FPM master (pid 1) is and which redis.so it mapped.
 	const FPM_PROBE = <<<'SH'
-n=$(find /usr/local/etc -printf '%T@\n%C@\n') || exit 3
-printf 'exe %s\ncmdline %s\nmaps %s\nstat %s\nnow %s\nuptime %s\nnewest %s\n' "$(readlink /proc/1/exe)" "$(base64 -w0 /proc/1/cmdline)" "$(grep -c -E '[[:space:]]/usr/local/lib/php/extensions/[^/[:space:]]+/redis\.so$' /proc/1/maps)" "$(cat /proc/1/stat)" "$(date +%s.%N)" "$(cut -d' ' -f1 /proc/uptime)" "$(printf '%s\n' "$n" | sort -g | tail -n 1)"
+printf 'exe %s\ncmdline %s\nmaps %s\n' "$(readlink /proc/1/exe)" "$(base64 -w0 /proc/1/cmdline)" "$(grep -c -E '[[:space:]]/usr/local/lib/php/extensions/[^/[:space:]]+/redis\.so$' /proc/1/maps)"
 SH;
 
 	// php-fpm's process title for the image's stock command. It hides -c, -d and -n: container_config_check() pins those.
@@ -2415,7 +2412,7 @@ SH;
 		if ( 0 !== $fpm['code'] || ! preg_match( '/^redis$/mi', $fpm['stdout'] ) ) {
 			return;
 		}
-		// php-fpm -m reads the config as it is now: the running master must have loaded redis, from config older than it (K19).
+		// php-fpm -m reads the config as it is now: the running master must have loaded redis (K19).
 		if ( ! $this->fpm_master_has_redis() ) {
 			return;
 		}
@@ -2569,8 +2566,9 @@ SH;
 	}
 
 	/**
-	 * Whether the php container's running PHP-FPM master (pid 1) is php-fpm under the image's stock title, has phpredis mapped,
-	 * and started after its PHP and FPM config (all of /usr/local/etc) last changed. Anything unreadable gives false.
+	 * Whether the php container's running PHP-FPM master (pid 1), which every worker forks from, is php-fpm under the image's
+	 * stock title and has phpredis mapped. A USR2 reload re-execs it in place, so its maps stay current. Anything unreadable
+	 * gives false.
 	 *
 	 * @return bool
 	 */
@@ -2583,22 +2581,11 @@ SH;
 				$info[ $pair[0] ] = $pair[1];
 			}
 		}
-		$time = '/\A\d+(?:\.\d+)?\z/';
-		foreach ( [ 'exe', 'cmdline', 'maps', 'stat', 'now', 'uptime', 'newest' ] as $key ) {
-			if ( ! isset( $info[ $key ] ) || ( in_array( $key, [ 'now', 'uptime', 'newest' ], true ) && ! preg_match( $time, $info[ $key ] ) ) ) {
-				return false;
-			}
-		}
-		// Field 22 of /proc/1/stat (after the name, which may hold spaces): ticks after boot, USER_HZ 100 on Linux. The
-		// estimate is within about 0.02 s of the real start, so a change less than 0.05 s before it counts as after.
-		$after  = strrchr( $info['stat'], ')' );
-		$fields = false === $after ? [] : preg_split( '/ +/', trim( substr( $after, 1 ) ) );
-		if ( ! isset( $fields[19] ) || ! ctype_digit( $fields[19] ) ) {
+		if ( ! isset( $info['exe'], $info['cmdline'], $info['maps'] ) ) {
 			return false;
 		}
-		$start = (float) $info['now'] - (float) $info['uptime'] + (int) $fields[19] / 100;
 
-		return '/usr/local/sbin/php-fpm' === $info['exe'] && self::FPM_MASTER_TITLE === base64_decode( $info['cmdline'], true ) && ctype_digit( $info['maps'] ) && (int) $info['maps'] > 0 && (float) $info['newest'] + 0.05 < $start;
+		return '/usr/local/sbin/php-fpm' === $info['exe'] && self::FPM_MASTER_TITLE === base64_decode( $info['cmdline'], true ) && ctype_digit( $info['maps'] ) && (int) $info['maps'] > 0;
 	}
 
 	/**
