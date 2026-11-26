@@ -92,7 +92,7 @@ abstract class EE_Site_Command {
 	private static $le_renewal_started = false;
 
 	/**
-	 * @var Site_PHP_Compat|null $php_compat_check The running `site php-compat`, cleaned up on a fatal error or a signal.
+	 * @var Site_PHP_Compat|null $php_compat_check The running `site php-compat` (or the one `site delete` keeps the lock with), cleaned up on a fatal error or a signal.
 	 */
 	private $php_compat_check;
 
@@ -244,6 +244,36 @@ abstract class EE_Site_Command {
 		}
 
 		\EE::confirm( sprintf( 'Are you sure you want to delete %s?', $this->site_data['site_url'] ), $assoc_args );
+
+		// A running php-compat check mounts the site's code: stop it first, and drop what php-compat keeps for the site.
+		// Kept on $this: the site lock it holds must last until this process ends.
+		$this->php_compat_check = new Site_PHP_Compat();
+		// Nothing is deleted yet: a signal while php-compat is stopped ends the delete without the rollback messages.
+		$previous = [];
+		if ( function_exists( 'pcntl_signal' ) ) {
+			$site = $this->site_data['site_url'];
+			foreach ( [ SIGTERM, SIGINT, SIGQUIT, SIGUSR1, SIGHUP ] as $signal ) {
+				$previous[ $signal ] = pcntl_signal_get_handler( $signal );
+				pcntl_signal(
+					$signal,
+					function () use ( $site ) {
+						$this->delete_stopped( $site );
+					}
+				);
+			}
+		}
+		$compat = $this->php_compat_check->stop_for_delete(
+			(object) $this->site_data,
+			function () {
+				pcntl_signal_dispatch();
+			}
+		);
+		foreach ( $previous as $signal => $handler ) {
+			pcntl_signal( $signal, $handler );
+		}
+		if ( null !== $compat ) {
+			\EE::error( sprintf( 'Could not stop the php-compat check of %s (%s). Nothing was deleted.', $this->site_data['site_url'], $compat ) );
+		}
 
 		if ( $this->site_data['site_ssl'] ) {
 			$all_domains = array_unique( array_merge(
@@ -3293,9 +3323,19 @@ abstract class EE_Site_Command {
 	}
 
 	/**
+	 * A signal while `ee site delete` stops php-compat: nothing is deleted yet, so there is nothing to roll back.
+	 *
+	 * @param string $site Site name.
+	 */
+	protected function delete_stopped( $site ) {
+		\EE::warning( "Delete of $site stopped: nothing was deleted." );
+		exit( 1 );
+	}
+
+	/**
 	 * Checks a site's PHP code for compatibility with a PHP version.
 	 *
-	 * Runs PHPCompatibility in a throwaway container with no network against a read-only mount of the site's code: plugins, themes, mu-plugins, drop-ins and other code under wp-content for WordPress sites (not WordPress core), everything under htdocs for PHP sites. It ends with a verdict: safe to upgrade (every file checked, no errors), not safe (at least one error), or can't confirm (some files couldn't be checked). Warnings never change the verdict. The verdict comes from static analysis, which can't see breakage that only shows at runtime.
+	 * Runs PHPCompatibility in a throwaway container with no network against a read-only mount of the site's code: for WordPress sites, the WordPress directory nginx serves (plugins, themes, mu-plugins, drop-ins and its other PHP, not WordPress core), and code mounted below its wp-content while the site runs; for PHP sites, the site's PHP in app/ except old releases nginx doesn't serve (a current/ release link) and the www-data user's tool directories (.composer, .wp-cli and the like). A WordPress site gets a verdict only when the check recognises its whole layout: WordPress at the public directory (any --public-dir, a current/ release link) or below it, loaded by WordPress's own index.php, a wp-config.php made only of the settings WordPress, EasyEngine and common plugins write, no other PHP in the site's files outside WordPress, and EasyEngine's own nginx, PHP-FPM and container setup. Anything else (a moved wp-content, a custom index.php, a config that runs or loads other code, a file PHP runs before WordPress other than one in the scanned directory) gets no verdict, with the reason. It ends with a verdict: no problems found in what was checked (every file checked, no errors, and for WordPress a core version that WordPress lists as supporting the target PHP; the JSON field safe_to_upgrade is then true), not safe (at least one error, or a WordPress version that doesn't support the target), or can't confirm (some files couldn't be checked; code files the scanner didn't read, such as code in the www-data user's tool directories, a link to code outside what was scanned, or files that changed while the check ran; an older scanner image that lists no files; or WordPress hasn't declared support for the target). After the scan, every code file in the site's files is compared with the list of files the scanner read, and only WordPress core of the live WordPress, old releases nginx doesn't serve, EasyEngine's unused app/wp-config.php and the index.php that loads WordPress from a subdirectory are exempt. Outside the WordPress directory only files named as PHP count as code, so a non-PHP-named file there that holds PHP (a wp-config.php.bak) isn't compared. Errors in nginx-helper's bundled Predis (admin/predis.php) are ignored, and listed under `ignored`, when the whole plugin is a stock release, the site's php container has no extra mount, the scanner read every code file and reported none it couldn't read, no other code names the plugin (WordPress's own language packs of the plugin don't count) and no link in the site's files leads to it or can't be followed, and the running PHP-FPM has loaded the redis extension: the plugin then never loads that file. It never says the whole site is safe: WordPress core files are not scanned, only its version is compared with WordPress's own list of supported PHP versions (a WordPress newer than that list counts as supporting what the newest listed version supports, and says so). Warnings never change the verdict. The verdict comes from static analysis, which can't see breakage that only shows at runtime.
 	 *
 	 * The command exits 0 whenever it printed a result, including when a check of the site is already running (`busy`), was stopped with --cancel (`cancelled`) or couldn't run (`tool_error`).
 	 *
@@ -3326,7 +3366,7 @@ abstract class EE_Site_Command {
 	 * : Print how long a check of this site should take on this server, without checking anything.
 	 *
 	 * [--format=<format>]
-	 * : Render output in a particular format. json prints the verdict and the counts, never the findings.
+	 * : Render output in a particular format. json prints the verdict, the counts, what was checked and what wasn't (and for WordPress its version and whether it supports the target), never the findings.
 	 * ---
 	 * default: table
 	 * options:
@@ -3335,7 +3375,7 @@ abstract class EE_Site_Command {
 	 * ---
 	 *
 	 * [--output=<path>]
-	 * : Also write the full report, with every error and warning, as JSON to this absolute path. The file is owned by root with mode 0600 and replaces an existing one. It is written only when the check finishes with a result (status ok); otherwise an existing file is left as it was. Its directory and every parent must be owned by root and not writable by other users (a sticky directory such as /tmp is fine). Not with --estimate.
+	 * : Also write the full report, with every error and warning, as JSON to this absolute path: the JSON summary's fields (the same verdict) plus every component and its findings. A finding left out of the verdict stays in its component, marked `"ignored": true`, and its file is listed under `ignored`. The file is owned by root with mode 0600 and replaces an existing one. It is written only when the check finishes with a result (status ok); otherwise an existing file is left as it was. Its directory and every parent must be owned by root and not writable by other users (a sticky directory such as /tmp is fine). Not with --estimate.
 	 *
 	 * [--timeout=<seconds>]
 	 * : Time limit for the scan itself, in seconds. A scan that hits it reports tool_error and no verdict. Pulling the scanner image on first use isn't counted. Default: 7200. Not with --estimate.
@@ -3363,7 +3403,19 @@ abstract class EE_Site_Command {
 		$args                   = auto_site_name( $args, 'site', 'php-compat' );
 		$this->site_data        = get_site_info( $args, false, true, false );
 		$this->php_compat_check = new Site_PHP_Compat();
-		// Dispatched from this class's scope: the SIGTERM/SIGINT handlers are the site type's protected rollback().
+		// A check changes nothing to roll back: on a signal, say what happens and exit; the shutdown handler stops the check.
+		if ( function_exists( 'pcntl_signal' ) ) {
+			$stop = function () {
+				\EE::warning( 'Stopping the check: removing its container and temporary files.' );
+				exit( 1 );
+			};
+			foreach ( [ SIGTERM, SIGINT, SIGQUIT, SIGUSR1 ] as $signal ) {
+				pcntl_signal( $signal, $stop );
+			}
+			// A lost terminal doesn't stop a check; it ends and cleans up on its own, or with --cancel. Ignored rather than
+			// handled, so the docker client inherits the ignore (a handled signal is reset to the default on exec).
+			pcntl_signal( SIGHUP, SIG_IGN );
+		}
 		$this->php_compat_check->run(
 			$this->site_data,
 			$assoc_args,

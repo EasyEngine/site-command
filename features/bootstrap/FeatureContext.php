@@ -488,6 +488,9 @@ class FeatureContext implements Context
 	 */
 	public function cleanupScenario(AfterScenarioScope $scope)
 	{
+		// A failed --output check could have replaced /dev/null with a file; never leave the runner without it.
+		clearstatcache( true, '/dev/null' );
+		self::repairDevNull( @stat( '/dev/null' ) );
 		$this->commands = [];
 		chdir($this->ee_path);
 
@@ -991,12 +994,33 @@ class FeatureContext implements Context
 	{
 		clearstatcache( true, '/dev/null' );
 		$stat = @lstat( '/dev/null' );
-		if ( $stat && 0020000 === ( $stat['mode'] & 0170000 ) && 259 === $stat['rdev'] ) {
+		// 259 is 1:3, the null device's numbers on Linux only.
+		if ( $stat && 0020000 === ( $stat['mode'] & 0170000 ) && ( 'Linux' !== PHP_OS_FAMILY || 259 === $stat['rdev'] ) ) {
 			return;
 		}
-		@unlink( '/dev/null' );
-		exec( 'mknod -m 666 /dev/null c 1 3' );
-		throw new Exception( '/dev/null was replaced (restored now): ' . var_export( $stat, true ) );
+		self::repairDevNull( @stat( '/dev/null' ) );
+		throw new Exception( '/dev/null was replaced: ' . var_export( $stat, true ) );
+	}
+
+	/**
+	 * Recreate /dev/null only on Linux and only when it is no character device at all (e.g. replaced by a file), so a
+	 * healthy one is never removed.
+	 *
+	 * @param array|false $stat stat() of /dev/null (a link to a character device counts as healthy).
+	 */
+	private static function repairDevNull( $stat )
+	{
+		if ( 'Linux' !== PHP_OS_FAMILY || ( $stat && 0020000 === ( $stat['mode'] & 0170000 ) ) ) {
+			return;
+		}
+		// Made beside it and renamed over it, so there is never a moment without /dev/null.
+		$tmp = '/dev/.null-' . getmypid();
+		@unlink( $tmp );
+		exec( 'mknod -m 666 ' . escapeshellarg( $tmp ) . ' c 1 3', $out, $code );
+		if ( 0 !== $code || ! rename( $tmp, '/dev/null' ) ) {
+			@unlink( $tmp );
+			throw new Exception( 'could not recreate /dev/null' );
+		}
 	}
 
 	/**

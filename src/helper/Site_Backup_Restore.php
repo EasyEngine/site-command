@@ -120,6 +120,11 @@ DEALLOCATE PREPARE ee_stmt;
 	// WordPress root the running backup excludes core from ('' = core is archived).
 	private $backup_wp_root = null;
 
+	/**
+	 * @var resource|null The site directory's lock while a restore runs, so no php-compat scan reads app/ meanwhile.
+	 */
+	private $scan_lock;
+
 	// stderr of the last failed `rclone lsf`.
 	private $rclone_error = '';
 
@@ -405,6 +410,9 @@ DEALLOCATE PREPARE ee_stmt;
 
 			$this->rclone_config_path = $this->resolve_restore_path( $backup_id );
 		}
+
+		// Before the download dir: a restore refused here leaves nothing behind.
+		$this->hold_scan_lock();
 
 		// Only once the id is valid: a refused --id left an empty download dir behind (BKP-22).
 		if ( ! $this->fs->exists( $backup_dir ) ) {
@@ -2572,6 +2580,42 @@ DEALLOCATE PREPARE ee_stmt;
 					EE::error( "$name is not installed. Please install $name for backup/restore." );
 				}
 			}
+		}
+	}
+
+	/**
+	 * Take the site directory's lock, which `ee site php-compat` holds while it scans app/, for the rest of the restore, which
+	 * replaces app/; the lock goes with the process. Shared: php-compat holds it exclusive, so it can tell a restore from a check.
+	 */
+	private function hold_scan_lock() {
+		$message = sprintf( 'A php-compat check, `ee site php-compat %1$s --cancel` or `ee site delete %1$s` holds the site\'s lock (a check reads the files a restore replaces). Wait for it to finish or stop a check with `ee site php-compat %1$s --cancel`, then run the restore again.', $this->site_data['site_url'] );
+		$handle  = @fopen( $this->site_data['site_fs_path'], 're' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- handled below.
+		// A --cancel or an estimate's probe holds it only for a moment: try for a few seconds before refusing.
+		$locked = false;
+		for ( $try = 0; false !== $handle && $try < 30; $try++ ) {
+			if ( $try ) {
+				usleep( 100000 );
+			}
+			$locked = flock( $handle, LOCK_SH | LOCK_NB, $would_block );
+			if ( $locked || ! $would_block ) {
+				break;
+			}
+		}
+		if ( $locked ) {
+			$this->scan_lock = $handle;
+			// After taking the lock: an estimate takes its own first, then looks for a restore.
+			if ( Site_PHP_Compat::estimate_running( $this->site_data['site_url'] ) ) {
+				EE::error( sprintf( 'A php-compat estimate of %s is running and reads the files a restore replaces. Wait for it to finish (about two minutes at most), then run the restore again.', $this->site_data['site_url'] ) );
+			}
+
+			return;
+		}
+		if ( false !== $handle ) {
+			fclose( $handle );
+		}
+		// Without the lock (held, or no flock here), the scanner's container still shows a running check.
+		if ( ! empty( $would_block ) || 'running' === \EE_DOCKER::container_status( 'ee-php-compat-' . $this->site_data['site_url'] ) ) {
+			EE::error( $message );
 		}
 	}
 
