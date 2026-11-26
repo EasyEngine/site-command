@@ -45,7 +45,7 @@ class Site_PHP_Compat {
 	const SUMMARY_INTS  = [ 'errors', 'warnings', 'files_checked', 'files_not_checked', 'php_bytes', 'components_checked', 'components_with_errors', 'duration_s' ];
 	const ESTIMATE_INTS = [ 'php_files', 'php_bytes', 'components', 'estimated_seconds', 'estimated_seconds_low', 'estimated_seconds_high' ];
 	// --format=json prints only the documented keys (INTERFACE.md), in this order.
-	const SUMMARY_KEYS  = [ 'v', 'status', 'site', 'target', 'safe_to_upgrade', 'errors', 'warnings', 'files_checked', 'files_not_checked', 'php_bytes', 'components_checked', 'components_with_errors', 'checked', 'not_checked', 'not_checked_more', 'wordpress', 'cross_check', 'duration_s', 'tool' ];
+	const SUMMARY_KEYS  = [ 'v', 'status', 'site', 'target', 'safe_to_upgrade', 'errors', 'warnings', 'files_checked', 'files_not_checked', 'php_bytes', 'components_checked', 'components_with_errors', 'checked', 'not_checked', 'not_checked_more', 'wordpress', 'cross_check', 'ignored', 'duration_s', 'tool' ];
 
 	// stdout stays fixed-size: at most this many not_checked entries, each string at most NOT_CHECKED_CHARS characters.
 	const NOT_CHECKED_STDOUT = 10;
@@ -117,6 +117,17 @@ class Site_PHP_Compat {
 	// The only keys a WP-CLI config may set: none of them loads code.
 	const WP_CLI_KEYS = [ 'path', 'url', 'user', 'color', 'quiet', 'debug' ];
 
+	// nginx-helper's bundled Predis (user decision): stock admin/predis.php and includes/class-nginx-helper.php by released
+	// version, verified from wordpress.org's zips. predis.php loads only via class-predis-purger.php, which the stock
+	// class-nginx-helper.php requires only when class Redis is missing; EE's php images ship phpredis.
+	const NGINX_HELPER_PREDIS = [
+		'2.4.1' => [ 'c6393c3aeba2358a1ec9b206fda84c54ead3254184be914b08dce886acc6f670', '44fd41fb9275aef9764e1dfb06e47710986894ebafd4de861c2ec684d71aada5' ],
+		'2.4.0' => [ 'c6393c3aeba2358a1ec9b206fda84c54ead3254184be914b08dce886acc6f670', '2ec2f8579bebdb80024c3bfc2758e21caab7254a563c074cfa9624043c99dfa3' ],
+		'2.3.5' => [ 'c6393c3aeba2358a1ec9b206fda84c54ead3254184be914b08dce886acc6f670', 'd0f945eedb910007232bc0248e6011883661aa6c47a8f7083e027840d6581ae1' ],
+		'2.3.4' => [ 'c6393c3aeba2358a1ec9b206fda84c54ead3254184be914b08dce886acc6f670', '4a64a12cc41d0785664ad52fc6a5e71c1a3f46b290822f4982648b282e48c7cb' ],
+		'2.3.3' => [ 'c6393c3aeba2358a1ec9b206fda84c54ead3254184be914b08dce886acc6f670', '79f77f5c89f5f930e504404ce6efa008a0b260c52b07cb0a588e7894438761d9' ],
+	];
+
 	// Exact link targets that are a sink, never code.
 	const DEV_SINKS = [ '/dev/null', '/dev/stdout', '/dev/stderr' ];
 
@@ -185,6 +196,12 @@ class Site_PHP_Compat {
 
 	/** @var int Second the scan started (scan_start_time()); a file with a ctime from then on may not be what the scanner read. */
 	protected $scan_start = PHP_INT_MAX;
+
+	/** @var string|null Id of the site's running php container (extra_mounts()); null when it doesn't run. */
+	protected $php_container;
+
+	/** @var array[] Findings dropped from the verdict by an exact exemption: [ file, reason, count ]. */
+	protected $ignored = [];
 
 	/** @var bool Whether the last lock_site() couldn't open the site directory (gone during a delete). */
 	protected $lock_unopenable = false;
@@ -564,6 +581,10 @@ class Site_PHP_Compat {
 		if ( ! is_array( $report ) || 1 !== preg_match( '//u', $raw ) || ! $this->valid_report( $report, $doc ) ) {
 			return $this->doc( 'tool_error', self::exit_detail( $run, 'without a valid report' ) );
 		}
+
+		// Exact-file exemption (user decision): nginx-helper's bundled Predis isn't loaded when phpredis is.
+		$this->ignored = [];
+		$this->ignore_unused_predis( $code, $doc, $report );
 
 		// The final gate: every code file in app/ is one the scanner read or reported, or an exact exempt shape.
 		$this->cross = $this->cross_check( $code, $out );
@@ -1353,6 +1374,10 @@ class Site_PHP_Compat {
 						return false;
 					}
 					$real = self::resolve_in( $code, substr( $path, strlen( $code ) + 1 ), $why );
+					// A release pointer beside current (previous -> releases/1) while nginx serves the live release: shape (a).
+					if ( null !== $releases && null !== $real && 0 === strpos( $top . '/', $live . '/' ) && dirname( $path ) === dirname( $releases ) && dirname( $real ) === $releases ) {
+						return false;
+					}
 					// A link to a file already read and validated (releases/wp-config.php -> ../wp-config.php): no other code. A config
 					// accepted only because nothing loads it was never validated, and a link would load it.
 					if ( null !== $real && in_array( $real, $allowed, true ) && ! in_array( $real, $this->unused_configs, true ) ) {
@@ -1510,6 +1535,10 @@ class Site_PHP_Compat {
 						return false;
 					}
 					$target = self::resolve_in( $code, substr( $path, strlen( $code ) + 1 ), $why );
+					// A release pointer beside current (previous -> releases/1, Deployer's release -> releases/3): exact shape (a).
+					if ( null !== $rules['releases_dir'] && null !== $target && dirname( $path ) === dirname( $rules['releases_dir'] ) && dirname( $target ) === $rules['releases_dir'] ) {
+						return false;
+					}
 					// Outside the scanner's roots nothing follows a directory link or an unresolvable one for it (the home dirs).
 					if ( null === self::under_any( $path, $code, $rules['roots'] ) && ( null === $target || is_dir( $target ) ) ) {
 						if ( ! $reported( $path ) ) {
@@ -1892,6 +1921,7 @@ class Site_PHP_Compat {
 			'skip_walk'  => $skip_walk,
 			'sniff_roots' => $sniff_roots,
 			'roots'      => array_fill_keys( array_filter( $roots ), true ),
+			'releases_dir' => $this->releases_dir( $code ),
 			'layout_links' => $layout_links,
 		];
 	}
@@ -1912,6 +1942,24 @@ class Site_PHP_Compat {
 		}
 
 		return false;
+	}
+
+	/**
+	 * @param string $code Real path of the site's app/.
+	 *
+	 * @return string|null The real releases/ directory when exempt shape (a) applies (nginx's root is the live release or
+	 *                     below it), else null.
+	 */
+	protected function releases_dir( $code ) {
+		$top     = null === $this->cross_layout ? null : $this->cross_layout['top'];
+		$abspath = null === $this->cross_layout ? null : $this->cross_layout['abspath'];
+		for ( $dir = null !== $abspath ? $abspath : $top; null !== $dir && strlen( $dir ) > strlen( $code ); $dir = dirname( $dir ) ) {
+			if ( 'releases' === basename( dirname( $dir ) ) ) {
+				return null !== $top && 0 === strpos( $top . '/', $dir . '/' ) ? dirname( $dir ) : null;
+			}
+		}
+
+		return null;
 	}
 
 	/**
@@ -2180,6 +2228,78 @@ class Site_PHP_Compat {
 		}
 
 		return null;
+	}
+
+	/**
+	 * Drops the ERROR findings of nginx-helper's bundled Predis (admin/predis.php) from the verdict, only when all hold:
+	 * it is exactly <live WordPress root>/wp-content/plugins/nginx-helper/admin/predis.php with no link on the way; it and
+	 * includes/class-nginx-helper.php are a stock released pair (NGINX_HELPER_PREDIS), so the class_exists( 'Redis' ) guard
+	 * is intact; and the running php container has the redis extension (a stopped site gets no exemption). Warnings stay.
+	 *
+	 * @param string $code   Real path of the site's app/.
+	 * @param array  $doc    Scanner summary (errors and components_with_errors are adjusted).
+	 * @param array  $report Scanner report (the component's findings and counts are adjusted).
+	 */
+	protected function ignore_unused_predis( $code, array &$doc, array &$report ) {
+		$abspath = null === $this->cross_layout ? null : $this->cross_layout['abspath'];
+		if ( ! $this->wp_layout || null === $abspath || null === $this->php_container ) {
+			return;
+		}
+		$dir = "$abspath/wp-content/plugins/nginx-helper";
+		$at  = null;
+		foreach ( $report['components'] as $i => $component ) {
+			if ( 'plugin' === $component['type'] && 'nginx-helper' === $component['slug'] && null === $component['branch'] ) {
+				foreach ( $component['findings'] as $finding ) {
+					if ( 'admin/predis.php' === $finding['file'] && 'ERROR' === $finding['type'] ) {
+						$at = $i;
+						break 2;
+					}
+				}
+			}
+		}
+		if ( null === $at ) {
+			return;
+		}
+		// Exact files at their own paths: no link anywhere on the way.
+		$hash = function ( $path ) {
+			$stat = @lstat( $path ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is handled.
+			return false !== $stat && 0100000 === ( $stat['mode'] & 0170000 ) && realpath( $path ) === $path ? hash_file( 'sha256', $path ) : null;
+		};
+		$predis = $hash( "$dir/admin/predis.php" );
+		$guard  = $hash( "$dir/includes/class-nginx-helper.php" );
+		$stock  = false;
+		foreach ( self::NGINX_HELPER_PREDIS as $pair ) {
+			$stock = $stock || ( $predis === $pair[0] && $guard === $pair[1] );
+		}
+		if ( ! $stock ) {
+			return;
+		}
+		$run = $this->docker( [ 'docker', 'exec', $this->php_container, 'php', '-r', 'echo extension_loaded( "redis" ) ? "yes" : "no";' ], 60 );
+		if ( 0 !== $run['code'] || 'yes' !== trim( $run['stdout'] ) ) {
+			return;
+		}
+		$component = $report['components'][ $at ];
+		$kept      = [];
+		$dropped   = 0;
+		foreach ( $component['findings'] as $finding ) {
+			if ( 'admin/predis.php' === $finding['file'] && 'ERROR' === $finding['type'] ) {
+				++$dropped;
+				continue;
+			}
+			$kept[] = $finding;
+		}
+		$component['findings'] = $kept;
+		$component['errors']  -= $dropped;
+		$report['components'][ $at ] = $component;
+		$doc['errors']              -= $dropped;
+		if ( 0 === $component['errors'] ) {
+			--$doc['components_with_errors'];
+		}
+		$this->ignored[] = [
+			'file'   => '/var/www' . substr( "$dir/admin/predis.php", strlen( $code ) ),
+			'reason' => "nginx-helper's bundled Predis isn't loaded: the redis extension is installed",
+			'count'  => $dropped,
+		];
 	}
 
 	/**
@@ -2492,12 +2612,14 @@ class Site_PHP_Compat {
 	 * @return array|string --mount arguments, or a tool_error detail.
 	 */
 	protected function extra_mounts( $site_data, $code ) {
-		$this->extra_mounts = [];
+		$this->extra_mounts  = [];
+		$this->php_container = null;
 		$ps                 = $this->docker( [ 'docker', 'ps', '-q', '--no-trunc', '--filter', 'label=io.easyengine.site=' . $this->site, '--filter', 'label=com.docker.compose.service=php' ], 60 );
 		if ( 0 !== $ps['code'] ) {
 			return 'could not list the site\'s php container: ' . self::first_line( $ps['stderr'] );
 		}
 		$ids = preg_split( '/\s+/', trim( $ps['stdout'] ), -1, PREG_SPLIT_NO_EMPTY );
+		$this->php_container = $ids ? $ids[0] : null;
 		if ( ! $ids ) {
 			// Not running (a disabled site): only its compose files say what it mounts.
 			foreach ( array_merge( [ $site_data->site_fs_path . '/docker-compose-custom.yml' ], (array) glob( $site_data->site_fs_path . '/user-docker-compose/*.yml' ), (array) glob( $site_data->site_fs_path . '/user-docker-compose/*.yaml' ) ) as $file ) {
@@ -3853,7 +3975,7 @@ class Site_PHP_Compat {
 	 */
 	protected function scoped( array $doc, array $report ) {
 		// Only EE sets these; the scanner can't.
-		unset( $doc['checked'], $doc['not_checked'], $doc['wordpress'], $doc['cross_check'] );
+		unset( $doc['checked'], $doc['not_checked'], $doc['wordpress'], $doc['cross_check'], $doc['ignored'] );
 		$doc['checked']     = [
 			'dir'        => self::clean( (string) $this->looked_in ),
 			'components' => $doc['components_checked'],
@@ -3884,6 +4006,15 @@ class Site_PHP_Compat {
 				'core_files_checked' => false,
 			];
 		}
+		$doc['ignored'] = array_map(
+			function ( $entry ) {
+				return [
+					'file'   => $entry['file'],
+					'reason' => $entry['reason'],
+				];
+			},
+			$this->ignored
+		);
 		$doc['cross_check'] = null === $this->cross ? null : [
 			'manifest'      => $this->cross['manifest'],
 			'unlisted'      => $this->cross['unlisted'],
@@ -4204,6 +4335,7 @@ class Site_PHP_Compat {
 			if ( null !== $core ) {
 				$line .= ' ' . ( null === $why ? sprintf( 'WordPress %s supports PHP %s', $this->wp_version['branch'], $target ) : ucfirst( $why ) ) . '.';
 			}
+
 			// Exempt shape (a): what wasn't read, so the line never claims all of htdocs.
 			if ( ! $this->wp_layout && null !== $this->cross && ! empty( $this->cross['old_releases'] ) ) {
 				// looked_in is <site>/app/htdocs on php sites.
@@ -4245,6 +4377,9 @@ class Site_PHP_Compat {
 			if ( ( $doc['files_not_checked'] > 0 || $core_unknown ) && ! self::cross_ok( $this->cross ) ) {
 				yield ucfirst( self::cross_text( $this->cross ) ) . '.';
 			}
+		}
+		foreach ( $this->ignored as $entry ) {
+			yield sprintf( 'Ignored %s in nginx-helper\'s bundled Predis (admin/predis.php), which isn\'t loaded because the redis extension is installed.', self::count_of( $entry['count'], 'finding' ) );
 		}
 		yield '';
 
