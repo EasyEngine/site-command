@@ -215,9 +215,6 @@ class Site_PHP_Compat {
 	/** @var string[] The manifest's `checked` container paths, decoded (cross_check()). */
 	protected $manifest_checked = [];
 
-	/** @var string The `path:` text site-type-wp writes into htdocs/wp-cli.yml for this site ('' when it writes none). */
-	protected $ee_wp_cli_path = '';
-
 	/** @var string|null Real path of the wp-config.php WordPress loads, validated by check_wp_config(). */
 	protected $loaded_config;
 
@@ -1087,9 +1084,7 @@ class Site_PHP_Compat {
 		$this->app_path = $app;
 
 		$this->scan_path = $served;
-		// site-type-wp's own wp-cli.yml text: str_replace( '/var/www/htdocs/', '', trailingslashit( site_container_fs_path ) ).
-		$this->ee_wp_cli_path = str_replace( '/var/www/htdocs/', '', rtrim( (string) $site_data->site_container_fs_path, '/\\' ) . '/' );
-		$detail               = $this->server_config_check( $site_data );
+		$detail          = $this->server_config_check( $site_data );
 		if ( null !== $detail ) {
 			return $this->doc( 'tool_error', $detail );
 		}
@@ -1377,16 +1372,9 @@ class Site_PHP_Compat {
 	 */
 	protected function app_walk( $code, $rel, $root, $abspath, array $allowed ) {
 		$top      = (string) self::resolve_in( $code, $rel );
-		// The live release: the WordPress root or its ancestor directly in a releases/ directory.
-		$releases = null;
-		$live     = null;
-		for ( $dir = $abspath; null !== $dir && strlen( $dir ) > strlen( $code ); $dir = dirname( $dir ) ) {
-			if ( 'releases' === basename( dirname( $dir ) ) ) {
-				$releases = dirname( $dir );
-				$live     = $dir;
-				break;
-			}
-		}
+		// The live release: only through a `current` link beside releases/ (live_release(), P1).
+		$live     = $this->live_release( $code );
+		$releases = null === $live ? null : dirname( $live );
 		$user_ini = [];
 		$found    = null;
 		$outside  = [];
@@ -1604,11 +1592,6 @@ class Site_PHP_Compat {
 					$target = self::resolve_in( $code, substr( $path, strlen( $code ) + 1 ), $why );
 					// A release pointer beside current (previous -> releases/1, Deployer's release -> releases/3): exact shape (a).
 					if ( null !== $rules['releases_dir'] && null !== $target && self::release_pointer( $path, $target, $rules['releases_dir'] ) ) {
-						return false;
-					}
-					// php sites: a non-code-named link in a www-data home dot dir that leaves the site (.venv/bin/python) is nothing,
-					// as for the scanner (U13).
-					if ( ! $named && null === $target && 'escape' === $why && ! $rules['wp'] && '.' === substr( strtok( substr( $path, strlen( $code ) + 1 ), '/' ), 0, 1 ) ) {
 						return false;
 					}
 					// Outside the scanner's roots nothing follows a directory link or an unresolvable one for it (the home dirs).
@@ -2045,11 +2028,34 @@ class Site_PHP_Compat {
 	 *                     below it), else null.
 	 */
 	protected function releases_dir( $code ) {
-		$top     = null === $this->cross_layout ? null : $this->cross_layout['top'];
-		$abspath = null === $this->cross_layout ? null : $this->cross_layout['abspath'];
-		for ( $dir = null !== $abspath ? $abspath : $top; null !== $dir && strlen( $dir ) > strlen( $code ); $dir = dirname( $dir ) ) {
-			if ( 'releases' === basename( dirname( $dir ) ) ) {
-				return null !== $top && 0 === strpos( $top . '/', $dir . '/' ) ? dirname( $dir ) : null;
+		$top  = null === $this->cross_layout ? null : $this->cross_layout['top'];
+		$live = $this->live_release( $code );
+
+		return null !== $live && null !== $top && 0 === strpos( $top . '/', $live . '/' ) ? dirname( $live ) : null;
+	}
+
+	/**
+	 * The live release of a CI/CD layout (P1): reached by a link named `current` on the served or WordPress root's path,
+	 * located directly beside a real releases/ directory, whose target is a real directory directly in it that holds the
+	 * WordPress root (php: the served root). A releases/ directory that merely holds the root makes no release.
+	 *
+	 * @param string $code Real path of the site's app/.
+	 *
+	 * @return string|null Real live release directory.
+	 */
+	protected function live_release( $code ) {
+		if ( null === $this->cross_layout ) {
+			return null;
+		}
+		$inner = null !== $this->cross_layout['abspath'] ? $this->cross_layout['abspath'] : $this->cross_layout['top'];
+		foreach ( isset( $this->cross_layout['links'] ) ? $this->cross_layout['links'] : [] as $link ) {
+			if ( 'current' !== basename( $link ) ) {
+				continue;
+			}
+			$live     = self::resolve_in( $code, substr( $link, strlen( $code ) + 1 ) );
+			$releases = null === $live ? null : dirname( $live );
+			if ( null !== $live && null !== $inner && is_dir( $live ) && 'releases' === basename( $releases ) && ! is_link( $releases ) && dirname( $link ) === dirname( $releases ) && 0 === strpos( $inner . '/', $live . '/' ) ) {
+				return $live;
 			}
 		}
 
@@ -2072,16 +2078,9 @@ class Site_PHP_Compat {
 	 * @return array Real host directories as keys.
 	 */
 	protected function old_release_dirs( $code ) {
-		$top     = null === $this->cross_layout ? null : $this->cross_layout['top'];
-		$abspath = null === $this->cross_layout ? null : $this->cross_layout['abspath'];
-		$live    = null;
-		for ( $dir = null !== $abspath ? $abspath : $top; null !== $dir && strlen( $dir ) > strlen( $code ); $dir = dirname( $dir ) ) {
-			if ( 'releases' === basename( dirname( $dir ) ) ) {
-				$live = $dir;
-				break;
-			}
-		}
-		$old = [];
+		$top  = null === $this->cross_layout ? null : $this->cross_layout['top'];
+		$live = $this->live_release( $code );
+		$old  = [];
 		if ( null !== $live && null !== $top && 0 === strpos( $top . '/', $live . '/' ) ) {
 			foreach ( (array) @scandir( dirname( $live ) ) as $name ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- unreadable lists nothing.
 				$dir = dirname( $live ) . '/' . $name;
@@ -2354,13 +2353,9 @@ class Site_PHP_Compat {
 		if ( null === $at ) {
 			return;
 		}
-		// Nothing mounted over the plugin: the files hashed on the host must be the ones PHP runs.
-		$plugin = [];
-		$plugin[ $dir ] = true;
-		foreach ( $this->mount_points as $mount ) {
-			if ( self::touches( $mount, $plugin ) ) {
-				return;
-			}
+		// No extra mount at all: mounted code (anywhere) is read only in the container, where it could load predis.php (F4).
+		if ( $this->mount_points ) {
+			return;
 		}
 		// Exact files at their own paths (no link on the way), each with one name only (no second name elsewhere).
 		foreach ( [ "$dir/admin/predis.php", "$dir/includes/class-nginx-helper.php" ] as $path ) {
@@ -2373,8 +2368,9 @@ class Site_PHP_Compat {
 		if ( ! in_array( self::dir_manifest( $dir ), self::NGINX_HELPER_RELEASES, true ) ) {
 			return;
 		}
-		// No other code the scanner read mentions predis (another plugin requiring it), matched at a word start so that
-		// "PhpRedis" (wp-redis, EE's object cache drop-in) doesn't count.
+		// No other code the scanner read names the plugin or predis (a literal or glob include of predis.php, F5), predis
+		// matched at a word start so that "PhpRedis" (wp-redis, EE's object cache drop-in) doesn't count. A fully dynamic
+		// path naming neither is accepted residual R-PREDIS-DYN.
 		foreach ( $this->manifest_checked as $checked ) {
 			if ( 0 === strpos( $checked, 'b64:' ) ) {
 				return;
@@ -2384,12 +2380,17 @@ class Site_PHP_Compat {
 				continue;
 			}
 			$text = @file_get_contents( $host ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- unreadable refuses.
-			if ( false === $text || 0 !== preg_match( '/(?<![a-z0-9_])predis/i', $text ) ) {
+			if ( false === $text || 0 !== preg_match( '/(?<![a-z0-9_])predis|nginx-helper/i', $text ) ) {
 				return;
 			}
 		}
 		$run = $this->docker( [ 'docker', 'exec', $this->php_container, 'php', '-r', 'echo extension_loaded( "redis" ) ? "yes" : "no";' ], 60 );
 		if ( 0 !== $run['code'] || 'yes' !== trim( $run['stdout'] ) ) {
+			return;
+		}
+		// PHP-FPM serves the site and may load other ini files than the CLI (F6): its own module list must have redis too.
+		$fpm = $this->docker( [ 'docker', 'exec', $this->php_container, 'php-fpm', '-m' ], 60 );
+		if ( 0 !== $fpm['code'] || ! preg_match( '/^redis$/mi', $fpm['stdout'] ) ) {
 			return;
 		}
 		$component = $report['components'][ $at ];
@@ -2440,7 +2441,8 @@ class Site_PHP_Compat {
 				$mode = false === $stat ? 0 : $stat['mode'] & 0170000;
 				if ( 0040000 === $mode ) {
 					$todo[] = $path;
-				} elseif ( 0100000 === $mode ) {
+				} elseif ( 0100000 === $mode && 1 === $stat['nlink'] ) {
+					// One name only: a second name elsewhere could be included without naming this directory.
 					$lines[] = $path . "\t" . hash_file( 'sha256', "$dir/$path" );
 				} else {
 					return null;
@@ -3123,10 +3125,6 @@ class Site_PHP_Compat {
 	protected function wp_cli_config_check( $code, $live, $app, $root ) {
 		$dir   = 'htdocs' === $root ? '' : ( 0 === strpos( $root, 'htdocs/' ) ? substr( $root, strlen( 'htdocs/' ) ) : null );
 		$texts = null === $dir ? [] : ( '' === $dir ? [ '/var/www/htdocs', '/var/www/htdocs/' ] : [ $dir, "$dir/", "/var/www/htdocs/$dir", "/var/www/htdocs/$dir/" ] );
-		// Exactly what site-type-wp writes for this site's stored public dir (`--public-dir=a//b` gives `a//b/`).
-		if ( '' !== $this->ee_wp_cli_path ) {
-			$texts[] = $this->ee_wp_cli_path;
-		}
 		foreach ( array_unique( array_merge( [ self::WP_CLI_HOME ], $this->wp_cli_files ) ) as $file ) {
 			// The directory as the container resolves it; the file itself must be a regular file there, never a link.
 			$base = self::resolve_in( $code, dirname( $file ), $why );
@@ -3169,7 +3167,8 @@ class Site_PHP_Compat {
 				}
 				$value = $m[2];
 				// Only the texts EE writes; Spyc would turn 1e1, 0x2 and the like into numbers.
-				$ok = in_array( $value, $texts, true ) && ! is_numeric( $value ) && ! preg_match( '/^0x/i', $value );
+				// Spyc turns 1e1, 0x2 and the YAML booleans and null into other values.
+				$ok = in_array( $value, $texts, true ) && ! is_numeric( $value ) && ! preg_match( '/^0x/i', $value ) && ! preg_match( '/^(true|on|yes|y|false|off|no|n|null|~)$/iD', $value );
 				// Relative to the directory the file is in, as WP-CLI reads it; /var/www/… is the site's app/.
 				$text = '/' === $value[0] ? $value : '/var/www' . substr( $base, strlen( $code ) ) . '/' . $value;
 				$to   = $ok && 0 === strpos( $text . '/', '/var/www/' ) ? self::resolve_in( $code, substr( $text, strlen( '/var/www/' ) ) ) : null;
