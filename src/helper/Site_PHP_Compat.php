@@ -2876,10 +2876,54 @@ SH;
 			if ( false === $text ) {
 				return "can't read $shown, which may set a file PHP runs before WordPress";
 			}
-			foreach ( self::php_settings( $text, $kind ) as list( $key, $value, $quoted ) ) {
+			$settings = self::php_settings( $text, $kind );
+			$unread   = self::unread_setting( $text, $kind, $settings );
+			if ( null !== $unread ) {
+				return "$shown $unread, which this check can't confirm";
+			}
+			foreach ( $settings as list( $key, $value, $quoted ) ) {
 				if ( ! $this->php_setting_ok( $code, $key, $value, $layout, $quoted ) ) {
 					return "$shown sets $key to " . self::clean( '' === $value ? '""' : $value ) . ', which this check can\'t confirm';
 				}
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * A guarded setting php_settings() didn't read: a quoted section header (PHP takes `["a]b"] auto_prepend_file=…`, and a
+	 * quoted name may hold `]`, `;` or a newline), or a key followed by `=` more often than php_settings() found it, outside
+	 * comment lines and `;` comments.
+	 *
+	 * @param string  $text     The file's text.
+	 * @param string  $kind     ini or fpm.
+	 * @param array[] $settings php_settings() of it.
+	 *
+	 * @return string|null What it may set, or null.
+	 */
+	public static function unread_setting( $text, $kind, array $settings ) {
+		$text = str_replace( [ "\r\n", "\r" ], "\n", preg_replace( '/^\xEF\xBB\xBF/', '', $text ) );
+		if ( preg_match( '/^[ \t]*(?:\[[^\]"\'\n]*\][ \t]*)*\[[^\]\n]*["\']/m', $text ) ) {
+			return 'has a quoted section name, after which PHP may take a setting this check can\'t read';
+		}
+		$keys = [ 'auto_prepend_file', 'auto_append_file', 'opcache.preload', 'include_path', 'user_ini.filename', 'zend.multibyte', 'zend.script_encoding' ];
+		if ( 'fpm' === $kind ) {
+			array_push( $keys, 'include', 'security.limit_extensions' );
+		}
+		$lines = '';
+		foreach ( explode( "\n", $text ) as $line ) {
+			if ( ! preg_match( '/^[ \t]*[;#]/', $line ) ) {
+				$lines .= preg_replace( '/;.*$/', '', $line ) . "\n";
+			}
+		}
+		foreach ( $keys as $key ) {
+			$read = 0;
+			foreach ( $settings as $setting ) {
+				$read += $key === $setting[0] ? 1 : 0;
+			}
+			if ( preg_match_all( '/(?<![A-Za-z0-9_.])' . preg_quote( $key, '/' ) . '[ \t"\'\]]*=/i', $lines ) > $read ) {
+				return "may set $key in a form this check can't read";
 			}
 		}
 
@@ -3152,18 +3196,27 @@ SH;
 			if ( $outside ) {
 				return 'the site\'s php container mounts ' . self::clean( $dst ) . ' at ' . self::clean( '/var/www' . substr( $at, strlen( $code ) ) ) . ', where the scanner doesn\'t look';
 			}
-			// A .user.ini there is seen only inside the container: its prepend/append settings would go unchecked.
+			// A .user.ini there is seen only inside the container: its prepend/append settings would go unchecked. A link there
+			// leads PHP to .user.ini files no walk reads (src/lnk -> /var/www/other), so any but a /dev sink refuses.
 			$user_ini = null;
+			$link     = null;
 			$error    = is_dir( $src ) ? $this->walk_tree(
 				realpath( $src ),
-				function ( $path, $name, $type ) use ( &$user_ini ) {
+				function ( $path, $name, $type ) use ( &$user_ini, &$link ) {
 					if ( '.user.ini' === $name ) {
 						$user_ini = $path;
+						return 'stop';
+					}
+					if ( 'link' === $type && ! in_array( (string) @readlink( $path ), self::DEV_SINKS, true ) ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is no sink.
+						$link = $path;
 						return 'stop';
 					}
 					return 'dir' === $type;
 				}
 			) : null;
+			if ( null !== $link ) {
+				return 'the site\'s php container mounts ' . self::clean( $dst ) . ' from ' . self::clean( $src ) . ', which holds a link (' . self::clean( $link ) . ") this check can't confirm";
+			}
 			if ( null !== $error || null !== $user_ini ) {
 				return 'the site\'s php container mounts ' . self::clean( $dst ) . ' from ' . self::clean( $src ) . ( null !== $user_ini ? ', which holds a .user.ini (' . self::clean( $user_ini ) . ') this check doesn\'t read' : ", which can't be looked through: $error" );
 			}
