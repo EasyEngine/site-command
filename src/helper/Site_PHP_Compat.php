@@ -149,12 +149,16 @@ class Site_PHP_Compat {
 	// Exact link targets that are a sink, never code.
 	const DEV_SINKS = [ '/dev/null', '/dev/stdout', '/dev/stderr' ];
 
-	// Run by the php container's sh: what its PHP-FPM master (pid 1) is and which redis.so it mapped.
+	// Run by the php container's sh: what its PHP-FPM master (pid 1) is, which redis.so it mapped, and every mount point
+	// it sees (mountinfo field 5, octal-escaped). An unreadable mountinfo fails the exec.
 	const FPM_PROBE = <<<'SH'
+m=$(cut -d' ' -f5 /proc/1/mountinfo) || exit 4
 printf 'exe %s\ncmdline %s\nmaps %s\n' "$(readlink /proc/1/exe)" "$(base64 -w0 /proc/1/cmdline)" "$(grep -c -E '[[:space:]]/usr/local/lib/php/extensions/[^/[:space:]]+/redis\.so$' /proc/1/maps)"
+printf '%s\n' "$m" | sed 's/^/mount /'
 SH;
 
 	// php-fpm's process title for the image's stock command. It hides -c, -d and -n: container_config_check() pins those.
+	// Kernels 4.2 to 4.17 leave the trailing NUL out of /proc/<pid>/cmdline, so both forms are accepted.
 	const FPM_MASTER_TITLE = "php-fpm: master process (/usr/local/etc/php-fpm.conf)\0";
 
 	// Largest WordPress language pack (.l10n.php) of nginx-helper this check reads as data.
@@ -219,6 +223,9 @@ SH;
 
 	/** @var string The site's app/ with a trailing slash (resolve_layout()), for paths named in output. */
 	protected $app_path = '';
+
+	/** @var bool Whether the php container has EE's admin-tools at /var/www/htdocs/ee-admin (extra_mounts()). */
+	protected $admin_tools_mount = false;
 
 	/** @var string[] Resolved host paths of the accepted extra mounts (extra_mounts()). */
 	protected $mount_points = [];
@@ -1103,20 +1110,11 @@ SH;
 			// The scanner checks all of htdocs for php sites, whatever the root nginx serves.
 			$this->looked_in = $app . 'htdocs';
 			$htdocs          = self::resolve_in( $code, 'htdocs' );
-			$user_ini        = [];
-			$error           = null === $htdocs ? null : $this->walk_tree(
-				$htdocs,
-				function ( $path, $name, $type ) use ( &$user_ini ) {
-					if ( '.user.ini' === $name ) {
-						$user_ini[] = [ $path, $type ];
-					}
-					return 'dir' === $type;
-				}
-			);
 			self::resolve_in( $code, $rel, $why, $hops );
 			self::resolve_in( $code, 'htdocs', $why, $more );
 			$this->cross_layout = [ 'wp' => false, 'scan' => $code, 'top' => self::resolve_in( $code, $rel ), 'abspath' => null, 'index' => null, 'links' => array_merge( $hops, $more ) ];
-			$detail             = null !== $error ? "can't look through {$app}htdocs for .user.ini files: $error" : $this->prepend_check( $site_data, $code, $user_ini, null );
+			$user_ini           = null === $htdocs ? [] : $this->php_site_user_ini( $code, $htdocs );
+			$detail             = is_string( $user_ini ) ? self::clean( str_replace( "$code/", $app, $user_ini ) ) : $this->prepend_check( $site_data, $code, $user_ini, null );
 			if ( null !== $detail ) {
 				return $this->doc( 'tool_error', $detail );
 			}
@@ -1366,6 +1364,86 @@ SH;
 		}
 
 		return $read;
+	}
+
+	/**
+	 * The .user.ini files PHP may read for a php site's scripts: walks all of app/ (no links followed) and keeps those in
+	 * htdocs outside its old releases (old_release_dirs(), never served), and in any directory a link from there leads to,
+	 * and from there on (PHP reads .user.ini along the script's path, through links; R15, R17). Release pointers beside
+	 * `current` and /dev sinks lead nowhere; a link there this check can't follow is refused.
+	 *
+	 * @param string $code   Real path of the site's app/.
+	 * @param string $htdocs Real htdocs.
+	 *
+	 * @return array|string The files ([ path, type ] each), or a tool_error detail (host paths).
+	 */
+	protected function php_site_user_ini( $code, $htdocs ) {
+		$found = [];
+		$links = [];
+		$error = $this->walk_tree(
+			$code,
+			function ( $path, $name, $type ) use ( &$found, &$links ) {
+				if ( '.user.ini' === $name ) {
+					$found[] = [ $path, $type ];
+				}
+				if ( 'link' === $type ) {
+					$links[] = $path;
+				}
+				return 'dir' === $type;
+			}
+		);
+		if ( null !== $error ) {
+			return "can't look through $code/ for .user.ini files: $error";
+		}
+		$old      = $this->old_release_dirs( $code );
+		$live     = $this->live_release( $code );
+		$releases = $old && null !== $live ? dirname( $live ) : null;
+		// Reached directories => the old releases left out below them.
+		$regions            = [];
+		$regions[ $htdocs ] = $old;
+		$in      = function ( $path ) use ( &$regions, $code ) {
+			foreach ( $regions as $root => $skip ) {
+				if ( ( $path === $root || 0 === strpos( $path, "$root/" ) ) && ( ! $skip || null === self::under_any( "$path/x", $code, $skip ) ) ) {
+					return true;
+				}
+			}
+			return false;
+		};
+		do {
+			$grew = false;
+			foreach ( $links as $i => $path ) {
+				if ( ! $in( $path ) ) {
+					continue;
+				}
+				unset( $links[ $i ] );
+				if ( in_array( (string) @readlink( $path ), self::DEV_SINKS, true ) ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is no sink.
+					continue;
+				}
+				$real = self::resolve_in( $code, substr( $path, strlen( $code ) + 1 ), $why );
+				if ( null === $real ) {
+					if ( 'missing' !== $why ) {
+						return "$path is a link this check can't follow the way the container does, so it can't look for .user.ini files behind it";
+					}
+					continue;
+				}
+				if ( null !== $releases && self::release_pointer( $path, $real, $releases ) ) {
+					continue;
+				}
+				if ( is_dir( $real ) && ! isset( $regions[ $real ] ) ) {
+					$regions[ $real ] = [];
+					$grew             = true;
+				}
+			}
+		} while ( $grew );
+
+		return array_values(
+			array_filter(
+				$found,
+				function ( $ini ) use ( $in ) {
+					return $in( $ini[0] );
+				}
+			)
+		);
 	}
 
 	/**
@@ -2368,6 +2446,10 @@ SH;
 		if ( ! self::cross_ok( $this->cross ) ) {
 			return;
 		}
+		// Files the scanner reported instead of reading (phar, unreadable, php_tag …) were never text-searched either (R1).
+		if ( ! empty( $doc['files_not_checked'] ) || ! empty( $report['not_checked'] ) ) {
+			return;
+		}
 		// No extra mount at all: mounted code (anywhere) is read only in the container, where it could load predis.php (F4).
 		if ( $this->mount_points ) {
 			return;
@@ -2439,8 +2521,8 @@ SH;
 	}
 
 	/**
-	 * Whether no link anywhere in app/ (old releases and core included) resolves to $dir or below it. A link this can't
-	 * follow inside /var/www (one leaving it, or /var/www/../www) might, so it counts; /dev sinks and dangling links don't.
+	 * Whether no link anywhere in app/ (old releases and core included) resolves to $dir or below it. Any link this can't
+	 * follow (dangling, leaving /var/www) counts; only /dev sinks don't.
 	 *
 	 * @param string $code Real path of the site's app/.
 	 * @param string $dir  Real directory.
@@ -2458,8 +2540,10 @@ SH;
 				if ( in_array( (string) @readlink( $path ), self::DEV_SINKS, true ) ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is no sink.
 					return false;
 				}
-				$target = self::resolve_in( $code, substr( $path, strlen( $code ) + 1 ), $why );
-				if ( null === $target ? 'escape' === $why : ( $target === $dir || 0 === strpos( $target, "$dir/" ) ) ) {
+				// PHP resolves a dangling link's `..` as text (missing/../../plugins/nginx-helper/... loads), so any counts (R0). Case
+				// is folded for case-insensitive filesystems (R3).
+				$target = self::resolve_in( $code, substr( $path, strlen( $code ) + 1 ) );
+				if ( null === $target || strtolower( $target ) === strtolower( $dir ) || 0 === strpos( strtolower( $target ), strtolower( "$dir/" ) ) ) {
 					$into = true;
 					return 'stop';
 				}
@@ -2493,7 +2577,7 @@ SH;
 			return false;
 		}
 		$tokens = [];
-		foreach ( token_get_all( $text ) as $token ) {
+		foreach ( @token_get_all( $text ) as $token ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- PHP 7.4 warns on broken input, which refuses anyway.
 			if ( ! is_array( $token ) || T_WHITESPACE !== $token[0] ) {
 				$tokens[] = $token;
 			}
@@ -2573,19 +2657,47 @@ SH;
 	 * @return bool
 	 */
 	protected function fpm_master_has_redis() {
-		$run  = $this->docker( [ 'docker', 'exec', $this->php_container, 'sh', '-c', self::FPM_PROBE ], 60 );
-		$info = [];
+		$run    = $this->docker( [ 'docker', 'exec', $this->php_container, 'sh', '-c', self::FPM_PROBE ], 60 );
+		$info   = [];
+		$mounts = [];
 		foreach ( 0 === $run['code'] ? explode( "\n", trim( $run['stdout'] ) ) : [] as $line ) {
 			$pair = explode( ' ', $line, 2 );
-			if ( 2 === count( $pair ) ) {
+			if ( 2 !== count( $pair ) ) {
+				continue;
+			}
+			if ( 'mount' === $pair[0] ) {
+				$mounts[] = preg_replace_callback(
+					'/\\\\([0-7]{3})/',
+					function ( $m ) {
+						return chr( octdec( $m[1] ) );
+					},
+					$pair[1]
+				);
+			} else {
 				$info[ $pair[0] ] = $pair[1];
 			}
 		}
 		if ( ! isset( $info['exe'], $info['cmdline'], $info['maps'] ) ) {
 			return false;
 		}
+		// Below /var/www only the site's volume itself and EE's admin-tools: a bind below app/ (a second name of predis.php
+		// that nlink and lstat don't show) would be one more (R2).
+		$expected = $this->admin_tools_mount ? [ '/var/www', '/var/www/htdocs/ee-admin' ] : [ '/var/www' ];
+		$below    = array_values(
+			array_filter(
+				$mounts,
+				function ( $point ) {
+					return '/var/www' === $point || 0 === strpos( $point, '/var/www/' );
+				}
+			)
+		);
+		sort( $below );
+		if ( $below !== $expected ) {
+			return false;
+		}
+		$title = base64_decode( $info['cmdline'], true );
 
-		return '/usr/local/sbin/php-fpm' === $info['exe'] && self::FPM_MASTER_TITLE === base64_decode( $info['cmdline'], true ) && ctype_digit( $info['maps'] ) && (int) $info['maps'] > 0;
+		return '/usr/local/sbin/php-fpm' === $info['exe'] && ( self::FPM_MASTER_TITLE === $title || rtrim( self::FPM_MASTER_TITLE, "\0" ) === $title ) && ctype_digit( $info['maps'] ) && (int) $info['maps'] > 0;
 	}
 
 	/**
@@ -2788,9 +2900,11 @@ SH;
 		// PHP's ini scanner ends a line at \r\n, \n or a bare \r; a UTF-8 BOM before the first key is skipped.
 		$text    = str_replace( [ "\r\n", "\r" ], "\n", preg_replace( '/^\xEF\xBB\xBF/', '', $text ) );
 		$keys    = '(auto_prepend_file|auto_append_file|opcache\.preload|include_path|user_ini\.filename|zend\.multibyte|zend\.script_encoding)';
+		// PHP's scanner takes an assignment right after a section header on the same line (`[PHP] auto_prepend_file=…`, R16).
+		$section = '(?:\[[^\]\n]*\][ \t]*)*';
 		$pattern = 'fpm' === $kind
-			? '/^[ \t]*(?:php(?:_admin)?_(?:value|flag)[ \t]*\[[ \t]*["\']?' . $keys . '["\']?[ \t]*\]|(include|security\.limit_extensions))[ \t]*=[ \t]*([^\n]*)$/mi'
-			: '/^[ \t]*' . $keys . '()[ \t]*=[ \t]*([^\n]*)$/mi';
+			? '/^[ \t]*' . $section . '(?:php(?:_admin)?_(?:value|flag)[ \t]*\[[ \t]*["\']?' . $keys . '["\']?[ \t]*\]|(include|security\.limit_extensions))[ \t]*=[ \t]*([^\n]*)$/mi'
+			: '/^[ \t]*' . $section . $keys . '()[ \t]*=[ \t]*([^\n]*)$/mi';
 		$out     = [];
 		preg_match_all( $pattern, $text, $all, PREG_SET_ORDER );
 		foreach ( $all as $m ) {
@@ -2847,6 +2961,11 @@ SH;
 		}
 		$file = $this->site_file( $code, substr( $value, strlen( '/var/www/' ) ), self::PHP_SOURCE_MAX );
 		if ( 'ok' !== $file['state'] ) {
+			return false;
+		}
+		// EE mounts admin-tools over htdocs/ee-admin in the php container: the host file there isn't what PHP loads (R23).
+		$htdocs = self::resolve_in( $code, 'htdocs' );
+		if ( 0 === strpos( $value, '/var/www/htdocs/ee-admin/' ) || ( null !== $htdocs && 0 === strpos( $file['real'], "$htdocs/ee-admin/" ) ) ) {
 			return false;
 		}
 		if ( null === $layout ) {
@@ -2940,6 +3059,7 @@ SH;
 		$this->extra_mounts  = [];
 		$this->mount_points  = [];
 		$this->php_container = null;
+		$this->admin_tools_mount = false;
 		$ps                 = $this->docker( [ 'docker', 'ps', '-q', '--no-trunc', '--filter', 'label=io.easyengine.site=' . $this->site, '--filter', 'label=com.docker.compose.service=php' ], 60 );
 		if ( 0 !== $ps['code'] ) {
 			return 'could not list the site\'s php container: ' . self::first_line( $ps['stderr'] );
@@ -3008,6 +3128,7 @@ SH;
 			}
 			// EE's own admin tools (ee site admin-tools): not the site's code.
 			if ( '/var/www/htdocs/ee-admin' === $dst && false !== $admin && realpath( $src ) === $admin ) {
+				$this->admin_tools_mount = true;
 				continue;
 			}
 			// The mount point is in the htdocs volume (Docker made it there), so the read-only bind below can use it.
