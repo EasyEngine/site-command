@@ -826,6 +826,15 @@ function get_site_compose_files( $site_fs_path ) {
 	// `admin-tools disable` leaves docker-compose-admin.yml in place, so the DB flag decides.
 	foreach ( Site::where( 'site_fs_path', $site_fs_path ) as $site ) {
 		if ( ! empty( $site->admin_tools ) ) {
+			// A failed v4.13.2 admin-tools migration puts back the old file, which mounts the EasyEngine DB into the site.
+			$admin_compose = @file_get_contents( $site_fs_path . '/docker-compose-admin.yml' ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- a missing file is skipped later.
+			// Comment lines don't count; any other mention of the DB path does, as a mount can be written in several forms.
+			if ( defined( 'DB' ) && false !== $admin_compose && preg_match( '/^(?![ \t]*#).*' . preg_quote( DB, '/' ) . '/m', $admin_compose ) ) {
+				EE::warning( sprintf( 'Not applying %1$s/docker-compose-admin.yml: it still mounts the EasyEngine database. Run `ee admin-tools enable %2$s --force` to bring admin-tools back.', $site_fs_path, $site->site_url ) );
+
+				return [];
+			}
+
 			return [ 'docker-compose-admin.yml' ];
 		}
 	}
@@ -1169,6 +1178,17 @@ function get_public_dir( $assoc_args ) {
 	$user_input_public_dir = sprintf( '/var/www/htdocs/%s', trim( $sanitized_public_dir, '/' ) );
 
 	return empty( $public_root ) ? '/var/www/htdocs' : $user_input_public_dir;
+}
+
+/**
+ * Where a WordPress site's root can be, relative to app/: its public directory, then current/ in it (CI/CD releases).
+ *
+ * @param string $public_rel Public directory relative to app/, e.g. htdocs or htdocs/current.
+ *
+ * @return string[]
+ */
+function get_wp_root_candidates( $public_rel ) {
+	return [ $public_rel, $public_rel . '/current' ];
 }
 
 /**

@@ -488,6 +488,9 @@ class FeatureContext implements Context
 	 */
 	public function cleanupScenario(AfterScenarioScope $scope)
 	{
+		// A failed --output check could have replaced /dev/null with a file; never leave the runner without it.
+		clearstatcache( true, '/dev/null' );
+		self::repairDevNull( @stat( '/dev/null' ) );
 		$this->commands = [];
 		chdir($this->ee_path);
 
@@ -875,6 +878,23 @@ class FeatureContext implements Context
 		}
 	}
 
+	/**
+	 * Simulates a site record that disagrees with what nginx serves.
+	 *
+	 * @When /^I set the "([a-z_]+)" field of site "([^"]*)" in the database to "(.*)"$/
+	 */
+	public function iSetTheFieldOfSite( $field, $site, $value )
+	{
+		$site = $this->v( $site );
+		$this->assert_own_name( $site );
+		$row = $this->get_site_row( $site );
+		if ( false === $row || ! array_key_exists( $field, $row ) ) {
+			throw new Exception( "No $field for site $site in the EasyEngine database." );
+		}
+		$stmt = self::db()->prepare( "UPDATE sites SET $field = ? WHERE site_url = ?" );
+		$stmt->execute( [ $this->v( $value ), $site ] );
+	}
+
 	/* ----- files ----- */
 
 	/**
@@ -947,6 +967,59 @@ class FeatureContext implements Context
 		$content = str_replace( '\n', "\n", $this->v( $content ) );
 		if ( false === file_put_contents( $path, $content, 'append' === $mode ? FILE_APPEND : 0 ) ) {
 			throw new Exception( "Could not write to $path" );
+		}
+	}
+
+	/**
+	 * @When /^I link "([^"]*)" to "([^"]*)"$/
+	 */
+	public function iLinkTo( $path, $target )
+	{
+		$path = $this->v( $path );
+		$this->assert_writable_path( $path );
+		if ( ! is_dir( dirname( $path ) ) ) {
+			mkdir( dirname( $path ), 0755, true );
+		}
+		if ( ! symlink( $this->v( $target ), $path ) ) {
+			throw new Exception( "Could not link $path" );
+		}
+	}
+
+	/**
+	 * Puts /dev/null back before failing, so a regression can't break the rest of the run.
+	 *
+	 * @Then /^\/dev\/null should still be the null device$/
+	 */
+	public function devNullShouldStillBeTheNullDevice()
+	{
+		clearstatcache( true, '/dev/null' );
+		$stat = @lstat( '/dev/null' );
+		// 259 is 1:3, the null device's numbers on Linux only.
+		if ( $stat && 0020000 === ( $stat['mode'] & 0170000 ) && ( 'Linux' !== PHP_OS_FAMILY || 259 === $stat['rdev'] ) ) {
+			return;
+		}
+		self::repairDevNull( @stat( '/dev/null' ) );
+		throw new Exception( '/dev/null was replaced: ' . var_export( $stat, true ) );
+	}
+
+	/**
+	 * Recreate /dev/null only on Linux and only when it is no character device at all (e.g. replaced by a file), so a
+	 * healthy one is never removed.
+	 *
+	 * @param array|false $stat stat() of /dev/null (a link to a character device counts as healthy).
+	 */
+	private static function repairDevNull( $stat )
+	{
+		if ( 'Linux' !== PHP_OS_FAMILY || ( $stat && 0020000 === ( $stat['mode'] & 0170000 ) ) ) {
+			return;
+		}
+		// Made beside it and renamed over it, so there is never a moment without /dev/null.
+		$tmp = '/dev/.null-' . getmypid();
+		@unlink( $tmp );
+		exec( 'mknod -m 666 ' . escapeshellarg( $tmp ) . ' c 1 3', $out, $code );
+		if ( 0 !== $code || ! rename( $tmp, '/dev/null' ) ) {
+			@unlink( $tmp );
+			throw new Exception( 'could not recreate /dev/null' );
 		}
 	}
 

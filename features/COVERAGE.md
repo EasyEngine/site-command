@@ -225,8 +225,9 @@ Every scan scenario needs core's `img-versions.json` to pin `easyengine/compat-s
 | Item | Status | Scenarios |
 |---|---|---|
 | `--format=json` on a wp and a php site: one-line summary, exit 0, no findings | covered (wp part @wp) | compat: The JSON summary of a WordPress site; The JSON summary of a php site |
-| Table: verdict line first ("Not safe", "Safe"), every error with file, line and sniff, static-analysis line last | covered ("Not safe" part @wp) | compat: The table starts with the verdict line...; The table of a php site without errors says it is safe |
-| "Can't confirm" verdict line | not covered | needs a file uid 33 can't read; the scanner side is in the dockerfiles fixture test |
+| Table: verdict line first ("Not safe", or "No PHP <v> problems found in …" scoped to what was checked; never "Safe to upgrade"), every error with file, line and sniff, static-analysis line last | covered ("Not safe" part @wp) | compat: The table starts with the verdict line...; The table of a php site without errors says what was checked, never "safe" |
+| WordPress core gate: version.php read, too-old core is "Not safe", undeclared PHP (8.6) is "Can't confirm", JSON `wordpress` object | covered @wp | compat: A WordPress site's verdict covers what was checked, and core by its version |
+| "Can't confirm" verdict line from unchecked files | not covered | needs a file uid 33 can't read; the scanner side is in the dockerfiles fixture test |
 | `--output`: root-owned 0600, replaces an existing file, same fields as the summary, `report`/`report_bytes` | covered | compat: --output writes a root-owned 0600 report... |
 | No finding text in ee.log | covered | compat: ee.log holds no finding text after a check with findings |
 | html site refused, bad or missing `--php` (dispatcher and command checks), flags `--cancel` doesn't take | covered | compat: An html site is refused; A bad --php value, a missing one, or a flag --cancel does not take is rejected (outline) |
