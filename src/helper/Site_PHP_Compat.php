@@ -149,6 +149,35 @@ class Site_PHP_Compat {
 	// Exact link targets that are a sink, never code.
 	const DEV_SINKS = [ '/dev/null', '/dev/stdout', '/dev/stderr' ];
 
+	// Run by the php container's PHP (5.6 and later): what its PHP-FPM master (pid 1) is and loaded, and the newest change
+	// below /usr/local/etc (PHP's and FPM's config). Unreadable gives null.
+	const FPM_PROBE = <<<'PHP'
+$r = array( 'exe' => @readlink( '/proc/1/exe' ), 'cmdline' => base64_encode( (string) @file_get_contents( '/proc/1/cmdline' ) ), 'stat' => (string) @file_get_contents( '/proc/1/stat' ), 'btime' => preg_match( '/^btime (\d+)$/m', (string) @file_get_contents( '/proc/stat' ), $m ) ? (int) $m[1] : null, 'maps' => 1 === preg_match( '#\s/usr/local/lib/php/extensions/[^/\s]+/redis\.so$#m', (string) @file_get_contents( '/proc/1/maps' ) ), 'newest' => 0 );
+$todo = array( '/usr/local/etc' );
+while ( $todo ) {
+	$p = array_pop( $todo );
+	$s = @lstat( $p );
+	$e = false !== $s && 040000 === ( $s['mode'] & 0170000 ) ? @scandir( $p ) : array();
+	if ( false === $s || false === $e ) {
+		$r['newest'] = null;
+		break;
+	}
+	$r['newest'] = max( $r['newest'], $s['mtime'], $s['ctime'] );
+	foreach ( $e as $n ) {
+		if ( '.' !== $n && '..' !== $n ) {
+			$todo[] = "$p/$n";
+		}
+	}
+}
+echo json_encode( $r );
+PHP;
+
+	// php-fpm's process title for the image's stock command. It hides -c, -d and -n: container_config_check() pins those.
+	const FPM_MASTER_TITLE = "php-fpm: master process (/usr/local/etc/php-fpm.conf)\0";
+
+	// Largest WordPress language pack (.l10n.php) of nginx-helper this check reads as data.
+	const L10N_MAX = 1048576;
+
 	// Directory names the scanner searches by name only (its manifest's sniff.skipped_dirs); the sniff doesn't apply below them.
 	const SCANNER_SKIP_NAMES = [ 'uploads', 'cache', 'upgrade', 'upgrade-temp-backup', 'node_modules', '.git' ];
 
@@ -2353,6 +2382,10 @@ class Site_PHP_Compat {
 		if ( null === $at ) {
 			return;
 		}
+		// Only when the scanner read every code file: the text search below covers only what it read (K6).
+		if ( ! self::cross_ok( $this->cross ) ) {
+			return;
+		}
 		// No extra mount at all: mounted code (anywhere) is read only in the container, where it could load predis.php (F4).
 		if ( $this->mount_points ) {
 			return;
@@ -2368,15 +2401,19 @@ class Site_PHP_Compat {
 		if ( ! in_array( self::dir_manifest( $dir ), self::NGINX_HELPER_RELEASES, true ) ) {
 			return;
 		}
+		// No link anywhere in app/ leads to the plugin or into it: code including the link names neither (K0).
+		if ( ! $this->no_link_into( $code, $dir ) ) {
+			return;
+		}
 		// No other code the scanner read names the plugin or predis (a literal or glob include of predis.php, F5), predis
-		// matched at a word start so that "PhpRedis" (wp-redis, EE's object cache drop-in) doesn't count. A fully dynamic
-		// path naming neither is accepted residual R-PREDIS-DYN.
+		// matched at a word start so that "PhpRedis" (wp-redis, EE's object cache drop-in) doesn't count. A path whose raw
+		// bytes name neither is accepted residual R-PREDIS-DYN. The plugin's own language packs are data (K1).
 		foreach ( $this->manifest_checked as $checked ) {
 			if ( 0 === strpos( $checked, 'b64:' ) ) {
 				return;
 			}
 			$host = $code . substr( $checked, strlen( '/var/www' ) );
-			if ( 0 === strpos( $host, "$dir/" ) ) {
+			if ( 0 === strpos( $host, "$dir/" ) || self::nginx_helper_l10n( $host, $abspath ) ) {
 				continue;
 			}
 			$text = @file_get_contents( $host ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- unreadable refuses.
@@ -2391,6 +2428,10 @@ class Site_PHP_Compat {
 		// PHP-FPM serves the site and may load other ini files than the CLI (F6): its own module list must have redis too.
 		$fpm = $this->docker( [ 'docker', 'exec', $this->php_container, 'php-fpm', '-m' ], 60 );
 		if ( 0 !== $fpm['code'] || ! preg_match( '/^redis$/mi', $fpm['stdout'] ) ) {
+			return;
+		}
+		// php-fpm -m reads the config as it is now: the running master must have loaded redis, from config older than it (K19).
+		if ( ! $this->fpm_master_has_redis() ) {
 			return;
 		}
 		$component = $report['components'][ $at ];
@@ -2413,6 +2454,157 @@ class Site_PHP_Compat {
 			'reason' => "nginx-helper's bundled Predis isn't loaded: the redis extension is installed",
 			'count'  => $dropped,
 		];
+	}
+
+	/**
+	 * Whether no link anywhere in app/ (old releases and core included) resolves to $dir or below it. A link this can't
+	 * follow inside /var/www (one leaving it, or /var/www/../www) might, so it counts; /dev sinks and dangling links don't.
+	 *
+	 * @param string $code Real path of the site's app/.
+	 * @param string $dir  Real directory.
+	 *
+	 * @return bool False also when app/ can't be walked.
+	 */
+	protected function no_link_into( $code, $dir ) {
+		$into  = false;
+		$error = $this->walk_tree(
+			$code,
+			function ( $path, $name, $type ) use ( $code, $dir, &$into ) {
+				if ( 'link' !== $type ) {
+					return 'dir' === $type;
+				}
+				if ( in_array( (string) @readlink( $path ), self::DEV_SINKS, true ) ) { // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is no sink.
+					return false;
+				}
+				$target = self::resolve_in( $code, substr( $path, strlen( $code ) + 1 ), $why );
+				if ( null === $target ? 'escape' === $why : ( $target === $dir || 0 === strpos( $target, "$dir/" ) ) ) {
+					$into = true;
+					return 'stop';
+				}
+				return false;
+			}
+		);
+
+		return null === $error && ! $into;
+	}
+
+	/**
+	 * Whether a file is a WordPress language pack of nginx-helper that is data only: exactly
+	 * <WordPress root>/wp-content/languages/plugins/nginx-helper-<locale>.l10n.php, a regular file with one name and no link
+	 * on the way, holding `<?php return` one array of string, int, float and bool literals (nested arrays allowed) `;`.
+	 *
+	 * @param string $host    Host path.
+	 * @param string $abspath Real WordPress root.
+	 *
+	 * @return bool
+	 */
+	protected static function nginx_helper_l10n( $host, $abspath ) {
+		if ( dirname( $host ) !== "$abspath/wp-content/languages/plugins" || ! preg_match( '/\Anginx-helper-[a-z]{2,3}(?:_[A-Z]{2})?(?:_[a-z0-9]+)?\.l10n\.php\z/', basename( $host ) ) ) {
+			return false;
+		}
+		$stat = @lstat( $host ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is handled.
+		if ( false === $stat || 0100000 !== ( $stat['mode'] & 0170000 ) || 1 !== $stat['nlink'] || $stat['size'] > self::L10N_MAX || realpath( $host ) !== $host ) {
+			return false;
+		}
+		$text = @file_get_contents( $host, false, null, 0, self::L10N_MAX + 1 ); // phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged -- false is handled.
+		if ( false === $text || strlen( $text ) > self::L10N_MAX ) {
+			return false;
+		}
+		$tokens = [];
+		foreach ( token_get_all( $text ) as $token ) {
+			if ( ! is_array( $token ) || T_WHITESPACE !== $token[0] ) {
+				$tokens[] = $token;
+			}
+		}
+		if ( ! isset( $tokens[1] ) || ! is_array( $tokens[0] ) || T_OPEN_TAG !== $tokens[0][0] || 0 !== strncasecmp( $tokens[0][1], '<?php', 5 ) || ! is_array( $tokens[1] ) || T_RETURN !== $tokens[1][0] ) {
+			return false;
+		}
+		$at = 2;
+		if ( ! self::l10n_array( $tokens, $at, 0 ) ) {
+			return false;
+		}
+
+		return isset( $tokens[ $at ] ) && ';' === $tokens[ $at ] && ! isset( $tokens[ $at + 1 ] );
+	}
+
+	/**
+	 * Parses one array literal of nginx_helper_l10n() at $at: `[ items ]` or `array( items )`, items `value` or
+	 * `literal => value`, comma-separated with an optional trailing comma. Nothing else (no call, no variable) parses.
+	 *
+	 * @param array $tokens Tokens without whitespace.
+	 * @param int   $at     Position; moved past the array.
+	 * @param int   $depth  Nesting depth.
+	 *
+	 * @return bool
+	 */
+	protected static function l10n_array( array $tokens, &$at, $depth ) {
+		$literal = function ( $token ) {
+			return is_array( $token ) && ( in_array( $token[0], [ T_CONSTANT_ENCAPSED_STRING, T_LNUMBER, T_DNUMBER ], true ) || ( T_STRING === $token[0] && in_array( strtolower( $token[1] ), [ 'true', 'false' ], true ) ) );
+		};
+		$open = isset( $tokens[ $at ] ) ? $tokens[ $at ] : null;
+		if ( '[' === $open ) {
+			$close = ']';
+			++$at;
+		} elseif ( is_array( $open ) && T_ARRAY === $open[0] && isset( $tokens[ $at + 1 ] ) && '(' === $tokens[ $at + 1 ] ) {
+			$close = ')';
+			$at   += 2;
+		} else {
+			return false;
+		}
+		if ( $depth > 16 ) {
+			return false;
+		}
+		while ( isset( $tokens[ $at ] ) && $close !== $tokens[ $at ] ) {
+			// An item: a literal (a key or a value), or an array value.
+			if ( $literal( $tokens[ $at ] ) ) {
+				++$at;
+				if ( isset( $tokens[ $at ] ) && is_array( $tokens[ $at ] ) && T_DOUBLE_ARROW === $tokens[ $at ][0] ) {
+					++$at;
+					if ( isset( $tokens[ $at ] ) && $literal( $tokens[ $at ] ) ) {
+						++$at;
+					} elseif ( ! self::l10n_array( $tokens, $at, $depth + 1 ) ) {
+						return false;
+					}
+				}
+			} elseif ( ! self::l10n_array( $tokens, $at, $depth + 1 ) ) {
+				return false;
+			}
+			if ( isset( $tokens[ $at ] ) && ',' === $tokens[ $at ] ) {
+				++$at;
+			} elseif ( ! isset( $tokens[ $at ] ) || $close !== $tokens[ $at ] ) {
+				return false;
+			}
+		}
+		if ( ! isset( $tokens[ $at ] ) ) {
+			return false;
+		}
+		++$at;
+
+		return true;
+	}
+
+	/**
+	 * Whether the php container's running PHP-FPM master (pid 1) is php-fpm under the image's stock title, has phpredis mapped,
+	 * and started after its PHP and FPM config (all of /usr/local/etc) last changed. Anything unreadable gives false.
+	 *
+	 * @return bool
+	 */
+	protected function fpm_master_has_redis() {
+		$run  = $this->docker( [ 'docker', 'exec', $this->php_container, 'php', '-r', self::FPM_PROBE ], 60 );
+		$info = 0 === $run['code'] ? json_decode( trim( $run['stdout'] ), true ) : null;
+		if ( ! is_array( $info ) || ! isset( $info['exe'], $info['cmdline'], $info['stat'], $info['btime'], $info['maps'], $info['newest'] ) || ! is_int( $info['btime'] ) || ! is_int( $info['newest'] ) ) {
+			return false;
+		}
+		// Field 22 of /proc/1/stat (after the name, which may hold spaces): ticks after boot, USER_HZ 100 on Linux. Whole
+		// seconds round the start down and a change time up, so equal seconds count as changed after the start.
+		$after  = strrchr( (string) $info['stat'], ')' );
+		$fields = false === $after ? [] : preg_split( '/ +/', trim( substr( $after, 1 ) ) );
+		if ( ! isset( $fields[19] ) || ! ctype_digit( $fields[19] ) ) {
+			return false;
+		}
+		$start = $info['btime'] + intdiv( (int) $fields[19], 100 );
+
+		return '/usr/local/sbin/php-fpm' === $info['exe'] && self::FPM_MASTER_TITLE === base64_decode( (string) $info['cmdline'], true ) && true === $info['maps'] && $info['newest'] < $start;
 	}
 
 	/**
@@ -3208,15 +3400,8 @@ class Site_PHP_Compat {
 		if ( array_intersect( $parts, [ 'node_modules', '.git' ] ) ) {
 			return false;
 		}
-		$served = null === $this->scan_path ? null : self::resolve_in( $code, ltrim( substr( $this->scan_path, strlen( '/var/www' ) ), '/' ) );
-		if ( null !== $served && 'releases' === basename( dirname( $served ) ) ) {
-			$releases = dirname( $served );
-			if ( 0 === strpos( $real, "$releases/" ) && 0 !== strpos( $real, "$served/" ) ) {
-				return false;
-			}
-		}
-
-		return true;
+		// The same old releases exempt shape (a) leaves unread; without a `current` link the scanner reads every release.
+		return null === self::under_any( $real, $code, $this->old_release_dirs( $code ) );
 	}
 
 	/**
