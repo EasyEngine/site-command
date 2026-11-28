@@ -3417,7 +3417,7 @@ DEALLOCATE PREPARE ee_stmt;
 				4001
 			);
 			// The data itself is incomplete, so this run's dir is no backup. Best effort; whatever stays (e.g. after a kill) is
-			// skipped as incomplete and pruned by a later backup.
+			// skipped as incomplete, and a later backup prunes it unless it holds the site archive.
 			$this->purge_remote_backup( $this->get_remote_path() );
 			EE::error( 'Error uploading backup to remote storage. ' . trim( $output->stderr ) );
 		}
@@ -3560,7 +3560,13 @@ DEALLOCATE PREPARE ee_stmt;
 			} elseif ( strcmp( $id, $current ) < 0 ) {
 				// Interrupted uploads don't count as backups (BKP-20). Only older ones go: a newer one can be another run's
 				// upload in progress, since the site lock is released before the EasyEngine Dashboard callback.
-				$incomplete[] = $id;
+				if ( $this->is_complete_backup( $tree['files'][ $id ], false ) ) {
+					// The site archive is there, so this can be a full backup whose metadata.json upload failed: never delete it here.
+					$warning = 'Kept backup %s, not counted toward no-of-backups: it has the site archive but no metadata.json, so list and restore skip it.';
+					EE::warning( sprintf( $warning, $id ) );
+				} else {
+					$incomplete[] = $id;
+				}
 			}
 		}
 		rsort( $backups );
