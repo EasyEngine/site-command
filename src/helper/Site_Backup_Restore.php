@@ -3417,12 +3417,21 @@ DEALLOCATE PREPARE ee_stmt;
 				4001
 			);
 			// The data itself is incomplete, so this run's dir is no backup. Best effort; whatever stays (e.g. after a kill) is
-			// skipped as incomplete and pruned by a later backup.
+			// skipped as incomplete, and a later backup prunes it unless it holds the site archive.
 			$this->purge_remote_backup( $this->get_remote_path() );
 			EE::error( 'Error uploading backup to remote storage. ' . trim( $output->stderr ) );
 		}
 
-		$output = EE::launch( sprintf( 'rclone copyto %s %s', escapeshellarg( $path . '/metadata.json' ), escapeshellarg( $this->get_remote_path() . '/metadata.json' ) ) );
+		// `rclone copy --include` below exits 0 when nothing matches (--error-on-no-transfer needs rclone 1.52).
+		if ( ! is_file( $path . '/metadata.json' ) ) {
+			$message = sprintf( 'Backup files were uploaded to %s and kept, but the local metadata.json is missing.', $this->get_remote_path() );
+			$this->capture_error( $message, self::ERROR_TYPE_FILESYSTEM, 3006 );
+			EE::error( $message );
+		}
+
+		// Not `copyto`: for a single new file rclone sends S3 CreateBucket first, which bucket-scoped keys are denied.
+		$command = sprintf( 'rclone copy --include /metadata.json %s %s', escapeshellarg( $path ), escapeshellarg( $this->get_remote_path() ) );
+		$output  = EE::launch( $command );
 		if ( $output->return_code ) {
 			// All data arrived and only metadata.json failed: keep the uploaded files, never delete them here.
 			$message = sprintf( 'Backup files were uploaded to %s, but metadata.json could not be uploaded; the uploaded files were kept.', $this->get_remote_path() );
@@ -3551,7 +3560,13 @@ DEALLOCATE PREPARE ee_stmt;
 			} elseif ( strcmp( $id, $current ) < 0 ) {
 				// Interrupted uploads don't count as backups (BKP-20). Only older ones go: a newer one can be another run's
 				// upload in progress, since the site lock is released before the EasyEngine Dashboard callback.
-				$incomplete[] = $id;
+				if ( $this->is_complete_backup( $tree['files'][ $id ], false ) ) {
+					// The site archive is there, so this can be a full backup whose metadata.json upload failed: never delete it here.
+					$warning = 'Kept backup %s, not counted toward no-of-backups: it has the site archive but no metadata.json, so list and restore skip it.';
+					EE::warning( sprintf( $warning, $id ) );
+				} else {
+					$incomplete[] = $id;
+				}
 			}
 		}
 		rsort( $backups );
