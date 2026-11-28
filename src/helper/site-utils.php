@@ -2267,7 +2267,7 @@ function site_php_conf_dir( string $site_fs_path, string $sub = 'php/conf.d' ) {
 /**
  * Open a file in a directory the site's php container can change, as a handle for every later read and write, so nothing swapped in at that path is followed afterwards.
  *
- * Host root must not write through a symlink, a hard link or a swapped directory, so the handle has to be the regular file in $dir. On Linux the kernel's own path of the open file decides; elsewhere the path is checked before and after opening.
+ * Host root must not write through a symlink, a hard link or a swapped directory, so the handle has to be the regular file in $dir. On Linux the kernel's own path of the open file decides; elsewhere the path is checked before and after opening, and the link count on the handle and after.
  *
  * Left open: a symlink, FIFO or device renamed into place between the lstat() check and the open is opened (non-blocking) and closed unread and unwritten, and opening some devices has side effects. Only an open with O_NOFOLLOW/openat, which PHP lacks, or one inside the container closes that.
  *
@@ -2306,6 +2306,11 @@ function open_container_file( string $file, string $mode, string $dir ) {
 	}
 
 	$opened = fstat( $handle );
+	if ( 'r' !== $mode ) {
+		// During a rename over $file its old name can still resolve with that link already dropped (seen on overlayfs), so a hard link looks single.
+		// Looking up a new name waits for the rename's directory lock, so the checks below see it finished; $opened's nlink must stay read before this.
+		@lstat( $dir . '/' . uniqid( '.ee-', true ) );
+	}
 	clearstatcache( true );
 	$linked = @lstat( $file );
 	$real   = opened_file_path( $handle );
@@ -2314,7 +2319,8 @@ function open_container_file( string $file, string $mode, string $dir ) {
 		$error = "$name is not a regular file";
 	} elseif ( realpath( dirname( $file ) ) !== $dir || ( null !== $real && "$dir/$name" !== $real ) ) {
 		$error = "a directory above $name is a symlink";
-	} elseif ( 'r' !== $mode && 1 !== $opened['nlink'] ) {
+	} elseif ( 'r' !== $mode && ( 1 !== $opened['nlink'] || 1 !== $linked['nlink'] ) ) {
+		// $linked's nlink: without /proc (macOS) only it catches a hard link made to the file after the lookup above.
 		$error = "$name has other hard links";
 	}
 	if ( null !== $error ) {
