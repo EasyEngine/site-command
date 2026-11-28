@@ -3422,7 +3422,16 @@ DEALLOCATE PREPARE ee_stmt;
 			EE::error( 'Error uploading backup to remote storage. ' . trim( $output->stderr ) );
 		}
 
-		$output = EE::launch( sprintf( 'rclone copyto %s %s', escapeshellarg( $path . '/metadata.json' ), escapeshellarg( $this->get_remote_path() . '/metadata.json' ) ) );
+		// `rclone copy --include` below exits 0 when nothing matches (--error-on-no-transfer needs rclone 1.52).
+		if ( ! is_file( $path . '/metadata.json' ) ) {
+			$message = sprintf( 'Backup files were uploaded to %s and kept, but the local metadata.json is missing.', $this->get_remote_path() );
+			$this->capture_error( $message, self::ERROR_TYPE_FILESYSTEM, 3006 );
+			EE::error( $message );
+		}
+
+		// Not `copyto`: for a single new file rclone sends S3 CreateBucket first, which bucket-scoped keys are denied.
+		$command = sprintf( 'rclone copy --include /metadata.json %s %s', escapeshellarg( $path ), escapeshellarg( $this->get_remote_path() ) );
+		$output  = EE::launch( $command );
 		if ( $output->return_code ) {
 			// All data arrived and only metadata.json failed: keep the uploaded files, never delete them here.
 			$message = sprintf( 'Backup files were uploaded to %s, but metadata.json could not be uploaded; the uploaded files were kept.', $this->get_remote_path() );
